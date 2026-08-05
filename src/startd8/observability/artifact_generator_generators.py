@@ -1011,32 +1011,19 @@ def _ensure_red_coverage(
     # FR-12: what SLI kinds is this service actually observed by? (Shared resolver —
     # same set the FR-12a alert/SLO gate uses.)
     sli_kinds = _service_sli_kinds(service, business)
-    # RED detection shared with the validator — but the generation gate asks
-    # "does an explicit RED panel already exist (so I don't duplicate)?", which is
-    # NARROWER than the scorer's "is RED covered by any panel?". The broad
-    # has_rate_panel credits any rate(..._total) counter (AffordanceMap binds, per
-    # 5f6fe5f9), which BOTH matches non-throughput auto-panels (request_size_total/…)
-    # — wrongly suppressing the synthesized Request Rate panel (the FR-13
-    # test_request_service_still_gets_synthesized_red regression) — and would miss a
-    # legit _total throughput panel. has_explicit_rate_panel keyed on the
-    # descriptor's real throughput_metric is precise for both _count and _total.
+    # The generation "present?" gate through the ONE classifier (red_taxonomy),
+    # descriptor-grounded on the real throughput_metric / error_selector — precise for
+    # both _count and _total throughput and immune to non-throughput _total size
+    # counters (the FR-13 test_request_service_still_gets_synthesized_red guard, now
+    # keyed on the descriptor's real identities via the single red_taxonomy classifier
+    # rather than a local substring gate). This is the generation flavor of the "is
+    # THIS role present?" question — distinct from the scorer's broad "is it covered?".
+    from startd8.observability.red_taxonomy import RedRole, has_red_role
+
     throughput_metric = descriptor.throughput_metric
     error_selector = descriptor.error_selector
-    try:
-        from startd8.validators.observability_artifact_checks import (
-            has_explicit_rate_panel, has_explicit_error_panel,
-        )
-        has_rate = has_explicit_rate_panel(panels, throughput_metric)
-        has_error = has_explicit_error_panel(panels, throughput_metric, error_selector)
-    except ImportError:
-        # Fallback inline detection if validator not available — precise on the
-        # descriptor's real throughput series + error subset (see the narrow
-        # has_explicit_* rationale above), not a broad substring sweep.
-        exprs = [str(p.get("expr", "")).lower() for p in panels]
-        tm = f"rate({throughput_metric.lower()}"
-        es = error_selector.lower()
-        has_rate = any(tm in e for e in exprs)
-        has_error = bool(es) and any(tm in e and es in e for e in exprs)
+    has_rate = has_red_role(RedRole.RATE, panels, descriptor)
+    has_error = has_red_role(RedRole.ERROR, panels, descriptor)
 
     if has_rate and has_error:
         return  # Already have full RED coverage
