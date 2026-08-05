@@ -1064,6 +1064,12 @@ def _ensure_red_coverage(
             "unit": "reqps",
             "group": "Throughput",
         })
+        derivations.append(DerivationTrace(
+            field="request_rate_panel",
+            source=f"descriptor.throughput_metric ({throughput_metric})",
+            transformation="synthesized RED Rate leg (throughput ∈ sli_kinds)",
+            tier="descriptor",
+        ))
 
     if not has_error and want_error:
         error_panel: Dict[str, Any] = {
@@ -1085,6 +1091,12 @@ def _ensure_red_coverage(
             except (ValueError, TypeError):
                 pass
         panels.append(error_panel)
+        derivations.append(DerivationTrace(
+            field="error_rate_panel",
+            source=f"descriptor error-ratio ({throughput_metric} filtered by error_selector)",
+            transformation="synthesized RED Errors leg (availability ∈ sli_kinds)",
+            tier="descriptor",
+        ))
 
     # Availability gauge (FR-13a) — an availability-kind artifact, gated on
     # `availability` ∈ the resolved set (it fires on business.availability alone,
@@ -1117,6 +1129,12 @@ def _ensure_red_coverage(
                     {"value": avail_target, "color": "green"},
                 ],
             })
+            derivations.append(DerivationTrace(
+                field="availability_gauge",
+                source=f"descriptor good/total ratio ({throughput_metric}); business.availability",
+                transformation="synthesized Availability(1h) gauge (availability ∈ sli_kinds)",
+                tier="descriptor",
+            ))
         except (ValueError, TypeError):
             pass
 
