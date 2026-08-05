@@ -238,6 +238,16 @@ class AgenticView:
         tool/agent/CI can read "where does this project stand" from the same oracle instead of
         re-deriving it. Read-only, ``$0``, deterministic."""
         counts = dict(self.state.attention_counts) if self.state is not None else {}
+        # FR-E14 parity: the md/HTML/terminal surfaces render the actual *captured values*
+        # ("What was captured"), but this JSON surface exposed only counts — a real drift of
+        # the "one oracle, three surfaces cannot drift" contract (readout.py:6). Mirror the md
+        # `_captured_fields` shape (value_path-sorted; additive — the "captured" key is omitted
+        # when empty, so an empty session stays byte-identical to before).
+        _fields = getattr(self.state, "fields", None) if self.state is not None else None
+        _captured = sorted(
+            (f for f in (_fields or []) if getattr(f, "value", None) is not None),
+            key=lambda f: f.value_path,
+        )
         d: dict = {
             "schema": schemas.STATUS,
             "project_root": self.project_root,
@@ -266,6 +276,10 @@ class AgenticView:
                 "proposals": self.proposals_message(),
             },
         }
+        if _captured:  # FR-E14 parity — expose captured values like md/HTML (additive)
+            d["captured"] = [
+                {"value_path": f.value_path, "value": f.value} for f in _captured
+            ]
         return d
 
 

@@ -44,6 +44,27 @@ def test_markdown_lists_captured_values():
     assert "1 input(s) not yet captured" in cap
 
 
+def test_to_dict_exposes_captured_values_parity_with_markdown():
+    """FR-E14 parity: the JSON surface must expose the captured VALUES the md surface does
+    (the 'three surfaces cannot drift' contract) — not just counts."""
+    view = _view([
+        _fs("/kpi", "95%"),
+        _fs("/lang", "python"),
+        _fs("/goal", None, attention="blocked", status="not_extracted"),  # unset → excluded
+    ])
+    d = view.to_dict()
+    assert d["captured"] == [
+        {"value_path": "/kpi", "value": "95%"},
+        {"value_path": "/lang", "value": "python"},
+    ]  # value_path-sorted, unset field omitted — mirrors _md_captured
+
+
+def test_to_dict_omits_captured_when_empty():
+    # Additive contract: an empty session is byte-identical to before (no 'captured' key).
+    view = _view([_fs("/goal", None, attention="blocked", status="not_extracted")])
+    assert "captured" not in view.to_dict()
+
+
 def test_section_absent_when_nothing_captured():
     # all values None → the section is omitted entirely (byte-preserving for an empty session)
     view = _view([_fs("/goal", None, attention="blocked", status="not_extracted")])
