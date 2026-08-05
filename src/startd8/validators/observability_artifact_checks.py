@@ -688,6 +688,60 @@ def _normalize_metric_name(name: str) -> str:
     return base
 
 
+# --- expr/query-scoped extraction (structured dashboards / SLOs / alert rules) ---
+# ``_extract_metric_names`` (below) only captures a metric immediately followed by
+# ``{``/``[``/``(`` — so a function-wrapped (``max(metric)``) or bare instant-vector
+# metric (common for gauges: inflight, queue depth) is silently missed, and a
+# dashboard that observes only gauges scores 0 human coverage even though the metric
+# is right there. Loosening the bracket regex over WHOLE content is unsafe (it
+# captures every YAML key/word). Instead, pull the PromQL out of the ``expr:`` /
+# ``query:`` fields — where metrics actually live in dashboards (YAML + Grafana
+# JSON), SLOs (openslo ``query``), and alert/recording rules — and tokenize it.
+_EXPR_QUERY_FIELD_RE = re.compile(
+    r'(?:^|["\'\s,{])(?:expr|query)["\']?\s*:\s*(.+)', re.IGNORECASE
+)
+#: PromQL functions / aggregation keywords that are identifiers but NOT metrics.
+_PROMQL_KEYWORDS = frozenset({
+    "sum", "avg", "min", "max", "count", "count_values", "group", "stddev",
+    "stdvar", "topk", "bottomk", "quantile",
+    "rate", "irate", "increase", "delta", "idelta", "deriv", "predict_linear",
+    "holt_winters", "resets", "changes",
+    "abs", "absent", "absent_over_time", "ceil", "clamp", "clamp_max",
+    "clamp_min", "exp", "floor", "ln", "log2", "log10", "round", "scalar",
+    "sgn", "sort", "sort_desc", "sqrt", "time", "timestamp", "vector",
+    "histogram_quantile", "histogram_count", "histogram_sum",
+    "histogram_fraction", "label_join", "label_replace",
+    "avg_over_time", "min_over_time", "max_over_time", "sum_over_time",
+    "count_over_time", "quantile_over_time", "stddev_over_time",
+    "stdvar_over_time", "last_over_time", "present_over_time",
+    "by", "without", "on", "ignoring", "group_left", "group_right", "offset",
+    "bool", "and", "or", "unless",
+})
+_METRIC_IDENT_RE = re.compile(r"[a-z_:][a-z0-9_:]*")
+
+
+def _metric_names_from_promql(expr: str) -> List[str]:
+    """Extract metric names from a single PromQL expression, tolerating
+    function-wrapped and bare metrics (``max(metric)``, ``metric``) that the
+    bracket-anchored ``_extract_metric_names`` misses.
+
+    Label-matcher bodies (``{...}``) are stripped first so label keys are not
+    mistaken for metrics; identifiers immediately followed by ``(`` (function
+    calls), PromQL keywords, Grafana template vars (``$__rate_interval``), and
+    non-lowercase tokens (panel titles) are excluded.
+    """
+    stripped = re.sub(r"\{[^}]*\}", "", expr)
+    names: List[str] = []
+    for m in _METRIC_IDENT_RE.finditer(stripped):
+        name = m.group(0)
+        if stripped[m.end():m.end() + 1] == "(":  # function call, not a metric
+            continue
+        if "__" in name or name in _PROMQL_KEYWORDS:
+            continue
+        names.append(name)
+    return names
+
+
 def extract_referenced_metrics(contents: Iterable[Optional[str]]) -> Set[str]:
     """Collect base metric names referenced across artifact contents.
 
@@ -704,6 +758,13 @@ def extract_referenced_metrics(contents: Iterable[Optional[str]]) -> Set[str]:
                 continue
             for raw in _extract_metric_names(line):
                 referenced.add(_normalize_metric_name(raw))
+            # Union in expr/query-scoped PromQL tokenization so function-wrapped
+            # and bare (gauge) metrics are counted too. This is a strict superset
+            # of the bracket regex, so no existing coverage number can decrease.
+            field = _EXPR_QUERY_FIELD_RE.search(line)
+            if field:
+                for raw in _metric_names_from_promql(field.group(1)):
+                    referenced.add(_normalize_metric_name(raw))
     return referenced
 
 

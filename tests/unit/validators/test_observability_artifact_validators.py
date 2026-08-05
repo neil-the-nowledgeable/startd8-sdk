@@ -795,6 +795,42 @@ class TestExtractReferencedMetrics:
 
         assert extract_referenced_metrics([None, "", "   "]) == set()
 
+    def test_extracts_function_wrapped_and_bare_metrics(self):
+        """Regression: the bracket-anchored regex only caught ``metric<{[(>``, so
+        function-wrapped (``max(metric)``) and bare instant-vector metrics — how
+        gauges are typically graphed — were missed, pinning dashboard (human)
+        coverage to 0.0 even when the metric was present."""
+        from startd8.validators.observability_artifact_checks import extract_referenced_metrics
+
+        content = (
+            "panels:\n"
+            "- title: Harbor Core Http Inflight Requests\n"
+            "  expr: max(harbor_core_http_inflight_requests)\n"
+            "- title: Postgresql Operation Latency (p99)\n"
+            '  expr: histogram_quantile(0.99, rate(db_client_operation_duration_bucket{db_system="postgresql"}[$__rate_interval]))\n'
+            "- title: Requests\n"
+            "  expr: harbor_core_http_request_total\n"
+        )
+        referenced = extract_referenced_metrics([content])
+        # function-wrapped gauge — previously dropped, `max` captured instead
+        assert "harbor_core_http_inflight_requests" in referenced
+        # bare instant vector — previously dropped
+        assert "harbor_core_http_request" in referenced  # _total suffix normalized
+        # real metric inside the range/label expression is still found
+        assert "db_client_operation_duration" in referenced
+        # Grafana template var must NOT be mistaken for a metric
+        assert not any("rate_interval" in m for m in referenced)
+
+    def test_gauge_only_dashboard_scores_nonzero(self):
+        """The stacked effect: a gauge-only dashboard must not score 0 coverage
+        when the gauge it graphs IS one of the expected metrics."""
+        from startd8.validators.observability_artifact_checks import compute_metric_coverage
+
+        dashboard = "panels:\n- expr: max(svc_inflight_requests)\n"
+        cov = compute_metric_coverage({"svc_inflight_requests"}, [dashboard])
+        assert cov.score == 1.0
+        assert "svc_inflight_requests" in cov.covered
+
 
 class TestMetricCoverage:
     def test_run003_scenario_low_coverage(self):
