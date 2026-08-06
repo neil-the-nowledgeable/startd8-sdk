@@ -1561,11 +1561,17 @@ def test_named_service_absent_family_excluded(tmp_path):
     )
 
 
-def test_named_service_partial_live_stays_fail(tmp_path):
-    """FR-4 (b) sibling: one referenced family live ⇒ stays fail, not excluded.
+def test_named_service_exact_name_live_is_bound_no_data(tmp_path):
+    """FR-4 (b) sibling: a named service whose expr's *exact* metric name is live
+    is ``bound_no_data`` (binds, no data in-window) — and, crucially, NOT excluded.
 
-    Proves the pre-existing ``_family_present_in_live_names`` guard still
-    refuses the exclusion once it is reachable for a named service (NR-7).
+    Reconciled with the ``domain_surface`` exact-name refinement
+    (``validate_promql`` ~1277-1284): when ``bare_metrics_from_expr`` finds the
+    expr's exact ``__name__`` in the live set, the empty [5m] window is a
+    data-availability artifact ⇒ ``bound_no_data`` (only a basename-live-but-
+    exact-absent native-histogram stays ``fail``). The test's NR-7 purpose — the
+    ``_family_present_in_live_names`` guard refuses EXCLUSION once reachable — is
+    unchanged and still asserted (``exclusion_reason == ""``).
     """
     artifacts = tmp_path / "art"
     _write_alerts(
@@ -1588,5 +1594,8 @@ def test_named_service_partial_live_stays_fail(tmp_path):
     )
     named = [v for v in report.verdicts if v.service == "compact"]
     assert len(named) == 1
-    assert named[0].verdict == "fail"
+    # exact expr __name__ (thanos_compact_downsample_total) is live ⇒ binds, no
+    # data in-window ⇒ bound_no_data (was asserted `fail` before the exact-name
+    # refinement; the NR-7 no-exclusion guard below is the load-bearing intent).
+    assert named[0].verdict == "bound_no_data"
     assert named[0].exclusion_reason == ""
