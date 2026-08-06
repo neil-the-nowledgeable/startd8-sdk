@@ -262,6 +262,13 @@ def bind_and_verify_cmd(
         help="Command that runs ContextCore export (override if not on PATH). The "
         "default skips the strict-quality gate, which requires --task-mapping.",
     ),
+    affordance_map: Path = typer.Option(
+        None,
+        "--affordance-map",
+        help="Thread an enriched AffordanceMap (JSON) into the scored generate so RED/"
+        "coverage-bind panels land on this measured path (durable Cause-B fix). Without "
+        "it the generate is a declared no-export caller and human coverage is capped.",
+    ),
     report: Path = typer.Option(
         None,
         "--report",
@@ -289,6 +296,7 @@ def bind_and_verify_cmd(
         allow_prod=allow_prod,
         auth=auth,
         export_cmd=export_cmd.split(),
+        affordance_map=affordance_map,
     )
 
     payload = redact(json.dumps(result.to_dict(), indent=2), auth.redactions())

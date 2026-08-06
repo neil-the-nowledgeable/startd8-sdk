@@ -154,12 +154,22 @@ def _default_export(manifest_path: Path, output_dir: Path, export_cmd: List[str]
     }
 
 
-def _default_generate(onboarding: Path, artifacts_dir: Path, manifest_path: Path) -> Dict[str, Any]:
+def _default_generate(
+    onboarding: Path,
+    artifacts_dir: Path,
+    manifest_path: Path,
+    *,
+    affordance_map: Any = None,
+) -> Dict[str, Any]:
     """Call the canonical generator and summarize its report.
 
-    Declared no-export caller (product-gap Step 1): does not thread an AffordanceMap
-    export into ``generate_observability_artifacts`` — expected-set widening uses
-    convention ∪ declared ∪ ``declared_emitted_series`` only.
+    When ``affordance_map`` is None this is a declared no-export caller (product-gap Step 1):
+    expected-set widening uses convention ∪ declared ∪ ``declared_emitted_series`` only, so the
+    scored dashboards panel the declared gauge + DB latency and RED/coverage-bind panels never
+    land (human coverage capped). Pass an ``affordance_map`` (path / dict / LoadResult — the
+    generator loads it) to thread the enriched map into ``generate_observability_artifacts`` so
+    the source_backed RED coverage-bind panels DO land on this scored path (Cause-B, Harbor
+    SIL-REX THREAD). Threaded durably by ``bind_and_verify(affordance_map=…)``.
     """
     from .artifact_generator import generate_observability_artifacts
 
@@ -167,6 +177,7 @@ def _default_generate(onboarding: Path, artifacts_dir: Path, manifest_path: Path
         onboarding_metadata_path=onboarding,
         output_dir=artifacts_dir,
         manifest_path=manifest_path,
+        affordance_map=affordance_map,
     )
     by_status: Dict[str, int] = {}
     errors: List[str] = []
@@ -197,13 +208,21 @@ def bind_and_verify(
     allow_prod: bool = False,
     auth: Optional[Auth] = None,
     export_cmd: Optional[List[str]] = None,
+    affordance_map: Any = None,
     # Injectable effects (default to the real ones); enable network-free tests.
     list_names_fn: Optional[Callable[..., List[str]]] = None,
     export_fn: Optional[Callable[[Path, Path, List[str]], Dict[str, Any]]] = None,
     generate_fn: Optional[Callable[[Path, Path, Path], Dict[str, Any]]] = None,
     validate_fn: Optional[Callable[..., Any]] = None,
 ) -> BindVerifyReport:
-    """Run detect → reconcile → bind → export+generate → verify and return the report."""
+    """Run detect → reconcile → bind → export+generate → verify and return the report.
+
+    ``affordance_map`` (path / dict / LoadResult) threads the enriched AffordanceMap into the
+    scored generate so RED/coverage-bind panels land on THIS measured path — the durable Cause-B
+    fix (Harbor SIL-REX THREAD). Without it the default generate is a declared no-export caller and
+    human coverage is capped at the declared gauge + DB latency. Ignored if a custom ``generate_fn``
+    is supplied (that fn owns its own threading).
+    """
     manifest_path = Path(manifest_path)
     output_dir = Path(output_dir)
     auth = auth or Auth()
@@ -213,7 +232,11 @@ def bind_and_verify(
     export_cmd = export_cmd or ["contextcore", "manifest", "export", "--no-strict-quality"]
     list_names_fn = list_names_fn or list_metric_names
     export_fn = export_fn or (lambda m, o, c=export_cmd: _default_export(m, o, c))
-    generate_fn = generate_fn or _default_generate
+    # Bind the affordance map into the default generate (mirrors export_fn's export_cmd binding)
+    # so the injectable 3-arg generate_fn call site stays unchanged.
+    generate_fn = generate_fn or (
+        lambda ob, ad, mp, am=affordance_map: _default_generate(ob, ad, mp, affordance_map=am)
+    )
     if validate_fn is None:
         from .validate_promql import run_validation as validate_fn  # type: ignore
 

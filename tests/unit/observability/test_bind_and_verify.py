@@ -262,3 +262,84 @@ def test_report_is_json_serializable(tmp_path):
     report, _ = _run(m, tmp_path, live=_SPAN_METRICS)
     # to_dict round-trips through json cleanly.
     assert json.loads(json.dumps(report.to_dict()))["status"] == "pass"
+
+
+# ─────────────── affordance-map threading (Harbor SIL-REX THREAD) ────────────
+#
+# The default generate is a "declared no-export caller": without an AffordanceMap
+# the scored dashboards panel the declared gauge + DB latency only, so RED/
+# coverage-bind panels never land and human coverage is capped. Passing an
+# affordance_map threads the enriched map into the scored generate so those panels
+# DO land on the measured path (durable Cause-B fix).
+
+
+def _fake_generation_report():
+    return SimpleNamespace(artifacts=[], project_id="p", services_processed=1, services_skipped=0)
+
+
+def test_default_generate_threads_affordance_map(tmp_path, monkeypatch):
+    """_default_generate passes affordance_map straight through to the canonical generator."""
+    from startd8.observability import artifact_generator
+    from startd8.observability.bind_and_verify import _default_generate
+
+    captured = {}
+
+    def _fake_generate(*, onboarding_metadata_path, output_dir, manifest_path, affordance_map=None):
+        captured["affordance_map"] = affordance_map
+        return _fake_generation_report()
+
+    monkeypatch.setattr(artifact_generator, "generate_observability_artifacts", _fake_generate)
+    onb = tmp_path / "onboarding-metadata.json"
+    onb.write_text("{}")
+    out = _default_generate(onb, tmp_path / "art", tmp_path / "m.yaml", affordance_map="MAP")
+    assert captured["affordance_map"] == "MAP"
+    assert out["ok"] is True
+
+
+def test_default_generate_without_affordance_map_passes_none(tmp_path, monkeypatch):
+    """Byte-identity for the no-map path: affordance_map defaults to None (declared no-export caller)."""
+    from startd8.observability import artifact_generator
+    from startd8.observability.bind_and_verify import _default_generate
+
+    captured = {"affordance_map": "sentinel"}
+
+    def _fake_generate(*, onboarding_metadata_path, output_dir, manifest_path, affordance_map=None):
+        captured["affordance_map"] = affordance_map
+        return _fake_generation_report()
+
+    monkeypatch.setattr(artifact_generator, "generate_observability_artifacts", _fake_generate)
+    onb = tmp_path / "onboarding-metadata.json"
+    onb.write_text("{}")
+    _default_generate(onb, tmp_path / "art", tmp_path / "m.yaml")
+    assert captured["affordance_map"] is None
+
+
+def test_bind_and_verify_threads_affordance_map_via_default_generate(tmp_path, monkeypatch):
+    """End-to-end: bind_and_verify(affordance_map=…) reaches the canonical generator through the
+    DEFAULT generate_fn (not injected) — the durable passthrough operators get for free."""
+    from startd8.observability import artifact_generator
+
+    captured = {}
+
+    def _fake_generate(*, onboarding_metadata_path, output_dir, manifest_path, affordance_map=None):
+        captured["affordance_map"] = affordance_map
+        return _fake_generation_report()
+
+    monkeypatch.setattr(artifact_generator, "generate_observability_artifacts", _fake_generate)
+
+    m = _manifest(tmp_path)
+    amap = tmp_path / "enriched-affordance-map.json"
+    amap.write_text("[]")
+    calls: list = []
+    report = bind_and_verify(
+        manifest_path=m,
+        prometheus_url="http://localhost:9090",
+        output_dir=tmp_path / "out",
+        affordance_map=amap,
+        list_names_fn=lambda url, auth=None: ["calls_total", "up"],
+        export_fn=_ok_export(calls),
+        # default generate_fn on purpose — the affordance_map binding must fire.
+        validate_fn=_validate(_FakeFidelity(), calls),
+    )
+    assert captured["affordance_map"] == amap
+    assert report.status == "pass"
