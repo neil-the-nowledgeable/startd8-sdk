@@ -227,6 +227,39 @@ def test_merge_quality_preserves_untouched():
     assert merged["services"]["store"]["composite_score"] == 1.0
 
 
+def test_merge_quality_recomputes_per_type_rollup():
+    """Regression (bus 93e86298): merging must recompute avg_{atype}_score from
+    the merged services, not just avg_composite_score — else an affordance-merged
+    quality.json (the durable/threaded audit input) drops every per-type rollup
+    and the report-card grader reads dashboard=0.0 (structural stuck at B)."""
+    # empty prior = the affordance-apply fallback that produced the bug
+    prior = {"services": {}, "aggregate": {}}
+    touched = {
+        "core": {
+            "composite_score": 1.0,
+            "dashboard_spec": {"score": 0.9},
+            "slo_definition": {"score": 1.0},
+            "alert_rule": {"score": 1.0},
+            "metric_coverage_bridge": 0.0,      # a float per-svc key must NOT roll up
+            "expected_sources": {"convention": 3},  # a dict without "score" must NOT roll up
+        },
+        "exporter": {
+            "composite_score": 0.8,
+            "dashboard_spec": {"score": 1.0},
+            "slo_definition": {"score": 1.0},
+        },
+    }
+    agg = merge_quality_services(prior, touched)["aggregate"]
+    assert agg["avg_dashboard_spec_score"] == round((0.9 + 1.0) / 2, 4)  # 0.95
+    assert agg["avg_slo_definition_score"] == 1.0
+    assert agg["avg_alert_rule_score"] == 1.0                # exporter has none → single sample
+    assert agg["avg_composite_score"] == round((1.0 + 0.8) / 2, 4)
+    assert agg["services_scored"] == 2
+    # non-artifact per-service keys are excluded from the rollup
+    assert "avg_metric_coverage_bridge_score" not in agg
+    assert "avg_expected_sources_score" not in agg
+
+
 def test_merge_manifest_preserves_untouched():
     prior = {
         "artifacts": [

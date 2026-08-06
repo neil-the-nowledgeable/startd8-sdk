@@ -1064,6 +1064,26 @@ def merge_quality_services(
                 sum(float(c) for c in composites) / len(composites), 4
             )
             agg["services_scored"] = len(composites)
+        # L4-EMIT (bus 93e86298): recompute the per-artifact-type score rollup from
+        # the MERGED services so the graded aggregate carries avg_{atype}_score
+        # (avg_dashboard_spec_score / avg_slo_definition_score / avg_alert_rule_score
+        # / …), mirroring ``_write_quality_report``. Merging previously refreshed only
+        # avg_composite_score, so an affordance-merged quality.json (the durable /
+        # threaded audit input) dropped every per-type rollup and the report-card
+        # structural rule graded ``dashboard=0.0`` (#356 inert on real data).
+        by_type: Dict[str, List[float]] = {}
+        for v in prior_services.values():
+            if not isinstance(v, dict):
+                continue
+            for atype, entry in v.items():
+                if isinstance(entry, dict) and "score" in entry:
+                    try:
+                        by_type.setdefault(atype, []).append(float(entry["score"]))
+                    except (TypeError, ValueError):
+                        continue
+        for atype, scores in by_type.items():
+            if scores:
+                agg[f"avg_{atype}_score"] = round(sum(scores) / len(scores), 4)
         out["aggregate"] = agg
     return out
 
@@ -2895,6 +2915,24 @@ def merge_and_write_reports(
             block["composite_score"] = round(sum(scores) / len(scores), 4)
         touched_services[svc_id] = block
     merged_q = merge_quality_services(prior_q, touched_services)
+    # Tip honesty (bus 93e86298): stamp emit-time sdk_sha when the merged aggregate
+    # carries none (an affordance-merge from an empty prior otherwise writes a
+    # provenance-less quality.json, so remeasure can't fail-closed on a shadowed
+    # install). Only fills when absent — never overrides a real prior sha.
+    _mq_agg = merged_q.setdefault("aggregate", {})
+    if isinstance(_mq_agg, dict) and not _mq_agg.get("sdk_sha"):
+        from .artifact_generator import _emit_time_sdk_sha
+
+        _prov = _emit_time_sdk_sha()
+        if _prov.get("sdk_sha"):
+            _mq_agg["sdk_sha"] = _prov["sdk_sha"]
+            _mq_agg["sdk_sha_source"] = _prov.get("sdk_sha_source", "absent")
+            merged_q.setdefault("provenance", {}).update(
+                {
+                    "sdk_sha": _prov.get("sdk_sha", ""),
+                    "sdk_sha_source": _prov.get("sdk_sha_source", "absent"),
+                }
+            )
     qpath.write_text(json.dumps(merged_q, indent=2) + "\n", encoding="utf-8")
 
     mpath = output_dir / "observability-manifest.yaml"

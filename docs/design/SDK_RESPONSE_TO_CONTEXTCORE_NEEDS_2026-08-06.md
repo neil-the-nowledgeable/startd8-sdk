@@ -4,10 +4,24 @@
 **Re:** [`CONTEXTCORE_NEEDS_FROM_SDK_2026-08-06.md`](./CONTEXTCORE_NEEDS_FROM_SDK_2026-08-06.md)
 **Verified against:** current `origin/main` (`bfbdcfa3`) + every real pilot `observability-quality.json` artifact.
 
-## TL;DR — this is not an SDK gap; the grader is reading the wrong object
+> ## ⚠ CORRECTION (2026-08-06, after bus `93e86298`) — this **is** an SDK bug; now fixed
+>
+> My first pass concluded "not an SDK gap; fix is ContextCore." **That was wrong** — I only checked the
+> *primary* aggregate producer (`_write_quality_report`) and misattributed the provenance-less
+> `export-durable` file to "ContextCore-assembled." The FDE traced it correctly: there is a **second SDK
+> aggregate producer** — `merge_quality_services` (`affordance_map_consume.py:1045`), the affordance-merge
+> path that writes the durable/threaded quality.json the grader actually reads. It recomputed **only**
+> `avg_composite_score`, dropping every `avg_{atype}_score` and `sdk_sha`. **Fixed** (this branch):
+> `merge_quality_services` now recomputes the full per-type rollup from the merged services, and the write
+> site stamps `sdk_sha`. Verified on the **real** durable services: the merged aggregate now carries
+> `avg_dashboard_spec_score = 1.0` (≥ 0.90) → **L4-EMIT alone flips structural B→B+**; OBS-203b is *not* on
+> the critical path for that run. The §1–§5 evidence below (that `_write_quality_report` emits the keys)
+> remains true — the mistake was the *interpretation* that the durable file therefore wasn't ours.
 
-The SDK's `observability-quality.json` **already emits** `avg_dashboard_spec_score` and (since `c405cff6`)
-`avg_slo_definition_score`. Regenerated on current main from the real Harbor inputs:
+## TL;DR (original first-pass — see the correction above)
+
+The SDK's `_write_quality_report` `observability-quality.json` **emits** `avg_dashboard_spec_score` and (since
+`c405cff6`) `avg_slo_definition_score`. Regenerated on current main from the real Harbor inputs:
 
 ```
 avg_dashboard_spec_score: PRESENT = 0.8638
@@ -78,12 +92,16 @@ depth work (attribution + #286 alert-suppression), **not** a `_write_quality_rep
    `avg_dashboard_score`, `avg_collector_enrichment_score`, `avg_capability_index_score`, plus `avg_composite_score`
    and `avg_metric_coverage_score`. `avg_alert_rule_score` appears only when `alert_rule` is generated (not skipped).
 
-## §5 — Where the fix actually goes (ContextCore)
+## §5 — Where the fix actually goes — CORRECTED: SDK `merge_quality_services` (fixed here)
 
-The audit-aggregate assembly (`assemble_report_card` / the durable AuditReport path) must roll up the per-type
-scores it already has in its per-service `score_matrix` (`dashboard_spec = 0.9167`, etc.) into the top-level
-aggregate the grader reads — mirroring the SDK's `observability-quality.json`. PR #356 reads the right key; it is
-inert because the **audit** aggregate it grades against drops the per-type rollups. Fix the rollup, re-grade.
+**Corrected from the first pass.** The durable/threaded quality.json the grader reads is produced by the SDK's
+`merge_quality_services` (`affordance_map_consume.py:1045`), *not* a ContextCore assembly. It recomputed only
+`avg_composite_score`, so the affordance-merged aggregate dropped every `avg_{atype}_score` (and `sdk_sha`).
+The fix (this branch) recomputes the per-type rollup from the merged services (mirroring
+`_write_quality_report`) and stamps `sdk_sha` at the write site. PR #356 (which reads `avg_dashboard_spec_score`)
+is no longer inert once a run regenerates through the fixed merge path. ContextCore's audit assembly needs no
+change if it consumes this quality.json; if it maintains a *separate* light aggregate, that copy should mirror
+the same rollup.
 
 One honest note: even with the key present, structural B→B+ requires `dashboard_spec >= 0.90`. Our fresh regen
 averages **0.8638** (core/jobservice score 0.77 due to OBS-203b: the DB-latency panels use `db_client_operation_*`,
