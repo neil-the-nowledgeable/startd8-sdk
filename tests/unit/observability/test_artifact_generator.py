@@ -1688,6 +1688,58 @@ class TestRedBindPanels:
         ]
         assert not obs200a, obs200a
 
+    def test_summary_family_coverage_bind_avoids_dead_histogram_quantile(
+        self, tmp_path, manifest_yaml
+    ):
+        """EC-SUMMARY-TYPE: a coverage-bind family the service declares as a Prometheus
+        SUMMARY must NOT be panelled with histogram_quantile(rate(_bucket)) (a summary
+        has no _bucket series ⇒ dead SLI in the regenerated dashboard). It must bind to
+        the guaranteed-live _sum/_count average instead."""
+        from startd8.observability.affordance_map_consume import AffordanceMapEntry
+
+        fam = "harbor_core_http_request_duration_seconds"
+        meta = {
+            "project_id": "harbor-pilot",
+            "instrumentation_hints": {
+                "core": {
+                    "service_id": "core",
+                    "transport": "http",
+                    "language": "go",
+                    "metrics": {
+                        "convention_based": [],
+                        "manifest_declared": [],
+                        # The service declares the family as a SUMMARY (type carried by
+                        # the extractor's declared_emitted_series).
+                        "declared_emitted_series": [{"name": fam, "type": "summary"}],
+                    },
+                },
+            },
+        }
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        entry = AffordanceMapEntry(
+            element_id="core",
+            gap_code="metric_coverage_empty",
+            affordance_ids=["gen.improve_metric_coverage"],
+            locus_status="source_backed",
+            source_loci=[{"family_or_signal": fam, "signal_kind": "metric"}],
+        )
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=tmp_path / "observability",
+            manifest_path=manifest_yaml,
+            affordance_map=[entry],
+        )
+        dashboard = next(
+            a for a in report.artifacts
+            if a.artifact_type == "dashboard_spec" and a.service_id == "core"
+        )
+        # The dead histogram legs must be absent for this summary family…
+        assert f"histogram_quantile(0.99, sum(rate({fam}_bucket" not in dashboard.content
+        # …replaced by the guaranteed-live _sum/_count average.
+        assert f"rate({fam}_sum[$__rate_interval])" in dashboard.content
+        assert f"rate({fam}_count[$__rate_interval])" in dashboard.content
+
     def test_element_outside_generator_services_is_recorded_as_skipped(
         self, tmp_path, manifest_yaml
     ):
@@ -2872,3 +2924,31 @@ def test_coverage_bind_panel_expr_hist_retries_uses_bucket():
     assert _coverage_bind_panel_expr("thanos_frontend_split_queries_total") == (
         "max(thanos_frontend_split_queries_total{})"
     )
+
+
+def test_coverage_bind_panel_expr_summary_avoids_dead_bucket():
+    """EC-SUMMARY-TYPE: a Prometheus SUMMARY shares the …_duration_seconds basename
+    of a histogram but has NO _bucket series, so histogram_quantile(rate(_bucket))
+    binds DEAD. is_summary=True must emit the guaranteed-live _sum/_count average."""
+    from startd8.observability.artifact_generator import _coverage_bind_panel_expr
+
+    fam = "harbor_core_http_request_duration_seconds"
+    expr = _coverage_bind_panel_expr(fam, is_summary=True)
+    # No dead histogram legs.
+    assert "histogram_quantile" not in expr
+    assert "_bucket" not in expr
+    # Guaranteed-live summary children.
+    assert f"rate({fam}_sum[$__rate_interval])" in expr
+    assert f"rate({fam}_count[$__rate_interval])" in expr
+
+
+def test_coverage_bind_panel_expr_default_is_backward_compatible():
+    """Unknown/histogram families (is_summary defaulting False) keep the exact prior
+    behaviour — the summary branch is additive, never a regression."""
+    from startd8.observability.artifact_generator import _coverage_bind_panel_expr
+
+    fam = "harbor_core_http_request_duration_seconds"
+    # Same family with no type known → the original histogram_quantile shape.
+    hist = _coverage_bind_panel_expr(fam)
+    assert "histogram_quantile" in hist and f"{fam}_bucket" in hist
+    assert hist == _coverage_bind_panel_expr(fam, is_summary=False)
