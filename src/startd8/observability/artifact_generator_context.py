@@ -617,6 +617,21 @@ def load_business_context(
     ctx.prometheus_datasource = observability.get("prometheusDatasource")
     ctx.runbook_base = observability.get("runbookBase")
 
+    # REQ-01 FR-3: manifest-declarable metric profiles (definitions). A subject
+    # declares named profiles as DATA (name -> descriptor axes) instead of an SDK
+    # code edit to metric_descriptor._PROFILES. Prefer spec.observability.metricsProfiles;
+    # fall back to a top-level metadata `metricsProfiles` (export path). Parsed
+    # leniently (dicts only) so a newer manifest cannot crash an older generator.
+    _declared_profiles = observability.get("metricsProfiles")
+    if not isinstance(_declared_profiles, dict):
+        _declared_profiles = metadata.get("metricsProfiles")
+    if isinstance(_declared_profiles, dict):
+        ctx.metric_profiles = {
+            str(k): dict(v)
+            for k, v in _declared_profiles.items()
+            if isinstance(v, dict)
+        }
+
     # SLO thresholds from requirements
     ctx.availability = requirements.get("availability")
     ctx.latency_p99 = requirements.get("latencyP99")

@@ -1459,6 +1459,8 @@ def generate_observability_artifacts(
             kinds=service.kinds,  # #226 FR-6: kind wins over transport
             transport=service.transport,
             overrides=service.descriptor_overrides,
+            # REQ-01 FR-3: manifest-declared metric profiles (built-in wins on collision).
+            declared_profiles=business.metric_profiles,
         )
         for service in services
     }

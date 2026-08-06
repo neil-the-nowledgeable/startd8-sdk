@@ -85,3 +85,111 @@ def test_db_panel_selector_has_no_leading_comma_when_name_scoped():
     matcher2 = _pf("semconv-http").service_matcher("svc")
     sel2 = ",".join(p for p in (matcher2, 'db_system="postgresql"') if p)
     assert sel2 == 'service="svc",db_system="postgresql"'
+
+
+# ---------------------------------------------------------------------------
+# REQ-01 FR-3 — manifest-declarable metric profiles (subject identity as DATA,
+# not an SDK code edit to _PROFILES). The declared tier resolves with the same
+# precedence as built-ins; a built-in name wins on collision.
+# ---------------------------------------------------------------------------
+
+#: the grounded harbor-core-http axes, expressed as manifest DATA (what a subject
+#: would put under spec.observability.metricsProfiles instead of editing _PROFILES).
+_HARBOR_CORE_AS_DATA = {
+    "service_label_key": "",
+    "error_selector": 'code=~"5.."',
+    "throughput_metric": "harbor_core_http_request_total",
+    "latency_bucket_metric": "",
+    "latency_unit": "s",
+}
+
+
+def _axes(d):
+    from dataclasses import fields
+    return {f.name: getattr(d, f.name) for f in fields(d) if f.name != "profile"}
+
+
+def test_declared_profile_binds_identically_to_the_built_in():
+    """FR-3 acceptance: a manifest-declared profile with the harbor-core-http axes
+    resolves to the same descriptor (bar its provenance name) as the built-in —
+    proving the harbor-* profiles CAN move out of _PROFILES code into data."""
+    from startd8.observability.metric_descriptor import resolve_descriptor, _PROFILES
+
+    declared = resolve_descriptor(
+        profile="harbor-core-http-data",
+        transport="http",
+        declared_profiles={"harbor-core-http-data": _HARBOR_CORE_AS_DATA},
+    )
+    assert _axes(declared) == _axes(_PROFILES["harbor-core-http"])
+    # selectors render identically (the load-bearing behavior)
+    assert declared.selector("core") == "{}"
+    assert declared.selector("core", error=True) == '{code=~"5.."}'
+
+
+def test_declared_profile_partial_inherits_transport_base():
+    from startd8.observability.metric_descriptor import resolve_descriptor
+
+    d = resolve_descriptor(
+        profile="p", transport="http",
+        declared_profiles={"p": {"throughput_metric": "my_total"}},
+    )
+    assert d.throughput_metric == "my_total"
+    # unset axes inherit semconv-http (labelled identity)
+    assert d.service_label_key == "service"
+
+
+def test_builtin_wins_on_name_collision():
+    """A declared profile MUST NOT silently shadow a built-in (e.g. semconv-http)."""
+    from startd8.observability.metric_descriptor import resolve_descriptor
+
+    d = resolve_descriptor(
+        profile="semconv-http", transport="http",
+        declared_profiles={"semconv-http": {"error_selector": "SHADOWED"}},
+    )
+    assert d.error_selector != "SHADOWED"
+    assert d.profile == "semconv-http"
+
+
+def test_unknown_profile_degrades_not_raises():
+    from startd8.observability.metric_descriptor import resolve_descriptor
+
+    d = resolve_descriptor(profile="nope", transport="http", declared_profiles={})
+    assert d.profile == "semconv-http"
+
+
+def test_no_declared_profiles_is_byte_identical():
+    """Absent declared_profiles ⇒ pre-FR-3 behavior (built-in resolves, unknown degrades)."""
+    from startd8.observability.metric_descriptor import resolve_descriptor
+
+    assert resolve_descriptor(profile="harbor-core-http").profile == "harbor-core-http"
+    assert resolve_descriptor(profile="ghost").profile == "semconv-http"
+
+
+def test_declared_profile_flows_through_generation(tmp_path):
+    """End-to-end: a service selecting a metadata-declared profile binds to the
+    declared axes through generate_observability_artifacts (no _PROFILES edit)."""
+    import json
+    from startd8.observability.artifact_generator import generate_observability_artifacts
+
+    meta = {
+        "project_id": "demo",
+        # FR-3 definitions on the export path (top-level metadata.metricsProfiles)
+        "metricsProfiles": {"acme-http": _HARBOR_CORE_AS_DATA},
+        "instrumentation_hints": {
+            "svc": {
+                "service_id": "svc", "transport": "http",
+                "metricsProfile": "acme-http",          # the selector
+                "metrics": {"convention_based": [
+                    {"name": "harbor_core_http_request_total", "type": "counter", "source": "prom"},
+                ]},
+            },
+        },
+    }
+    mp = tmp_path / "onboarding-metadata.json"
+    mp.write_text(json.dumps(meta))
+    report = generate_observability_artifacts(
+        onboarding_metadata_path=mp, output_dir=tmp_path / "out",
+    )
+    # the declared throughput series appears in a generated artifact (bound, not semconv default)
+    blob = "\n".join(a.content for a in report.artifacts if a.content)
+    assert "harbor_core_http_request_total" in blob

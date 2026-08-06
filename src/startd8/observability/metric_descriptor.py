@@ -482,12 +482,41 @@ _OVERRIDABLE_AXES = frozenset(
 )
 
 
+def descriptor_from_declared(
+    name: str,
+    axes: Optional[Dict[str, Any]],
+    transport: str = "http",
+) -> MetricDescriptor:
+    """Build a descriptor from a manifest-declared ``metricsProfiles`` entry (REQ-01 FR-3).
+
+    Declared axes are applied as overrides onto the ``semconv-{transport}`` base,
+    so a profile need only declare the axes that *differ* from the transport
+    default. Unknown keys are ignored with a warning (same leniency as
+    ``descriptor_overrides``); ``extra_selectors`` is coerced to a tuple. This is
+    the data-declared tier — it does NOT mutate the built-in ``_PROFILES`` map.
+    """
+    base = profile_for_transport(transport)
+    known: Dict[str, Any] = {}
+    for key, value in (axes or {}).items():
+        if key in ("profile", "name"):
+            continue
+        if key in _OVERRIDABLE_AXES:
+            known[key] = tuple(value) if key == "extra_selectors" else value
+        else:
+            logger.warning(
+                "ignoring unknown metricsProfiles[%r] axis %r "
+                "(not a recognized descriptor axis)", name, key,
+            )
+    return replace(base, profile=name, **known)
+
+
 def resolve_descriptor(
     *,
     profile: Optional[str] = None,
     kinds: Optional[Iterable[str]] = None,
     transport: str = "http",
     overrides: Optional[Dict[str, Any]] = None,
+    declared_profiles: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> MetricDescriptor:
     """Build the effective descriptor for a service (terminus of the FR-7 ladder).
 
@@ -499,19 +528,32 @@ def resolve_descriptor(
       back to ``semconv-{transport}`` (tier 6, today's behavior).
     * ``overrides`` — per-axis values that override the profile field-by-field
       (FR-1 escape hatch / FR-7 tier-1 descriptor).
+    * ``declared_profiles`` — REQ-01 FR-3 manifest-declared profiles (name → axes).
+      A built-in ``_PROFILES`` name **wins on collision** (warn), so a manifest
+      cannot silently shadow ``semconv-*``; a declared-only name resolves via
+      ``descriptor_from_declared``.
 
-    FR-3 leniency: an **unknown profile name** logs a warning and falls back to
-    the transport default rather than raising (so a newer manifest cannot crash
-    an older generator); **unknown override keys** are ignored with a warning.
-    ``profile_for`` stays strict for authoring-time validation.
+    FR-3 leniency: an **unknown profile name** (neither built-in nor declared)
+    logs a warning and falls back to the transport default rather than raising (so
+    a newer manifest cannot crash an older generator); **unknown override keys**
+    are ignored with a warning. ``profile_for`` stays strict for authoring-time
+    validation.
     """
     # Precedence (#226 FR-6): an explicit resolved `profile` (manifest/ContextCore)
     # still wins; else a declared workload `kind` wins over transport; else the
     # transport default. Empty kinds ⇒ transport default (byte-identical to pre-#226).
     if profile:
-        try:
-            base = profile_for(profile)
-        except ValueError:
+        if profile in _PROFILES:
+            # FR-3 collision rule: a built-in name wins over a declared one.
+            if declared_profiles and profile in declared_profiles:
+                logger.warning(
+                    "declared metricsProfiles[%r] shadows a built-in profile; "
+                    "using the built-in (FR-3 collision rule: built-in wins)", profile,
+                )
+            base = _PROFILES[profile]
+        elif declared_profiles and profile in declared_profiles:
+            base = descriptor_from_declared(profile, declared_profiles[profile], transport)
+        else:
             logger.warning(
                 "unknown metric convention profile %r in onboarding metadata; "
                 "falling back to semconv-%s", profile, transport,

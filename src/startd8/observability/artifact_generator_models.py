@@ -249,6 +249,12 @@ class BusinessContext:
     # #226 FR-4/FR-5: per-FR observability intents forwarded from the plan
     # (spec.requirements.functional[]). Empty until CR-1 ships upstream ⇒ pre-#226 path.
     functional_requirements: List["FunctionalRequirement"] = field(default_factory=list)
+    # REQ-01 FR-3: manifest-declarable metric profiles. ``name -> descriptor-axis
+    # dict`` from spec.observability.metricsProfiles (or a top-level metadata
+    # ``metricsProfiles`` on the export path). Resolved by ``resolve_descriptor``
+    # with the same precedence as the built-in ``_PROFILES`` (built-in name wins on
+    # collision). Empty ⇒ built-in profiles only (byte-identical to pre-FR-3).
+    metric_profiles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def routing_channels(self) -> List[str]:
         """Channel identifiers for alert routing, with the Phase-0 fallback chain:
