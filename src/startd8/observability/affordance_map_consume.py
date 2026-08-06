@@ -31,6 +31,7 @@ from typing import (
 import yaml
 
 from startd8.logging_config import get_logger
+from startd8.observability.artifact_generator_models import rollup_avg_by_type
 
 logger = get_logger(__name__)
 
@@ -1064,26 +1065,15 @@ def merge_quality_services(
                 sum(float(c) for c in composites) / len(composites), 4
             )
             agg["services_scored"] = len(composites)
-        # L4-EMIT (bus 93e86298): recompute the per-artifact-type score rollup from
-        # the MERGED services so the graded aggregate carries avg_{atype}_score
-        # (avg_dashboard_spec_score / avg_slo_definition_score / avg_alert_rule_score
-        # / …), mirroring ``_write_quality_report``. Merging previously refreshed only
-        # avg_composite_score, so an affordance-merged quality.json (the durable /
-        # threaded audit input) dropped every per-type rollup and the report-card
-        # structural rule graded ``dashboard=0.0`` (#356 inert on real data).
-        by_type: Dict[str, List[float]] = {}
-        for v in prior_services.values():
-            if not isinstance(v, dict):
-                continue
-            for atype, entry in v.items():
-                if isinstance(entry, dict) and "score" in entry:
-                    try:
-                        by_type.setdefault(atype, []).append(float(entry["score"]))
-                    except (TypeError, ValueError):
-                        continue
-        for atype, scores in by_type.items():
-            if scores:
-                agg[f"avg_{atype}_score"] = round(sum(scores) / len(scores), 4)
+        # L4-EMIT (bus 93e86298): the per-artifact-type rollup is single-sourced
+        # via rollup_avg_by_type — the SAME helper _write_quality_report uses — so
+        # the merged aggregate carries avg_{atype}_score (avg_dashboard_spec_score /
+        # avg_slo_definition_score / avg_alert_rule_score / …) by construction.
+        # Merging previously refreshed only avg_composite_score, so an affordance-
+        # merged quality.json (the durable/threaded audit input) dropped every
+        # per-type rollup and the report-card structural rule graded dashboard=0.0
+        # (#356 inert on real data). CCbC: the drop is now unrepresentable.
+        agg.update(rollup_avg_by_type(prior_services))
         out["aggregate"] = agg
     return out
 

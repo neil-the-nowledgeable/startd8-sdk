@@ -245,6 +245,21 @@ class TestThreeWayCoverageIntegration:
         assert agg["avg_metric_coverage_dashboarded"] == agg["avg_metric_coverage_human"]
         # scored == generated invariant (REQ-OAT-050) is surfaced.
         assert agg["artifacts_scored"] == agg["artifacts_generated"]
+        # CCbC single-source invariant (REQ-01 FR-7 principle): every per-artifact-
+        # type score present in `services` has a matching avg_{atype}_score in the
+        # aggregate — so a producer cannot silently drop the per-type rollup (the
+        # merge_quality_services class, bus 93e86298). Guards the GENERATE producer.
+        present_types = {
+            k
+            for sv in quality["services"].values()
+            if isinstance(sv, dict)
+            for k, v in sv.items()
+            if isinstance(v, dict) and "score" in v
+        }
+        assert present_types, "expected at least one scored per-service artifact type"
+        assert all(f"avg_{t}_score" in agg for t in present_types), [
+            t for t in present_types if f"avg_{t}_score" not in agg
+        ]
 
 
 class TestSLOScoringFeedRegression:

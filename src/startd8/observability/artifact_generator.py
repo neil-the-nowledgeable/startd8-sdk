@@ -2691,17 +2691,17 @@ def _write_quality_report(
         svc_data["composite_score"] = round(composite, 4)
 
     # ---- aggregate ----
-    by_type: Dict[str, List[float]] = {}
     total_issues = 0
     total_repairs = 0
     for a in scored:
-        by_type.setdefault(a.artifact_type, []).append(a.quality["score"])
         total_issues += len(a.quality.get("issues", []))
         total_repairs += len(a.quality.get("repairs_applied", []))
 
     aggregate: Dict[str, Any] = {}
-    for atype, scores in by_type.items():
-        aggregate[f"avg_{atype}_score"] = round(sum(scores) / len(scores), 4)
+    # CCbC single-source of the per-artifact-type rollup — the SAME helper
+    # merge_quality_services uses, so neither producer can construct an aggregate
+    # that drops a per-type key present in `services` (REQ-01 FR-7 principle).
+    aggregate.update(rollup_avg_by_type(services))
 
     composites = [s["composite_score"] for s in services.values()]
     aggregate["avg_composite_score"] = (

@@ -260,6 +260,53 @@ def test_merge_quality_recomputes_per_type_rollup():
     assert "avg_expected_sources_score" not in agg
 
 
+def test_ccbc_invariant_aggregate_reflects_services_on_merge():
+    """CCbC single-source invariant (REQ-01 FR-7 principle) on the MERGE producer:
+    every per-artifact-type score present in the merged `services` has a matching
+    avg_{atype}_score in the aggregate — the drop that graded dashboard=0.0 is now
+    unrepresentable because both producers roll up via the same rollup_avg_by_type."""
+    prior = {"services": {}, "aggregate": {}}
+    touched = {
+        "core": {
+            "composite_score": 1.0,
+            "dashboard_spec": {"score": 0.9},
+            "slo_definition": {"score": 1.0},
+            "alert_rule": {"score": 1.0},
+        },
+    }
+    merged = merge_quality_services(prior, touched)
+    present_types = {
+        k
+        for sv in merged["services"].values()
+        if isinstance(sv, dict)
+        for k, v in sv.items()
+        if isinstance(v, dict) and "score" in v
+    }
+    agg = merged["aggregate"]
+    assert all(f"avg_{t}_score" in agg for t in present_types), [
+        t for t in present_types if f"avg_{t}_score" not in agg
+    ]
+
+
+def test_rollup_avg_by_type_excludes_non_artifact_keys():
+    """The single-source helper rolls up only dict-with-score entries; float
+    coverages and dict-without-score (expected_sources) are excluded."""
+    from startd8.observability.artifact_generator_models import rollup_avg_by_type
+
+    out = rollup_avg_by_type(
+        {
+            "s1": {
+                "dashboard_spec": {"score": 0.8},
+                "composite_score": 0.5,          # float — excluded
+                "metric_coverage_bridge": 0.0,   # float — excluded
+                "expected_sources": {"convention": 3},  # dict w/o score — excluded
+            },
+            "s2": {"dashboard_spec": {"score": 1.0}},
+        }
+    )
+    assert out == {"avg_dashboard_spec_score": round((0.8 + 1.0) / 2, 4)}
+
+
 def test_merge_manifest_preserves_untouched():
     prior = {
         "artifacts": [

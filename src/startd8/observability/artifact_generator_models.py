@@ -399,3 +399,34 @@ class ArtifactTypeSpec:
     orientation: str     # Orientation value
     requires_declaration: bool
     order: int
+
+
+def rollup_avg_by_type(services: Dict[str, Any]) -> Dict[str, float]:
+    """Per-artifact-type score rollup (``avg_{atype}_score``) from a quality
+    ``services`` dict — the SINGLE source both ``_write_quality_report`` and
+    ``merge_quality_services`` use.
+
+    Context-Correctness-by-Construction (REQ-01 FR-7 principle): the per-type
+    rollup is derived one way from the same ``services`` shape, so neither
+    producer can silently construct an aggregate missing a per-type key for a
+    type present in ``services`` — the class that let ``merge_quality_services``
+    drop ``avg_dashboard_spec_score`` and leave the grader reading ``0`` (bus
+    93e86298 / commit 006fd7ef). Non-artifact per-service keys (``composite_score``
+    and the ``metric_coverage_*`` floats, ``expected_sources``) carry no ``score``
+    and are excluded.
+    """
+    by_type: Dict[str, List[float]] = {}
+    for block in services.values():
+        if not isinstance(block, dict):
+            continue
+        for atype, entry in block.items():
+            if isinstance(entry, dict) and "score" in entry:
+                try:
+                    by_type.setdefault(atype, []).append(float(entry["score"]))
+                except (TypeError, ValueError):
+                    continue
+    return {
+        f"avg_{atype}_score": round(sum(scores) / len(scores), 4)
+        for atype, scores in by_type.items()
+        if scores
+    }
