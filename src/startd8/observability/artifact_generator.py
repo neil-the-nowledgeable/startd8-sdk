@@ -716,7 +716,7 @@ def build_service_metrics_expected(
 _COVERAGE_BIND_GROUP = "Coverage (AffordanceMap)"
 
 
-def _coverage_bind_panel_expr(fam: str) -> str:
+def _coverage_bind_panel_expr(fam: str, *, is_summary: bool = False) -> str:
     """PromQL for one AffordanceMap coverage-bind panel.
 
     Gauges stay ``max(name{})`` (extractor-visible). Native histogram basenames
@@ -724,9 +724,24 @@ def _coverage_bind_panel_expr(fam: str) -> str:
     — same shape as declared-base latency + AffordanceMap Duration panels — so
     live bind does not fail Class B on missing basename gauges (PATHFIX_QF:
     ``cortex_query_frontend_retries`` @ tip 21398c57).
+
+    ``is_summary`` (EC-SUMMARY-TYPE): a Prometheus **Summary** shares the
+    ``…_duration_seconds`` basename shape of a histogram but exposes **no**
+    ``_bucket`` series — so ``histogram_quantile(rate(…_bucket))`` binds DEAD in
+    the regenerated dashboard/alert (the finding this fixes). A summary's
+    ``_sum``/``_count`` children always exist, so an average-latency SLI binds
+    live; p99 would need configured quantile objectives a summary may omit, so
+    the guaranteed-bindable average is preferred over a possibly-dead quantile.
+    The caller passes ``is_summary`` from the service's ``declared_emitted_series``
+    type; unknown/histogram families keep the existing behaviour (no regression).
     """
     from .affordance_map_consume import _duration_panel_expr, _is_native_hist_basename
 
+    if is_summary:
+        return (
+            f"sum(rate({fam}_sum[$__rate_interval])) "
+            f"/ sum(rate({fam}_count[$__rate_interval]))"
+        )
     if _is_native_hist_basename(fam):
         return _duration_panel_expr(fam)
     return f"max({fam}{{}})"
@@ -786,12 +801,22 @@ def _apply_affordance_coverage_bind_panels(
         for a in artifacts
         if a.artifact_type == "dashboard_spec" and a.status == "generated"
     }
+    # EC-SUMMARY-TYPE: which admitted families are Prometheus SUMMARIES (per the
+    # service's declared_emitted_series type) — a summary must NOT be panelled with
+    # histogram_quantile(rate(_bucket)) (no _bucket series ⇒ dead SLI).
+    svc_by_id = {getattr(s, "service_id", None): s for s in services}
     for svc_id, families in map_families.items():
         if not families:
             continue
         art = by_service.get(svc_id)
         if art is None or not art.content:
             continue
+        _svc = svc_by_id.get(svc_id)
+        summary_families = {
+            s.name
+            for s in (getattr(_svc, "declared_emitted_series", None) or ())
+            if getattr(s, "name", None) and getattr(s, "type", "") == "summary"
+        }
         try:
             data = yaml.safe_load(art.content) or {}
         except Exception:
@@ -820,7 +845,7 @@ def _apply_affordance_coverage_bind_panels(
             # as Class B latency dead (compact/query/store/receive remasure).
             # Reuse AffordanceMap Duration panel shape (histogram_quantile on
             # _bucket) for duration/delay families; keep max({}) for gauges.
-            expr = _coverage_bind_panel_expr(fam)
+            expr = _coverage_bind_panel_expr(fam, is_summary=fam in summary_families)
             if expr in existing:
                 continue
             panels.append(
