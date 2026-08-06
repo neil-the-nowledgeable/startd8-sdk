@@ -1141,6 +1141,13 @@ _TRANSPORT_METRIC_PREFIX: Dict[str, str] = {
     "http": "http_server_",
 }
 
+#: The known request-SERVER surfaces OBS-203b arbitrates between. A metric only
+#: participates in transport alignment if it IS one of these (i.e. the service's
+#: own request surface); a cross-domain OTel metric (``db_client_*``,
+#: ``messaging_*``, ``http_client_*`` outbound calls) is a different semantic
+#: domain and legitimately does not carry the transport prefix — it must NOT trip.
+_TRANSPORT_SERVER_PREFIXES: Tuple[str, ...] = ("http_server_", "rpc_server_")
+
 
 def validate_metric_names(
     exprs: List[str],
@@ -1180,23 +1187,28 @@ def validate_metric_names(
                     )
                 )
 
-            # OBS-203b: Transport-metric alignment
+            # OBS-203b: Transport-metric alignment. Only arbitrate the service's own
+            # request-SERVER surface — flag a KNOWN transport-server metric
+            # (http_server_* / rpc_server_*) that belongs to the WRONG transport.
+            # A cross-domain metric (db_client_*, messaging_*, http_client_* outbound)
+            # is a different semantic domain and legitimately lacks the transport
+            # prefix; the old `"client" in metric` heuristic false-flagged those
+            # (e.g. db_client_operation_duration on an http service dragged
+            # dashboard_spec to 0.77).
             if transport:
                 expected_prefix = _TRANSPORT_METRIC_PREFIX.get(transport)
-                if expected_prefix:
-                    # Only check server-side metrics (skip generic ones like 'rate', 'sum')
-                    if (
-                        "server" in metric or "client" in metric
-                    ) and not metric.startswith(expected_prefix):
-                        issues.append(
-                            ObservabilityIssue(
-                                "OBS-203b",
-                                "error",
-                                f"Service '{service_id}' uses {transport} but "
-                                f"metric '{metric}' doesn't match expected prefix "
-                                f"'{expected_prefix}*'",
-                            )
+                if expected_prefix and metric.startswith(
+                    _TRANSPORT_SERVER_PREFIXES
+                ) and not metric.startswith(expected_prefix):
+                    issues.append(
+                        ObservabilityIssue(
+                            "OBS-203b",
+                            "error",
+                            f"Service '{service_id}' uses {transport} but "
+                            f"metric '{metric}' doesn't match expected prefix "
+                            f"'{expected_prefix}*'",
                         )
+                    )
 
         # OBS-203c: _bucket suffix in histogram_quantile()
         hq_matches = re.findall(

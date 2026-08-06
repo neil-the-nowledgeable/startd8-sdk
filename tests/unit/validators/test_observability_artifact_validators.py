@@ -369,6 +369,23 @@ class TestMetricNameChecks:
         issues = check_metric_names(expr)
         assert len(issues) == 0
 
+    def test_cross_domain_db_client_metric_not_flagged(self):
+        """OBS-203b must NOT flag a db.client.* metric on an http service — it is a
+        different OTel semantic domain, not the service's request-server surface
+        (regression: db_client_operation_duration dragged dashboard_spec to 0.77)."""
+        expr = (
+            'histogram_quantile(0.99, rate('
+            'db_client_operation_duration_bucket{db_system="postgresql"}[5m]))'
+        )
+        issues = check_metric_names(expr, transport="http")
+        assert not any(i["check"] == "OBS-203b" for i in issues)
+
+    def test_outbound_http_client_metric_not_flagged(self):
+        """An http_client_* (outbound call) metric is not the request-server surface."""
+        expr = 'rate(http_client_request_duration_count{peer="x"}[5m])'
+        issues = check_metric_names(expr, transport="http")
+        assert not any(i["check"] == "OBS-203b" for i in issues)
+
 
 # ---------------------------------------------------------------------------
 # Quality Scoring (REQ-KZ-OBS-300–303)
