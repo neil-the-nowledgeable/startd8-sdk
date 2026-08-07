@@ -164,6 +164,46 @@ class TestCounterOnlyGolden:
         _check_golden("counter_only-slos.yaml", result.content)
 
 
+@pytest.fixture
+def gauge_only():
+    # A Prometheus-style exporter emitting only gauge state metrics (Harbor
+    # exporter/core/jobservice shape). No histogram/counter ⇒ no RED alerts.
+    return ServiceHints(
+        service_id="gauge-exporter",
+        transport="http",
+        language="go",
+        convention_metrics=[
+            ConventionMetric("harbor_exporter_task_pending", "gauge", "prometheus"),
+            ConventionMetric("harbor_exporter_up", "gauge", "prometheus"),
+        ],
+    )
+
+
+class TestGaugeAbsenceAlerts:
+    """Regression: gauge-only services used to produce a ``skipped`` alert artifact
+    ⇒ a FALSE 0 ``metric_coverage_bridge`` (the Harbor exporter/core/jobservice
+    bridge=0 root cause). Each gauge now gets a real absence/staleness alert."""
+
+    def test_gauge_only_gets_absence_alerts(self, business, gauge_only):
+        result = generate_alert_rules(gauge_only, business)
+        assert result.status == "generated"  # was "skipped" before the fix
+        assert "absent(harbor_exporter_task_pending{})" in result.content
+        assert "absent(harbor_exporter_up{})" in result.content
+        # Real signal, not a tautological `>= 0` coverage bind (FR-26).
+        assert ">= 0" not in result.content
+
+    def test_absence_alert_lifts_bridge_coverage(self, business, gauge_only):
+        from startd8.validators.observability_artifact_checks import (
+            compute_metric_coverage,
+        )
+
+        result = generate_alert_rules(gauge_only, business)
+        cov = compute_metric_coverage(
+            ["harbor_exporter_task_pending", "harbor_exporter_up"], [result.content]
+        )
+        assert cov.score == 1.0  # was 0.0 (skipped artifact → no referenced metrics)
+
+
 class TestGrpcServerGolden:
     def test_alerts(self, business, grpc_server):
         result = generate_alert_rules(grpc_server, business)
