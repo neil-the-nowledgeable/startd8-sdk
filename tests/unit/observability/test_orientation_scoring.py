@@ -349,10 +349,15 @@ class TestL1dNonScrapeableExclusion:
             nonscrapeable_service_ids={"cron"},
         )
         q = json.loads((tmp_path / "observability-quality.json").read_text())
+        agg = q["aggregate"]
         # cron carried + marked excluded (never silently dropped)
         assert q["services"]["cron"]["metric_coverage_excluded"] is True
         assert q["services"]["cron"]["metric_coverage_excluded_reason"] == "non_scrapeable_surface"
         # gap is a scrapeable 0 — MUST stay counted, not excluded
         assert "metric_coverage_excluded" not in q["services"]["gap"]
-        # denominator = {keep(1.0), gap(0.0)} only — cron dropped. avg = 0.5, NOT 0.333.
-        assert q["aggregate"]["avg_metric_coverage_system"] == 0.5
+        # BASE counts the FULL population (keep 1.0, gap 0.0, cron 0.0) — L1d NOT baked
+        # into the base (FR-25 / FDE bus 0666fd54: base stays honest).
+        assert agg["avg_metric_coverage_system"] == round(1 / 3, 4)
+        # L1d is a SEPARATE grade-ready field: {keep, gap} only (cron dropped) → higher.
+        assert agg["metric_coverage_excluded_count"] == 1
+        assert agg["avg_metric_coverage_score_scrapeable"] > agg["avg_metric_coverage_score"]

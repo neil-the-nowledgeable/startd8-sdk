@@ -2723,13 +2723,12 @@ def _write_quality_report(
     # combined avg_metric_coverage_score (equal-weight mean across the orientations
     # present) so the CLI coverage gate keeps working. dashboarded/alerted retained
     # as aliases for human/bridge.
-    # L1d: exclude DECLARED non-scrapeable services from the coverage denominator —
-    # a service exposing no /metrics has no coverable surface, so counting its 0
-    # drags the mean against a gap that isn't one (the survivorship inverse: don't
-    # let correctly-empty members deflate the honest denominator). Only the declared
-    # set is excluded; a scrapeable service scoring 0 stays counted (a real gap).
-    # The exclusion is CARRIED explicitly on the service block, never silently
-    # dropped (FieldState `excluded` state; REQ FR-25/FR-14).
+    # L1d — explicit-state carry, NOT baked into the base. A service that DECLARES
+    # no /metrics scrape surface (metrics_surface in NON_SCRAPEABLE_SURFACES) has no
+    # coverable surface: mark it `excluded` on its block (carried, never silently
+    # dropped — REQ FR-25). The BASE aggregate still counts the FULL population (a
+    # declared non-emitter's 0 is honestly counted), per the FDE contract "do NOT
+    # bake L1d into the base" (bus 0666fd54) and FR-25.
     _excluded_cov = nonscrapeable_service_ids or set()
     for _sid in _excluded_cov:
         _blk = services.get(_sid)
@@ -2738,11 +2737,7 @@ def _write_quality_report(
             _blk["metric_coverage_excluded_reason"] = "non_scrapeable_surface"
 
     def _avg(key: str) -> Optional[float]:
-        vals = [
-            s[key]
-            for sid, s in services.items()
-            if key in s and sid not in _excluded_cov
-        ]
+        vals = [s[key] for s in services.values() if key in s]
         return round(sum(vals) / len(vals), 4) if vals else None
 
     avg_human = _avg("metric_coverage_human")
@@ -2759,6 +2754,34 @@ def _write_quality_report(
     _present = [v for v in (avg_human, avg_system, avg_bridge) if v is not None]
     if _present:
         aggregate["avg_metric_coverage_score"] = round(sum(_present) / len(_present), 4)
+
+    # L1d as a SEPARATE grade-ready lever (REQ FR-14/FR-23), emitted ALONGSIDE the
+    # honest base so the grader can choose: the same composite over only the
+    # SCRAPEABLE services (declared non-scrapeable dropped from the denominator,
+    # since they are not coverage gaps — a scrapeable service scoring 0 still counts).
+    def _avg_scrapeable(key: str) -> Optional[float]:
+        vals = [
+            s[key]
+            for sid, s in services.items()
+            if key in s and sid not in _excluded_cov
+        ]
+        return round(sum(vals) / len(vals), 4) if vals else None
+
+    if _excluded_cov:
+        _ex_present = [
+            v
+            for v in (
+                _avg_scrapeable("metric_coverage_human"),
+                _avg_scrapeable("metric_coverage_system"),
+                _avg_scrapeable("metric_coverage_bridge"),
+            )
+            if v is not None
+        ]
+        if _ex_present:
+            aggregate["avg_metric_coverage_score_scrapeable"] = round(
+                sum(_ex_present) / len(_ex_present), 4
+            )
+            aggregate["metric_coverage_excluded_count"] = len(_excluded_cov)
 
     # Finding 1: make scored-vs-generated explicit so the gap is visible.
     aggregate["artifacts_scored"] = len(scored)
