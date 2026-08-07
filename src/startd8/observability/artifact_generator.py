@@ -716,7 +716,19 @@ def build_service_metrics_expected(
 _COVERAGE_BIND_GROUP = "Coverage (AffordanceMap)"
 
 
-def _coverage_bind_panel_expr(fam: str, *, is_summary: bool = False) -> str:
+def _declared_hist(declared_type: Optional[str]) -> Optional[bool]:
+    """Authoritative histogram? from a declared metric type — the single mapping
+    both coverage-bind expr builders use. ``True`` for a histogram, ``False`` for
+    any other DECLARED type (gauge/counter/summary — a summary is short-circuited
+    by ``is_summary`` upstream), ``None`` when unknown (→ name heuristic)."""
+    if not declared_type:
+        return None
+    return declared_type == "histogram"
+
+
+def _coverage_bind_panel_expr(
+    fam: str, *, is_summary: bool = False, is_histogram: Optional[bool] = None
+) -> str:
     """PromQL for one AffordanceMap coverage-bind panel.
 
     Gauges stay ``max(name{})`` (extractor-visible). Native histogram basenames
@@ -734,6 +746,14 @@ def _coverage_bind_panel_expr(fam: str, *, is_summary: bool = False) -> str:
     the guaranteed-bindable average is preferred over a possibly-dead quantile.
     The caller passes ``is_summary`` from the service's ``declared_emitted_series``
     type; unknown/histogram families keep the existing behaviour (no regression).
+
+    ``is_histogram`` is the AUTHORITATIVE declared-type gate (mirrors
+    ``affordance_map_consume._coverage_bind_expr``, the twin — #397/L1c): ``True``
+    forces the histogram_quantile shape; ``False`` forces the gauge-safe
+    ``max({fam}{})`` even when the NAME looks histogram-y (a gauge named
+    ``*_latency`` must not get histogram_quantile on a nonexistent ``_bucket``);
+    ``None`` → fall back to the name heuristic (back-compat). Keeping BOTH builders
+    on the same declared-type gate closes the L1c class on the panel path too.
     """
     from .affordance_map_consume import _duration_panel_expr, _is_native_hist_basename
 
@@ -742,6 +762,10 @@ def _coverage_bind_panel_expr(fam: str, *, is_summary: bool = False) -> str:
             f"sum(rate({fam}_sum[$__rate_interval])) "
             f"/ sum(rate({fam}_count[$__rate_interval]))"
         )
+    if is_histogram is True:
+        return _duration_panel_expr(fam)
+    if is_histogram is False:
+        return f"max({fam}{{}})"
     if _is_native_hist_basename(fam):
         return _duration_panel_expr(fam)
     return f"max({fam}{{}})"
@@ -812,11 +836,15 @@ def _apply_affordance_coverage_bind_panels(
         if art is None or not art.content:
             continue
         _svc = svc_by_id.get(svc_id)
-        summary_families = {
-            s.name
+        # One declared-type lookup (name → type) reused for BOTH the summary
+        # short-circuit and the L1c histogram type-gate — single source of the
+        # family's declared shape on this path.
+        _declared_types = {
+            s.name: getattr(s, "type", "")
             for s in (getattr(_svc, "declared_emitted_series", None) or ())
-            if getattr(s, "name", None) and getattr(s, "type", "") == "summary"
+            if getattr(s, "name", None)
         }
+        summary_families = {n for n, t in _declared_types.items() if t == "summary"}
         try:
             data = yaml.safe_load(art.content) or {}
         except Exception:
@@ -845,7 +873,11 @@ def _apply_affordance_coverage_bind_panels(
             # as Class B latency dead (compact/query/store/receive remasure).
             # Reuse AffordanceMap Duration panel shape (histogram_quantile on
             # _bucket) for duration/delay families; keep max({}) for gauges.
-            expr = _coverage_bind_panel_expr(fam, is_summary=fam in summary_families)
+            expr = _coverage_bind_panel_expr(
+                fam,
+                is_summary=fam in summary_families,
+                is_histogram=_declared_hist(_declared_types.get(fam)),
+            )
             if expr in existing:
                 continue
             panels.append(
@@ -909,15 +941,20 @@ def _coverage_bind_preserve_header(content: str, body_yaml: str) -> str:
     return "".join(header_lines) + body_yaml
 
 
-def _orientation_slo_doc(svc_id: str, fam: str) -> Dict[str, Any]:
+def _orientation_slo_doc(
+    svc_id: str, fam: str, *, is_histogram: Optional[bool] = None
+) -> Dict[str, Any]:
     """One OpenSLO doc whose active ``query`` references ``fam`` (system axis).
 
     Name shape mirrors declared-base (``{svc}-{kind}-{slug}-declared``): never
     ``{svc}-coverage-bind-…``, which filename/last-resort attribution turns into a
     phantom service ``{svc}-coverage-bind`` (PATHFIX_QF residual @ 1d951b03).
+
+    ``is_histogram`` — the L1c declared-type gate (a declared gauge named
+    ``*_latency`` gets ``max()``, not a dead ``histogram_quantile``).
     """
     safe = fam.replace("_", "-")[:48]
-    expr = _coverage_bind_panel_expr(fam)
+    expr = _coverage_bind_panel_expr(fam, is_histogram=is_histogram)
     return {
         "apiVersion": "openslo/v1",
         "kind": "SLO",
@@ -952,10 +989,16 @@ def _orientation_slo_doc(svc_id: str, fam: str) -> Dict[str, Any]:
     }
 
 
-def _orientation_alert_rule(svc_id: str, fam: str) -> Dict[str, Any]:
-    """One Prometheus alert rule whose ``expr`` references ``fam`` (bridge axis)."""
+def _orientation_alert_rule(
+    svc_id: str, fam: str, *, is_histogram: Optional[bool] = None
+) -> Dict[str, Any]:
+    """One Prometheus alert rule whose ``expr`` references ``fam`` (bridge axis).
+
+    ``is_histogram`` — the L1c declared-type gate (a declared gauge named
+    ``*_latency`` gets ``max()``, not a dead ``histogram_quantile``).
+    """
     safe = "".join(p[:1].upper() + p[1:] for p in fam.replace("-", "_").split("_") if p)
-    expr = _coverage_bind_panel_expr(fam)
+    expr = _coverage_bind_panel_expr(fam, is_histogram=is_histogram)
     return {
         "alert": f"{svc_id.replace('-', '').title()}Orientation{safe}"[:200],
         "expr": f"{expr} >= 0",
@@ -1027,6 +1070,17 @@ def _apply_affordance_coverage_bind_orientation(
                 renamed.append(live)
         fam_sorted = sorted(renamed)
         norm = _normalize_metric_name or (lambda x: x)
+        # L1c declared-type gate for the orientation SLO/alert exprs — same source
+        # as the panel path, so a declared gauge named *_latency gets max(), not a
+        # dead histogram_quantile.
+        _svc = next(
+            (s for s in services if getattr(s, "service_id", None) == svc_id), None
+        )
+        _declared_types = {
+            s.name: getattr(s, "type", "")
+            for s in (getattr(_svc, "declared_emitted_series", None) or ())
+            if getattr(s, "name", None)
+        }
 
         # --- system: slo_definition ---
         slo_arts = [
@@ -1043,7 +1097,12 @@ def _apply_affordance_coverage_bind_orientation(
         to_add_slo = [f for f in fam_sorted if norm(f) not in already_slo]
         system_added = 0
         if to_add_slo:
-            docs = [_orientation_slo_doc(svc_id, f) for f in to_add_slo]
+            docs = [
+                _orientation_slo_doc(
+                    svc_id, f, is_histogram=_declared_hist(_declared_types.get(f))
+                )
+                for f in to_add_slo
+            ]
             body = "\n---\n".join(
                 yaml.dump(d, default_flow_style=False, sort_keys=False) for d in docs
             )
@@ -1113,7 +1172,12 @@ def _apply_affordance_coverage_bind_orientation(
         to_add_alert = [f for f in fam_sorted if norm(f) not in already_alert]
         bridge_added = 0
         if to_add_alert:
-            new_rules = [_orientation_alert_rule(svc_id, f) for f in to_add_alert]
+            new_rules = [
+                _orientation_alert_rule(
+                    svc_id, f, is_histogram=_declared_hist(_declared_types.get(f))
+                )
+                for f in to_add_alert
+            ]
             if alert_arts:
                 art = alert_arts[0]
                 try:
