@@ -327,19 +327,24 @@ def validate_dashboard(
         "OBS-100j", "info", bool(data.get("variables")), "No variables declared"
     )
 
-    # OBS-200a (OBS-710c): RED coverage
-    red = _compute_red_coverage(panels)
+    # OBS-200a (OBS-710c): RED coverage. F1: score on the GROUNDED tier when the
+    # resolved descriptor is available, so a label-encoded error dimension (Istio
+    # ``istio_requests_total{response_code=~"5.."}``) is credited instead of scoring
+    # a false "missing: Errors" (0.67). Byte-identical for http/grpc, where the
+    # grounded and descriptor-free tiers agree. Same-tier for scorer AND shrink
+    # (affordance_map_consume threads the same descriptor) preserves the
+    # scored-⟺-protected invariant.
+    red = _compute_red_coverage(panels, descriptor)
     result.red_coverage = red
     missing = []
-    if not has_rate_panel(panels):
+    if not has_rate_panel(panels, descriptor):
         missing.append("Rate")
-    if not has_error_panel(panels):
+    if not has_error_panel(panels, descriptor):
         missing.append("Errors")
-    if not has_duration_panel(panels):
+    if not has_duration_panel(panels, descriptor):
         missing.append("Duration")
     # Grounded "why" (TF-1): when the resolved descriptor explains an absent leg, say so —
-    # a missing leg the descriptor CANNOT provide is not an authoring gap to fix. Purely
-    # additive to the message; the score/verdict are unchanged (descriptor-free).
+    # a missing leg the descriptor CANNOT provide is not an authoring gap to fix.
     reasons = _red_gap_reasons(missing, descriptor) if descriptor is not None else ""
     result.check(
         "OBS-200a",
@@ -1360,7 +1365,9 @@ def _panel_title_lower(panel: Dict[str, Any]) -> str:
     return str(panel.get("title") or "").strip().lower()
 
 
-def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
+def has_rate_panel(
+    panels: List[Dict[str, Any]], descriptor: Optional[Any] = None
+) -> bool:
     """Check for a request rate panel (R in RED).
 
     Accepts AffordanceMap / Thanos-shaped binds (titles ``Request Rate``;
@@ -1368,30 +1375,41 @@ def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
     Aligns with ``affordance_map_consume._panel_is_red_protected`` (which already
     treated ``_total`` as Rate) so OBS-200a does not disagree with shrink protect.
     """
-    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
-    return RedRole.RATE in red_roles_present(panels)
+    # Thin shim over the single red_taxonomy classifier. ``descriptor`` (F1): when
+    # the resolved descriptor is threaded, the GROUNDED tier is used so a
+    # label-encoded error dimension (Istio ``response_code=~"5.."``) is seen; None
+    # keeps the descriptor-free tier (byte-identical for http/grpc, where the tiers
+    # agree). Callers that pass it to the scorer MUST also pass it to the shrink
+    # path (is_red_protected) — same-tier is the scored-⟺-protected invariant.
+    return RedRole.RATE in red_roles_present(panels, descriptor)
 
 
 
-def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
+def has_error_panel(
+    panels: List[Dict[str, Any]], descriptor: Optional[Any] = None
+) -> bool:
     """Check for an error rate panel (E in RED)."""
-    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
-    return RedRole.ERROR in red_roles_present(panels)
+    # Thin shim over the single red_taxonomy classifier (grounded iff descriptor).
+    return RedRole.ERROR in red_roles_present(panels, descriptor)
 
 
 
-def has_duration_panel(panels: List[Dict[str, Any]]) -> bool:
+def has_duration_panel(
+    panels: List[Dict[str, Any]], descriptor: Optional[Any] = None
+) -> bool:
     """Check for a latency/duration panel (D in RED)."""
-    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
+    # Thin shim over the single red_taxonomy classifier (grounded iff descriptor).
     # NOTE: red_taxonomy unifies DURATION to the stricter rule (B3) — a bare
     # histogram_quantile with no duration/latency signal is no longer DURATION.
-    return RedRole.DURATION in red_roles_present(panels)
+    return RedRole.DURATION in red_roles_present(panels, descriptor)
 
 
-def _compute_red_coverage(panels: List[Dict[str, Any]]) -> float:
+def _compute_red_coverage(
+    panels: List[Dict[str, Any]], descriptor: Optional[Any] = None
+) -> float:
     """Compute RED method coverage as fraction (0.0–1.0)."""
-    # Thin shim over the single red_taxonomy classifier (descriptor-free tier).
-    return red_coverage(panels)
+    # Thin shim over the single red_taxonomy classifier (grounded iff descriptor).
+    return red_coverage(panels, descriptor)
 
 
 # ---------------------------------------------------------------------------

@@ -1498,36 +1498,43 @@ def try_render_grafana_json(spec_dict: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def _panel_is_red_protected(panel: Mapping[str, Any]) -> bool:
+def _panel_is_red_protected(
+    panel: Mapping[str, Any], descriptor: Optional[Any] = None
+) -> bool:
     """True if dropping this panel would risk OBS-200a Rate/Errors/Duration.
 
-    Now delegates to the single red_taxonomy classifier (``is_red_protected`` =
-    "this panel plays some RED role", descriptor-free tier — shrink runs without a
-    descriptor). The one shrink-specific signal red_taxonomy does not model is the
-    panel ``group`` label (``throughput``/``errors``/``latency``), kept here: a panel
-    grouped as a RED leg is protected even if its title/expr are ambiguous.
+    Delegates to the single red_taxonomy classifier (``is_red_protected`` = "this
+    panel plays some RED role"). ``descriptor`` (F1): threaded so the shrink
+    ORDERING uses the SAME tier as the OBS-200a scorer — grounded when a descriptor
+    is available (so an Istio ``response_code`` error panel is recognized), else the
+    descriptor-free tier (byte-identical for http/grpc). Keeping scorer and shrink
+    on the same tier is the scored-⟺-protected invariant. The one shrink-specific
+    signal red_taxonomy does not model is the panel ``group`` label
+    (``throughput``/``errors``/``latency``), kept here.
     """
     from startd8.observability.red_taxonomy import is_red_protected
 
     group = str(panel.get("group") or "").lower()
     if group in ("throughput", "errors", "latency"):
         return True
-    return is_red_protected(panel)
+    return is_red_protected(panel, descriptor)
 
 
-def _red_coverage_ok(panels: Sequence[Mapping[str, Any]]) -> bool:
+def _red_coverage_ok(
+    panels: Sequence[Mapping[str, Any]], descriptor: Optional[Any] = None
+) -> bool:
     try:
         from startd8.validators.observability_artifact_checks import (
             _compute_red_coverage,
         )
 
-        return _compute_red_coverage(list(panels)) >= (2.0 / 3.0)
+        return _compute_red_coverage(list(panels), descriptor) >= (2.0 / 3.0)
     except Exception as exc:  # noqa: BLE001
         logger.debug(
             "RED coverage scorer unavailable (%s); using protected-panel fallback",
             exc,
         )
-        protected = sum(1 for p in panels if _panel_is_red_protected(p))
+        protected = sum(1 for p in panels if _panel_is_red_protected(p, descriptor))
         return protected >= 2
 
 
@@ -1539,9 +1546,9 @@ def _reflow_gridpos(panels: List[Dict[str, Any]]) -> None:
         panel["id"] = i + 1
 
 
-def _drop_priority(panel: Mapping[str, Any]) -> int:
+def _drop_priority(panel: Mapping[str, Any], descriptor: Optional[Any] = None) -> int:
     """Higher = drop sooner. Prefer verbose / non-RED / duplicate-looking."""
-    if _panel_is_red_protected(panel):
+    if _panel_is_red_protected(panel, descriptor):
         return -1000
     title = str(panel.get("title") or "").lower()
     group = str(panel.get("group") or "").lower()
@@ -1564,6 +1571,7 @@ def shrink_dashboard_lines(
     max_lines: int,
     preserve_red: bool = True,  # noqa: ARG001 — kept for call-site compat (FR-2)
     render_fn: Optional[RenderFn] = None,
+    descriptor: Optional[Any] = None,
 ) -> ShrinkResult:
     """Shrink a dashboard **spec** until rendered JSON <= max_lines, refusing
     honestly rather than deleting Thanos metric coverage (FR-B4 / FR-1..FR-3).
@@ -1638,7 +1646,7 @@ def shrink_dashboard_lines(
                 lines_before=before_lines,
                 lines_after=line_count(rendered),
             )
-        scores = [_drop_priority(p) for _, p in candidates]
+        scores = [_drop_priority(p, descriptor) for _, p in candidates]
         if len(set(scores)) <= 1:
             # Global tie: no candidate is distinguishable from any other, so
             # any pick is "deleted by list position, not judgement" (FR-3).
@@ -1651,7 +1659,7 @@ def shrink_dashboard_lines(
                 lines_before=before_lines,
                 lines_after=line_count(rendered),
             )
-        candidates.sort(key=lambda ip: _drop_priority(ip[1]), reverse=True)
+        candidates.sort(key=lambda ip: _drop_priority(ip[1], descriptor), reverse=True)
         drop_i, _victim = candidates[0]
         staged: List[Dict[str, Any]] = json.loads(json.dumps(panels))
         staged.pop(drop_i)
@@ -2093,6 +2101,7 @@ def _apply_shrink(
         max_lines=ml,
         preserve_red=True,
         render_fn=render_fn,
+        descriptor=descriptor,  # F1: same-tier as the OBS-200a scorer (invariant)
     )
     if not shrink.ok:
         entry.outcome = ActionOutcome.SKIPPED

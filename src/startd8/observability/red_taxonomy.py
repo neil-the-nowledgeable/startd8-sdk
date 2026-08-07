@@ -42,6 +42,15 @@ RED_RATE_RE = re.compile(
     re.I,
 )
 RED_ERR_RE = re.compile(r"error|fail|drop|reject|5xx|failed", re.I)
+# F2 (descriptor-free residual): a status/code/response_code label FILTERED to a
+# 5xx class IS an error panel even when the title/tokens don't say "error" — the
+# Istio/Envoy error shape has no distinct error family name and no `error` token;
+# its errors are ``response_code=~"5.."`` on the throughput counter. Requires a
+# ``="5`` / ``=~"5`` VALUE filter (a server-error class), so a plain
+# ``by (response_code)`` breakdown or an ``[5m]`` window never false-matches.
+_ERR_CODE_FILTER_RE = re.compile(
+    r'(?:response_code|status_code|status|\bcode)\s*=~?\s*"5', re.I
+)
 # FR-1b: duration selection is two-tier — a STRONG signal (duration/latency/delay
 # in the name) MUST win over the WEAK bare-`_seconds$`/`_bucket$` shape, and a
 # `*_timestamp_seconds` gauge (a point-in-time marker, not a measured duration)
@@ -111,6 +120,9 @@ def _freeform_is_rate(panel: Mapping[str, Any]) -> bool:
             continue
         if "status" in e:
             continue
+        # F2: a 5xx-filtered rate IS the error rate, not a pure throughput panel.
+        if _ERR_CODE_FILTER_RE.search(e):
+            continue
         if "_count" in e or "_total" in e:
             return True
     return False
@@ -126,6 +138,9 @@ def _freeform_is_error(panel: Mapping[str, Any]) -> bool:
             tok in e
             for tok in ("error", "failure", "fail", "status_code", 'status_code!="ok"', "status!=")
         ):
+            return True
+        # F2: Istio/Envoy error dimension — response_code=~"5.." (no 'error' token).
+        if _ERR_CODE_FILTER_RE.search(e):
             return True
     return False
 
