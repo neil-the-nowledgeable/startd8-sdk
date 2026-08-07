@@ -2224,3 +2224,48 @@ class TestF4LabelEncodedErrorFamily:
         loci = [{"family_or_signal": "svc_requests_total", "signal_kind": "metric"}]
         rate, err, dur = _pick_red_families(loci)
         assert err is None
+
+
+class TestCoverageBindBuildersShareShapeGate:
+    """Mirror guard (complexity-distiller): the TWO coverage-bind expr builders —
+    affordance_map_consume._coverage_bind_expr and
+    artifact_generator._coverage_bind_panel_expr — must agree on the declared-type
+    shape gate, so the L1c fix (#397) can't drift apart on the panel path again.
+    A declared gauge → max() on BOTH; a declared histogram → histogram_quantile on
+    BOTH; unknown → the name heuristic on BOTH (byte-identical, back-compat)."""
+
+    def _both(self, fam, is_histogram):
+        from startd8.observability.affordance_map_consume import _coverage_bind_expr
+        from startd8.observability.artifact_generator import _coverage_bind_panel_expr
+
+        return (
+            _coverage_bind_expr(fam, is_histogram=is_histogram),
+            _coverage_bind_panel_expr(fam, is_histogram=is_histogram),
+        )
+
+    @pytest.mark.parametrize("fam", ["svc_request_latency", "svc_op_duration", "q_depth"])
+    def test_declared_gauge_never_histogram_quantile_on_either(self, fam):
+        bind, panel = self._both(fam, False)
+        assert "histogram_quantile" not in bind
+        assert "histogram_quantile" not in panel
+        assert bind == f"max({fam}{{}})" and panel == f"max({fam}{{}})"
+
+    def test_declared_histogram_quantile_on_both(self):
+        bind, panel = self._both("svc_request_latency", True)
+        assert "histogram_quantile" in bind and "histogram_quantile" in panel
+
+    def test_unknown_type_falls_back_identically(self):
+        # is_histogram=None → the name heuristic on both (back-compat).
+        from startd8.observability.affordance_map_consume import _coverage_bind_expr
+        from startd8.observability.artifact_generator import _coverage_bind_panel_expr
+
+        for fam in ("svc_request_latency", "plain_gauge"):
+            assert _coverage_bind_expr(fam) == _coverage_bind_expr(fam, is_histogram=None)
+            assert _coverage_bind_panel_expr(fam) == _coverage_bind_panel_expr(fam, is_histogram=None)
+
+    def test_declared_hist_mapping(self):
+        from startd8.observability.artifact_generator import _declared_hist
+
+        assert _declared_hist("histogram") is True
+        assert _declared_hist("gauge") is False and _declared_hist("counter") is False
+        assert _declared_hist("") is None and _declared_hist(None) is None
