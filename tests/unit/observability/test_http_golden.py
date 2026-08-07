@@ -333,3 +333,64 @@ class TestScore4CounterTotalNotDoubled:
         )
         result = generate_dashboard_spec(svc, business)
         assert "http_server_request_count_total" in result.content
+
+
+class TestScore3GaugeFreshnessSlo:
+    """SCORE-3 "best of both worlds" (gauge system axis): a plain COUNT gauge has no
+    groundable saturation threshold (a magnitude SLO would be fabricated — FR-26), but
+    its DATA AVAILABILITY (is it being scraped) is a real objective with no fabricated
+    magnitude. In INSTALLED (local) mode the gauge gets a freshness SLO at the forgiving
+    installed availability default → references the gauge, lifting system coverage. In
+    DEPLOYED/default mode it DEFERS (no fabricated production SLO) — byte-identical."""
+
+    def _svc(self):
+        return ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("harbor_queue_depth", "gauge", "prometheus"),
+                ConventionMetric("harbor_inflight_jobs", "gauge", "prometheus"),
+            ],
+        )
+
+    def _biz(self, deployment_mode, metrics_interval="30s"):
+        return BusinessContext(
+            criticality="high",
+            availability="99.9",
+            latency_p99="500ms",
+            throughput="100rps",
+            project_id="golden-test",
+            slo_window="30d",
+            deployment_mode=deployment_mode,
+            metrics_interval=metrics_interval,
+        )
+
+    def test_installed_gauge_gets_freshness_slo(self):
+        result = generate_slo_definitions(self._svc(), self._biz("installed"))
+        assert result.status == "generated"
+        # Each gauge referenced by a freshness SLO (count_over_time / samples-per-hour).
+        assert "harbor_queue_depth-freshness" in result.content
+        assert "harbor_inflight_jobs-freshness" in result.content
+        assert "count_over_time(harbor_queue_depth{" in result.content
+        # 30s interval → 3600/30 = 120 expected samples per hour.
+        assert "/ 120" in result.content
+        # No fabricated magnitude threshold on the raw gauge value.
+        assert "histogram_quantile" not in result.content
+
+    def test_deployed_gauge_defers(self):
+        # DEPLOYED mode: no fabricated production SLO for a plain gauge.
+        result = generate_slo_definitions(self._svc(), self._biz("deployed"))
+        assert "freshness" not in result.content
+
+    def test_default_mode_defers(self):
+        # No deployment_mode set (the common fixture) → defers, byte-identical.
+        biz = BusinessContext(
+            criticality="high", availability="99.9", latency_p99="500ms",
+            throughput="100rps", project_id="golden-test", slo_window="30d",
+        )
+        result = generate_slo_definitions(self._svc(), biz)
+        assert "freshness" not in result.content
+
+    def test_interval_scales_samples_per_hour(self):
+        # 15s interval → 3600/15 = 240 expected samples per hour.
+        result = generate_slo_definitions(self._svc(), self._biz("installed", "15s"))
+        assert "/ 240" in result.content

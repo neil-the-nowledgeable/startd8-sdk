@@ -2455,6 +2455,76 @@ def generate_slo_definitions(
         }
         documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
 
+    # SCORE-3 "best of both worlds" (gauge system axis) — a data-availability
+    # (freshness) SLO per convention GAUGE, in INSTALLED (local) mode ONLY.
+    #   * World A (declared): a functional_requirement with a groundable signal_kind
+    #     (saturation) is handled by the separate functional-SLO path with the
+    #     deployment-mode default — precise, honest in every mode.
+    #   * World B (this): a plain COUNT gauge (queue depth, inflight, business stat)
+    #     has no percentunit saturation ceiling and no groundable magnitude, so a
+    #     threshold SLO would fabricate one (FR-26). But its DATA AVAILABILITY — is
+    #     it being scraped — is a real objective with NO fabricated magnitude,
+    #     targeted at the deployment-mode availability default (installed = forgiving
+    #     97%). References the gauge → lifts system coverage.
+    # DEPLOYED/default mode defers (no fabricated production SLO). This is the honest
+    # composition the deployment_mode kickoff input enables (installed vs deployed).
+    if (getattr(business, "deployment_mode", None) or "") == "installed":
+        _avail_target = round(float(avail_raw), 2) if avail_raw else 99.0
+        _interval_s = _parse_duration_to_seconds(
+            getattr(business, "metrics_interval", None) or "30s"
+        )
+        _samples_per_hour = max(1, int(3600 / _interval_s)) if _interval_s else 120
+        for _m in service.convention_metrics:
+            if _m.type != "gauge":
+                continue
+            _gp = _prom_name(_m.name)
+            slo = {
+                "apiVersion": "openslo/v1",
+                "kind": "SLO",
+                "metadata": {
+                    "name": f"{service.service_id}-{_gp}-freshness",
+                    "labels": {
+                        "service": service.service_id,
+                        "protocol": service.transport,
+                        "generated_by": "startd8",
+                    },
+                },
+                "spec": {
+                    "description": (
+                        f"Data-availability (freshness) SLO for {_gp} — the gauge is being "
+                        f"scraped as expected. Installed/local-mode forgiving default; no "
+                        f"fabricated magnitude threshold (FR-26)."
+                    ),
+                    "target": _avail_target,
+                    "timeWindow": {"duration": window, "isRolling": True},
+                    "budgetPolicy": "occurrences",
+                    "indicator": {
+                        "metadata": {"name": f"{service.service_id}-{_gp}-freshness-sli"},
+                        "spec": {
+                            "thresholdMetric": {
+                                "metricSource": {
+                                    "type": "prometheus",
+                                    "spec": {
+                                        # fraction of expected scrapes present in the last hour
+                                        "query": (
+                                            f"count_over_time({_gp}{total_selector}[1h]) "
+                                            f"/ {_samples_per_hour}"
+                                        ),
+                                    },
+                                },
+                                "threshold": round(_avail_target / 100.0, 4),
+                                "operator": "gte",
+                            },
+                        },
+                    },
+                    "alerting": {
+                        "name": f"{service.service_id}-{_gp}-freshness-alert",
+                        "labels": {"severity": severity},
+                    },
+                },
+            }
+            documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+
     if not documents:
         return ArtifactResult(
             artifact_type="slo_definition",
