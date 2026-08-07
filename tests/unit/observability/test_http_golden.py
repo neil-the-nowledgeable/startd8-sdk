@@ -303,3 +303,33 @@ class TestScore4SummaryDashboardPanel:
         assert "harbor_core_http_request_duration_seconds_count" in result.content
         # L1c: never a histogram quantile on a nonexistent _bucket.
         assert "harbor_core_http_request_duration_seconds_bucket" not in result.content
+
+
+class TestScore4CounterTotalNotDoubled:
+    """SCORE-4: a Prometheus-native counter already ends in `_total`; the counter
+    panel template appends `_total`, so without a strip it produced `_total_total`
+    — which the coverage normalizer maps to a different base, reading the counter
+    UNCOVERED on the dashboard. The panel must reference the real single-`_total`
+    series. OTel counters (no `_total`) are byte-identical."""
+
+    def test_prometheus_counter_single_total(self, business):
+        svc = ServiceHints(
+            service_id="core", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("harbor_core_http_request_total", "counter", "prometheus"),
+            ],
+        )
+        result = generate_dashboard_spec(svc, business)
+        assert "harbor_core_http_request_total_total" not in result.content
+        assert "rate(harbor_core_http_request_total{" in result.content
+
+    def test_otel_counter_unchanged(self, business):
+        # An OTel counter with no `_total` still gets the appended `_total`.
+        svc = ServiceHints(
+            service_id="s", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("http.server.request.count", "counter", "otel_semconv:http"),
+            ],
+        )
+        result = generate_dashboard_spec(svc, business)
+        assert "http_server_request_count_total" in result.content
