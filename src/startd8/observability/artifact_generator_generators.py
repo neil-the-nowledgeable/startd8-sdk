@@ -488,6 +488,43 @@ def generate_alert_rules(
             }
         )
 
+    # Error/failure COUNTERS warrant a conservative "errors are occurring" alert:
+    # a dedicated error counter is the canonical bridge signal, but the RED
+    # templates only derive error-rate from a histogram's ``_count``, so a bare
+    # ``*_errors_total`` counter got no alert (understated bridge — lacuna-audit).
+    # Scoped to error/failure-NAMED counters: a generic counter has no safe generic
+    # alert (``rate==0`` / ``absent()`` false-fire on idle or not-yet-incremented
+    # counters), but an error counter increasing IS a real, warranted condition.
+    # ``increase(...[15m]) > 0`` = "errors occurred recently" — non-tautological,
+    # references the metric (lifts bridge). Sibling of the gauge absence alert.
+    for metric in service.convention_metrics:
+        if metric.type != "counter":
+            continue
+        prom = _prom_name(metric.name)
+        low = prom.lower()
+        if "error" not in low and "fail" not in low:
+            continue
+        suffix = "".join(p[:1].upper() + p[1:] for p in prom.split("_") if p)
+        rules.append(
+            {
+                "alert": _alert_name(service.service_id, f"{suffix}Increasing")[:200],
+                "expr": f"increase({prom}{{}}[15m]) > 0",
+                "for": "5m",
+                "labels": {
+                    "severity": severity,
+                    "service": service.service_id,
+                    "protocol": service.transport,
+                },
+                "annotations": {
+                    "summary": (
+                        f"{service.service_id} error counter {prom} is increasing "
+                        f"(errors in the last 15m)"
+                    ),
+                    "dashboard_url": f"/d/obs-{service.service_id}",
+                },
+            }
+        )
+
     # REQ-OAG-205 / REQ-CDP-OBS-003 / FR-CONS-2: runbook_url base resolves env >
     # manifest > omit (OQ-8 resolved, pipeline-requirements R2-F1). Never emit the dead
     # `runbooks.example.com` placeholder.

@@ -204,6 +204,36 @@ class TestGaugeAbsenceAlerts:
         assert cov.score == 1.0  # was 0.0 (skipped artifact → no referenced metrics)
 
 
+class TestErrorCounterAlerts:
+    """Lacuna-audit ⭐: an error/failure-named COUNTER got no alert (understated
+    bridge). Now gets a conservative increase(...[15m])>0 alert. Non-error counters
+    stay skipped (a generic counter has no safe generic alert) — so the counter
+    goldens are byte-identical (the fixtures use non-error counters)."""
+
+    def _svc(self, metric_name):
+        return ServiceHints(
+            service_id="s",
+            transport="http",
+            language="go",
+            convention_metrics=[ConventionMetric(metric_name, "counter", "prometheus")],
+        )
+
+    def test_error_counter_gets_increase_alert(self, business):
+        result = generate_alert_rules(self._svc("harbor_registry_errors_total"), business)
+        assert result.status == "generated"  # was "skipped"
+        assert "increase(harbor_registry_errors_total{}[15m]) > 0" in result.content
+
+    def test_failure_counter_matches_too(self, business):
+        result = generate_alert_rules(self._svc("job_failed_total"), business)
+        assert result.status == "generated"
+        assert "increase(job_failed_total{}[15m]) > 0" in result.content
+
+    def test_non_error_counter_stays_skipped(self, business):
+        # The over-fill guard: a generic counter has no safe generic alert.
+        result = generate_alert_rules(self._svc("http_requests_total"), business)
+        assert result.status == "skipped"
+
+
 class TestGrpcServerGolden:
     def test_alerts(self, business, grpc_server):
         result = generate_alert_rules(grpc_server, business)
