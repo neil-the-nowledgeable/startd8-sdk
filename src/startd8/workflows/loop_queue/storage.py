@@ -26,6 +26,7 @@ from typing import List, Optional
 from ...logging_config import get_logger
 from ...utils.file_operations import atomic_write_json
 from .models import (
+    DRY_RUN_WOULD_ACT_VALUES,
     JOB_FILE_SUFFIX,
     LoopQueueConfig,
     LoopQueueError,
@@ -63,8 +64,31 @@ class LoopQueueStorage:
     # -- job persistence ----------------------------------------------------
 
     def save_job(self, job: WorkflowLoopJob) -> Path:
-        job.touch()
+        """Persist the job envelope — EXCEPT on a dry-run job (REQ-02 Boundary 3 / FR-5).
+
+        ``save_job`` is the single persist chokepoint (``queue.py`` never writes directly — it calls here),
+        so one guard covers the whole wloop write surface. On a ``job.dry_run=True`` job we write **no**
+        job-state file; instead we record the would-be enqueue/claim/complete as a JSON-shaped verdict on the
+        job's carried ``dry_run_trace`` (FR-3a) and return the path the file *would* have been written to
+        (without creating it). The verdict shape mirrors contextcore's ``DryRunVerdict.to_dict()`` — the
+        ``would_act`` value is drawn from ``DRY_RUN_WOULD_ACT_VALUES`` (parity-guarded)."""
         path = self.job_path(job.job_id)
+        if getattr(job, "dry_run", False):
+            status = job.status.value if hasattr(job.status, "value") else str(job.status)
+            job.dry_run_trace.append(
+                {
+                    "stage_id": f"wloop.save_job:{status}",
+                    "received": True,
+                    "would_act": DRY_RUN_WOULD_ACT_VALUES[0],  # "yes"
+                    "what_change": f"persist wloop job {job.job_id} (loop={job.loop_id}, status={status})",
+                    "inputs": [f"job:{job.job_id}"],
+                    "outputs": [str(path)],
+                    "downstream_handoff": None,
+                    "why": "dry-run: describe the would-be wloop job-state write; nothing persisted",
+                }
+            )
+            return path
+        job.touch()
         atomic_write_json(path, job.model_dump(mode="json"), indent=2)
         return path
 
@@ -102,8 +126,13 @@ class LoopQueueStorage:
 
     # -- artifacts ----------------------------------------------------------
 
-    def write_json_artifact(self, job_id: str, name: str, data: dict) -> Path:
+    def write_json_artifact(self, job_id: str, name: str, data: dict, *, dry_run: bool = False) -> Path:
+        """Write a per-job JSON artifact — EXCEPT when ``dry_run`` (REQ-02 Boundary 3/4). On a dry-run the
+        path the artifact *would* occupy is returned WITHOUT creating it (the caller records the would-be
+        write on the job's ``dry_run_trace``)."""
         path = self.artifact_dir(job_id) / name
+        if dry_run:
+            return path
         atomic_write_json(path, data, indent=2)
         return path
 
