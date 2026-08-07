@@ -400,3 +400,34 @@ class TestConfigFreeProfileAutofill:
         self._capture_argv(monkeypatch)
         with pytest.raises(ValidationError, match="Multiple language profiles"):
             run_embedded_pipeline(cwd=project)
+
+
+class TestAffordanceMapFlag:
+    """`capdevpipe run --affordance-map X` is a THIN entry point over the existing
+    STARTD8_AFFORDANCE_MAP_EXPORT env (the observability stage's resolver reads it +
+    threads generate(affordance_map=)). The flag only SETS the env — no second
+    resolution path. Absent → env untouched (byte-identical)."""
+
+    def _invoke(self, monkeypatch, args):
+        from typer.testing import CliRunner
+
+        import startd8.cli_capdevpipe as mod
+
+        calls = {}
+        monkeypatch.setattr(
+            mod, "run_embedded_pipeline",
+            lambda **kw: (calls.update(kw) or 0),
+        )
+        monkeypatch.delenv("STARTD8_AFFORDANCE_MAP_EXPORT", raising=False)
+        result = CliRunner().invoke(mod.capdevpipe_app, args)
+        return result, calls
+
+    def test_flag_sets_env(self, monkeypatch, tmp_path):
+        result, _ = self._invoke(monkeypatch, ["run", "--affordance-map", str(tmp_path / "am.json")])
+        assert result.exit_code == 0
+        assert os.environ.get("STARTD8_AFFORDANCE_MAP_EXPORT") == str(tmp_path / "am.json")
+
+    def test_absent_leaves_env_untouched(self, monkeypatch):
+        result, _ = self._invoke(monkeypatch, ["run"])
+        assert result.exit_code == 0
+        assert "STARTD8_AFFORDANCE_MAP_EXPORT" not in os.environ

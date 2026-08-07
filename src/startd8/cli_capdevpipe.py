@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -141,6 +142,17 @@ def run_command(
         "--config",
         help="Path to pipeline.yaml (default: <embed-dir>/pipeline.yaml)",
     ),
+    affordance_map: Optional[Path] = typer.Option(
+        None,
+        "--affordance-map",
+        help=(
+            "Thread an enriched AffordanceMap (JSON) into the observability generate "
+            "so RED/coverage-bind panels land on the MEASURED path (durable coverage — "
+            "reads 0.2333 not the bind-blind 0.0859). Thin entry point over the existing "
+            "STARTD8_AFFORDANCE_MAP_EXPORT env; the pipeline runs in-process so it reaches "
+            "the observability stage's generate(affordance_map=). Absent → unchanged."
+        ),
+    ),
 ) -> None:
     """Delegate to the embedded Python orchestrator with passthrough pipeline flags.
 
@@ -148,7 +160,15 @@ def run_command(
     ``--dry-run`` prints the full stage plan and exits 0 without running anything — the fastest
     "what will this do?" check. On a config-free install (no ``pipeline.yaml``) the sole
     installed language profile is auto-selected; pass ``--plan``/``--requirements`` to override.
+
+    ``--affordance-map`` REUSES the existing env-based threading
+    (``pipeline/stages/observability.py:_resolve_affordance_map_export`` →
+    ``generate(affordance_map=)``) — the flag only sets ``STARTD8_AFFORDANCE_MAP_EXPORT``,
+    it does not add a second resolution path. The pipeline runs in-process, so the env
+    reaches the stage.
     """
+    if affordance_map is not None:
+        os.environ["STARTD8_AFFORDANCE_MAP_EXPORT"] = str(affordance_map)
     try:
         exit_code = run_embedded_pipeline(
             cwd=Path.cwd(),
