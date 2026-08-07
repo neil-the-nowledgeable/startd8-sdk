@@ -450,6 +450,44 @@ def generate_alert_rules(
                 }
             )
 
+    # Gauge state metrics are not request-shaped, so the RED templates above skip
+    # them — a service emitting only gauges (a Prometheus exporter, a queue-depth /
+    # health gauge) gets an empty rule set, a ``skipped`` alert artifact, and a
+    # FALSE 0 ``metric_coverage_bridge``. Emit a staleness/absence alert per gauge:
+    # a gauge that stops reporting is a real, alertable failure (dead scrape / dead
+    # exporter), NOT a tautological ``>= 0`` coverage bind (FR-26). It references the
+    # metric name, so the bridge axis reflects the real alerting surface. Root cause
+    # of the Harbor exporter/core/jobservice bridge=0 finding.
+    #
+    # Scoped to gauges deliberately: counters are frequently absent-by-design until
+    # their first event (``*_total`` has no series until first increment), so an
+    # ``absent()`` alert on a counter would false-fire — the counter-only path stays
+    # ``skipped`` (FR-12a preserved). Histograms are already covered by RED.
+    for metric in service.convention_metrics:
+        if metric.type != "gauge":
+            continue
+        prom = _prom_name(metric.name)
+        suffix = "".join(p[:1].upper() + p[1:] for p in prom.split("_") if p)
+        rules.append(
+            {
+                "alert": _alert_name(service.service_id, f"{suffix}Absent")[:200],
+                "expr": f"absent({prom}{{}})",
+                "for": "15m",
+                "labels": {
+                    "severity": severity,
+                    "service": service.service_id,
+                    "protocol": service.transport,
+                },
+                "annotations": {
+                    "summary": (
+                        f"{service.service_id} metric {prom} stopped reporting "
+                        f"(dead scrape or dead exporter)"
+                    ),
+                    "dashboard_url": f"/d/obs-{service.service_id}",
+                },
+            }
+        )
+
     # REQ-OAG-205 / REQ-CDP-OBS-003 / FR-CONS-2: runbook_url base resolves env >
     # manifest > omit (OQ-8 resolved, pipeline-requirements R2-F1). Never emit the dead
     # `runbooks.example.com` placeholder.
