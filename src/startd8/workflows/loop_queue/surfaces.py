@@ -41,6 +41,16 @@ KNOWN_SURFACES: List[KnownSurface] = [
         ownership="vendor / integrator (implement VASI downstream)",
         status="external",
     ),
+    KnownSurface(
+        surface_id="claude-code",
+        display_name="Claude Code",
+        # A2 (code-asks 2026-08-04): the dev-os VJO in-agent adapter shipped + armed
+        # 2026-08-05 (vjo/bin/drain-claude.py: selector + single-flight + reviewer gate +
+        # fleet emit). Registered here so `wloop list-surfaces` recognizes it and enqueue
+        # accepts `surface_id=claude-code` without inline surface_conformance.
+        ownership="dev-os (VJO in-agent adapter; drain-claude.py)",
+        status="shipped",
+    ),
 ]
 
 

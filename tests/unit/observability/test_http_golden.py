@@ -249,3 +249,37 @@ class TestGrpcServerGolden:
         result = generate_slo_definitions(grpc_server, business)
         assert result.status == "generated"
         _check_golden("grpc-slos.yaml", result.content)
+
+
+class TestScore3SummaryLatencySlo:
+    """SCORE-3 (system axis): a SUMMARY duration family (Harbor core's
+    harbor_core_http_request_duration_seconds) gets an AVG-latency SLO via
+    _sum/_count — NOT a dead histogram_quantile(_bucket) (L1c). This references the
+    summary family, lifting system coverage. Histogram services are byte-identical
+    (the summary branch requires a summary AND no histogram)."""
+
+    def _svc(self, metrics):
+        return ServiceHints(
+            service_id="core", transport="http", language="go",
+            convention_metrics=metrics,
+        )
+
+    def test_summary_gets_avg_latency_slo(self, business):
+        svc = self._svc([
+            ConventionMetric("harbor_core_http_request_total", "counter", "prometheus"),
+            ConventionMetric("harbor_core_http_request_duration_seconds", "summary", "prometheus"),
+        ])
+        result = generate_slo_definitions(svc, business)
+        assert result.status == "generated"
+        assert "harbor_core_http_request_duration_seconds_sum" in result.content
+        assert "harbor_core_http_request_duration_seconds_count" in result.content
+        # L1c: the summary must NOT be rendered as a histogram quantile on a _bucket.
+        assert "harbor_core_http_request_duration_seconds_bucket" not in result.content
+
+    def test_histogram_service_no_avg_slo(self, business):
+        # A histogram already yields the p99 SLO; the summary branch must not fire.
+        svc = self._svc([
+            ConventionMetric("http.server.duration", "histogram", "otel_semconv:http"),
+        ])
+        result = generate_slo_definitions(svc, business)
+        assert "-latency-avg" not in result.content  # only the histogram p99 path
