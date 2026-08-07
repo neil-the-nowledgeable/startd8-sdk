@@ -80,3 +80,41 @@ class TestWorkerGetsJobShapedSLO:
         assert result.status == "generated"
         assert "messaging_process_duration" in result.content
         assert "http_server_duration" not in result.content
+
+
+# ---------------------------------------------------------------------------
+# Metabolized guard (audit -> rung-4): the "proxy-guess, silently wrong" class.
+# An explicit-but-unknown transport must be LOUD, not silently take http's
+# descriptor (envoy/istio -> status=~"5.." / service = dead RED SLI). This is the
+# rung-4 poka-yoke for the class covering L1c (#397), gauge-RED (#395), and the
+# transport fallback. The guard BITES: fails if the loudness is removed.
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownTransportIsLoud:
+    def test_unknown_transport_warns(self, caplog):
+        import logging
+
+        from startd8.observability.metric_descriptor import profile_for_transport
+
+        with caplog.at_level(logging.WARNING, logger="startd8.observability.metric_descriptor"):
+            d = profile_for_transport("envoy")
+        # Still falls back (back-compat), but no longer SILENTLY.
+        assert d.profile == "semconv-http"
+        assert any(
+            "unknown transport" in r.getMessage() and "envoy" in r.getMessage()
+            for r in caplog.records
+        ), "unknown transport must warn (the metabolized guard must bite)"
+
+    def test_known_and_empty_transports_stay_silent(self, caplog):
+        import logging
+
+        from startd8.observability.metric_descriptor import profile_for_transport
+
+        with caplog.at_level(logging.WARNING, logger="startd8.observability.metric_descriptor"):
+            profile_for_transport("http")
+            profile_for_transport("grpc")
+            profile_for_transport("")  # empty = intentional http default (back-compat)
+        assert not any(
+            "unknown transport" in r.getMessage() for r in caplog.records
+        ), "known/empty transports must not warn (guard must not over-fire)"

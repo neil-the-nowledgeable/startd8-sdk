@@ -470,8 +470,25 @@ def profile_for_transport(transport: str) -> MetricDescriptor:
 
     Unknown transports fall back to ``semconv-http`` (matching today's
     generator behavior, where ``http`` is the transport default).
+
+    Metabolized guard (audit→rung-4): an EXPLICIT but unknown transport
+    (``envoy``/``istio``/…) silently taking the http descriptor is the
+    "proxy-guess, silently wrong" class — it hands ``status=~"5.."`` + ``service``
+    to a subject whose metrics use ``response_code`` / ``destination_service``,
+    i.e. a dead RED SLI. ``resolve_descriptor`` already warns on an unknown
+    *profile*; this makes the unknown-*transport* branch equally LOUD (the
+    asymmetry that let the class hide). An empty transport stays silent (the
+    intentional http default, back-compat).
     """
-    name = _TRANSPORT_DEFAULTS.get((transport or "").lower(), "semconv-http")
+    key = (transport or "").lower()
+    if key and key not in _TRANSPORT_DEFAULTS:
+        logger.warning(
+            "unknown transport %r has no SDK-semconv profile; falling back to "
+            "semconv-http — error_selector/service label may not match this "
+            "subject (declare metricsProfiles axes for it)",
+            transport,
+        )
+    name = _TRANSPORT_DEFAULTS.get(key, "semconv-http")
     return _PROFILES[name]
 
 
