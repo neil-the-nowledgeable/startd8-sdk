@@ -2574,6 +2574,40 @@ def _write_index(
     logger.info("Wrote index: %s", dest)
 
 
+def _classify_alert_depth(contents: List[str]) -> Dict[str, Any]:
+    """Classify a service's bridge-axis alert exprs into symptom vs liveness tiers.
+
+    ADDITIVE, descriptive signal ONLY — it never feeds ``metric_coverage_bridge``
+    (which stays the pure ``|expected ∩ referenced|`` coverage STATE). This is the
+    FR-26 state-vs-value split applied to the bridge axis: an ``absent()`` /
+    staleness alert legitimately makes a metric COVERED (it *is* bridged to
+    alerting), but a service bridged only by that liveness floor is distinguishable
+    here from one carrying real *symptom* alerts (latency / error-rate / threshold).
+    Depth is the VALUE ("how good is the alerting?"); coverage is the STATE ("is it
+    alerted at all?"). Never a coverage haircut — the two are kept separate so
+    neither can re-lie.
+
+    Tier: ``symptom`` if any non-``absent()`` alert expr is present, else
+    ``liveness_only`` if only ``absent()`` exprs, else ``none``.
+    """
+    symptom = 0
+    liveness = 0
+    for content in contents:
+        if not content:
+            continue
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("expr:"):
+                continue
+            expr = stripped[len("expr:"):].strip()
+            if "absent(" in expr:
+                liveness += 1
+            else:
+                symptom += 1
+    tier = "symptom" if symptom else ("liveness_only" if liveness else "none")
+    return {"symptom": symptom, "liveness": liveness, "tier": tier}
+
+
 def _write_quality_report(
     artifacts: List[ArtifactResult],
     output_dir: Path,
@@ -2670,10 +2704,19 @@ def _write_quality_report(
 
     # compute per-service composite over ALL scored artifacts, blended with the
     # orientation-split metric coverage (human + system + bridge, equal thirds).
+    _alert_depth_census = {"symptom": 0, "liveness_only": 0, "none": 0}
     for svc_id, svc_data in services.items():
         cov_human: Optional[float] = None
         cov_system: Optional[float] = None
         cov_bridge: Optional[float] = None
+        # Alert-DEPTH lens (additive; NEVER feeds metric_coverage_bridge). See
+        # `_classify_alert_depth`: coverage = STATE (is the metric bridged?), depth
+        # = VALUE (symptom alert vs liveness floor). Emitted for every service so a
+        # reader can tell a bridge=1.0-by-real-alerts service from a
+        # bridge=1.0-by-absence-floor one without any change to the graded number.
+        _depth = _classify_alert_depth(svc_bridge_contents.get(svc_id, []))
+        svc_data["alert_depth"] = _depth
+        _alert_depth_census[_depth["tier"]] += 1
         if (
             service_metrics
             and compute_metric_coverage is not None
@@ -2777,6 +2820,14 @@ def _write_quality_report(
         total_repairs += len(a.quality.get("repairs_applied", []))
 
     aggregate: Dict[str, Any] = {}
+    # Alert-depth census (additive; descriptive). Fleet-level view of the bridge
+    # value axis — how many services carry real symptom alerts vs only the liveness
+    # (absence) floor vs none. Does NOT alter any coverage/grade number.
+    aggregate["alert_depth"] = {
+        "services_symptom": _alert_depth_census["symptom"],
+        "services_liveness_only": _alert_depth_census["liveness_only"],
+        "services_no_alerts": _alert_depth_census["none"],
+    }
     # CCbC single-source of the per-artifact-type rollup — the SAME helper
     # merge_quality_services uses, so neither producer can construct an aggregate
     # that drops a per-type key present in `services` (REQ-01 FR-7 principle).
