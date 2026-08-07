@@ -1903,6 +1903,16 @@ def generate_observability_artifacts(
             service_metrics=service_metrics,
             expected_sources=expected_build["expected_sources"],
             export_disposition=expected_build["export_disposition"],
+            # L1d: a service that DECLARES no /metrics scrape surface
+            # (traces_only / none / spanmetrics) has no coverable metric surface —
+            # exclude it from the metric_coverage denominator (it is not a coverage
+            # gap). Only the DECLARED non-scrapeable set, never a scrapeable service
+            # that merely scored 0 (that stays a real gap — cf. registry / GD-2).
+            nonscrapeable_service_ids={
+                s.service_id
+                for s in services
+                if getattr(s, "metrics_surface", "") in NON_SCRAPEABLE_SURFACES
+            },
         )
 
     return report
@@ -2568,6 +2578,7 @@ def _write_quality_report(
     service_metrics: Optional[Dict[str, Set[str]]] = None,
     expected_sources: Optional[Dict[str, Dict[str, Any]]] = None,
     export_disposition: str = "",
+    nonscrapeable_service_ids: Optional[Set[str]] = None,
 ) -> None:
     """Write standalone observability-quality.json (REQ-KZ-OBS-730b).
 
@@ -2712,8 +2723,26 @@ def _write_quality_report(
     # combined avg_metric_coverage_score (equal-weight mean across the orientations
     # present) so the CLI coverage gate keeps working. dashboarded/alerted retained
     # as aliases for human/bridge.
+    # L1d: exclude DECLARED non-scrapeable services from the coverage denominator —
+    # a service exposing no /metrics has no coverable surface, so counting its 0
+    # drags the mean against a gap that isn't one (the survivorship inverse: don't
+    # let correctly-empty members deflate the honest denominator). Only the declared
+    # set is excluded; a scrapeable service scoring 0 stays counted (a real gap).
+    # The exclusion is CARRIED explicitly on the service block, never silently
+    # dropped (FieldState `excluded` state; REQ FR-25/FR-14).
+    _excluded_cov = nonscrapeable_service_ids or set()
+    for _sid in _excluded_cov:
+        _blk = services.get(_sid)
+        if isinstance(_blk, dict):
+            _blk["metric_coverage_excluded"] = True
+            _blk["metric_coverage_excluded_reason"] = "non_scrapeable_surface"
+
     def _avg(key: str) -> Optional[float]:
-        vals = [s[key] for s in services.values() if key in s]
+        vals = [
+            s[key]
+            for sid, s in services.items()
+            if key in s and sid not in _excluded_cov
+        ]
         return round(sum(vals) / len(vals), 4) if vals else None
 
     avg_human = _avg("metric_coverage_human")

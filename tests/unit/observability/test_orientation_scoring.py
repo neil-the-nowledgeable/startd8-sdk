@@ -19,6 +19,7 @@ from startd8.observability.artifact_generator import (
     _produced_service_targets,
     _recording_subscore,
     _score_extended_artifacts,
+    _write_quality_report,
     generate_observability_artifacts,
 )
 from startd8.observability.taxonomy_enums import Orientation
@@ -313,3 +314,45 @@ class TestSLOScoringFeedRegression:
         report = GenerationReport(project_id="p", generated_at="t", artifacts=[art])
         _score_extended_artifacts(report, self._CONTRACT)
         assert art.quality["score"] == 0.5  # not re-scored
+
+
+class TestL1dNonScrapeableExclusion:
+    """L1d: a DECLARED non-scrapeable service (metrics_surface none/traces_only/
+    spanmetrics) has no coverable /metrics surface, so it's excluded from the
+    metric_coverage DENOMINATOR (not a gap) — but a scrapeable service scoring 0
+    STAYS counted (a real gap), and the exclusion is carried explicitly."""
+
+    def _slo(self, svc, metric):
+        return ArtifactResult(
+            artifact_type="slo_definition", service_id=svc,
+            output_path=f"slos/{svc}.yaml", status="generated",
+            content=f"query: sum(rate({metric}[5m]))",
+            quality={"score": 1.0, "checks_passed": 1, "checks_total": 1},
+        )
+
+    def test_declared_nonscrapeable_excluded_but_scrapeable_zero_kept(self, tmp_path):
+        # keep: references the expected metric -> coverage 1.0 (scrapeable)
+        # gap:  scrapeable but references the WRONG metric -> coverage 0.0 (REAL gap, stays)
+        # cron: declared non-scrapeable -> coverage 0.0 but EXCLUDED from denominator
+        arts = [
+            self._slo("keep", "mymetric_total"),
+            self._slo("gap", "other_total"),
+            self._slo("cron", "other_total"),
+        ]
+        service_metrics = {
+            "keep": {"mymetric_total"},
+            "gap": {"mymetric_total"},
+            "cron": {"mymetric_total"},
+        }
+        _write_quality_report(
+            arts, tmp_path, service_metrics=service_metrics,
+            nonscrapeable_service_ids={"cron"},
+        )
+        q = json.loads((tmp_path / "observability-quality.json").read_text())
+        # cron carried + marked excluded (never silently dropped)
+        assert q["services"]["cron"]["metric_coverage_excluded"] is True
+        assert q["services"]["cron"]["metric_coverage_excluded_reason"] == "non_scrapeable_surface"
+        # gap is a scrapeable 0 — MUST stay counted, not excluded
+        assert "metric_coverage_excluded" not in q["services"]["gap"]
+        # denominator = {keep(1.0), gap(0.0)} only — cron dropped. avg = 0.5, NOT 0.333.
+        assert q["aggregate"]["avg_metric_coverage_system"] == 0.5
