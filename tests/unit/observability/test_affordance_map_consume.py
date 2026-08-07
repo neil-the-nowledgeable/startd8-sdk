@@ -2073,3 +2073,66 @@ def test_load_sapper_lite_guidance_malformed_noop(tmp_path, monkeypatch):
     path.write_text("{not-json")
     monkeypatch.setenv(SAPPER_LITE_REPORT_ENV, str(path))
     assert load_sapper_lite_guidance() is None
+
+
+# ---------------------------------------------------------------------------
+# L1c — coverage-bind type-gate: a declared GAUGE named *_latency must not get
+# a dead histogram_quantile on a nonexistent _bucket (GD-2 supplies the type).
+# ---------------------------------------------------------------------------
+
+
+class TestL1cCoverageBindTypeGate:
+    def _svc(self):
+        from startd8.observability.artifact_generator_models import (
+            ConventionMetric,
+            ServiceHints,
+        )
+
+        return ServiceHints(
+            service_id="jobservice",
+            transport="grpc",
+            language="go",
+            convention_metrics=[
+                ConventionMetric("harbor_task_queue_latency", "gauge", "prometheus"),
+                ConventionMetric("rpc_server_duration", "histogram", "otel_semconv:grpc"),
+            ],
+        )
+
+    def test_declared_gauge_gets_gauge_safe_expr(self):
+        from startd8.observability.affordance_map_consume import (
+            _coverage_bind_expr,
+            _declared_is_histogram,
+        )
+
+        svc = self._svc()
+        fam = "harbor_task_queue_latency"  # name LOOKS histogram-y but is a gauge
+        assert _declared_is_histogram(svc, fam) is False
+        expr = _coverage_bind_expr(fam, is_histogram=_declared_is_histogram(svc, fam))
+        assert expr == "max(harbor_task_queue_latency{})"
+        assert "histogram_quantile" not in expr  # the dead-SLI shape is gone
+
+    def test_declared_histogram_keeps_quantile(self):
+        from startd8.observability.affordance_map_consume import (
+            _coverage_bind_expr,
+            _declared_is_histogram,
+        )
+
+        svc = self._svc()
+        fam = "rpc_server_duration"
+        assert _declared_is_histogram(svc, fam) is True
+        expr = _coverage_bind_expr(fam, is_histogram=_declared_is_histogram(svc, fam))
+        assert "histogram_quantile" in expr and "rpc_server_duration_bucket" in expr
+
+    def test_unknown_family_falls_back_to_name_heuristic(self):
+        # No declaration → None → name heuristic (back-compat; no regression).
+        from startd8.observability.affordance_map_consume import (
+            _coverage_bind_expr,
+            _declared_is_histogram,
+        )
+
+        svc = self._svc()
+        assert _declared_is_histogram(svc, "undeclared_latency") is None
+        # is_histogram=None keeps prior behavior exactly.
+        assert _coverage_bind_expr("undeclared_latency") == _coverage_bind_expr(
+            "undeclared_latency", is_histogram=None
+        )

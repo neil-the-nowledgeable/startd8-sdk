@@ -2348,8 +2348,46 @@ def _apply_emit_red(
     result.entries.append(entry)
 
 
-def _coverage_bind_expr(fam: str) -> str:
-    """PromQL shape for coverage binds — native hist basenames use ``*_bucket``."""
+def _declared_is_histogram(service: Any, family: str) -> Optional[bool]:
+    """Authoritative histogram? for *family* from *service*'s typed convention
+    metrics — the L1c type-gate.
+
+    Returns ``True``/``False`` when *family* matches a declared convention metric
+    (by Prometheus-normalized name), else ``None`` (unknown → caller falls back to
+    the name heuristic). Once GD-2 types the jobservice ``*_latency`` families as
+    gauges, this stops the coverage-bind lane emitting a dead ``histogram_quantile``
+    on a nonexistent ``{fam}_bucket``. It only ever OVERRIDES to non-histogram on a
+    POSITIVE gauge/counter declaration — a real declared histogram stays a
+    histogram, and an unknown family keeps current behavior (no regression).
+    """
+    metrics = getattr(service, "convention_metrics", None) or []
+    if not metrics:
+        return None
+    want = family.replace(".", "_")
+    for m in metrics:
+        name = getattr(m, "name", None)
+        if name is None:
+            continue
+        if str(name).replace(".", "_") == want:
+            mtype = str(getattr(m, "type", "") or "").lower()
+            if mtype:
+                return mtype == "histogram"
+    return None
+
+
+def _coverage_bind_expr(fam: str, *, is_histogram: Optional[bool] = None) -> str:
+    """PromQL shape for coverage binds — native hist basenames use ``*_bucket``.
+
+    ``is_histogram`` is the AUTHORITATIVE declared type when known: ``True`` forces
+    the histogram_quantile shape; ``False`` forces the gauge-safe ``max({fam}{})``
+    even when the NAME looks histogram-y (L1c: a gauge named ``*_latency`` must not
+    get ``histogram_quantile`` on a nonexistent ``_bucket``). ``None`` → fall back
+    to the name heuristic (back-compat).
+    """
+    if is_histogram is True:
+        return _duration_panel_expr(fam)
+    if is_histogram is False:
+        return f"max({fam}{{}})"
     if _is_native_hist_basename(fam):
         return _duration_panel_expr(fam)
     return f"max({fam}{{}})"
@@ -2371,14 +2409,19 @@ def _write_coverage_orientation_legs(
     family: str,
     output_dir: Path,
     result: ApplyResult,
+    is_histogram: Optional[bool] = None,
 ) -> List[str]:
     """Write active SLO + alert referencing ``family`` (system/bridge axes).
 
     Active rules only — commented TODO stubs are stripped by
     ``extract_referenced_metrics`` and do not move bridge (SDK brief / CRP R2-F1).
+
+    ``is_histogram`` is the L1c authoritative type-gate threaded from the caller so
+    the SLO/alert exprs use the gauge-safe shape for a declared gauge (no dead
+    ``histogram_quantile`` on a nonexistent ``_bucket``).
     """
     written: List[str] = []
-    expr = _coverage_bind_expr(family)
+    expr = _coverage_bind_expr(family, is_histogram=is_histogram)
     safe = family.replace("_", "-")[:48]
 
     slo_rel = f"slos/{service_id}-coverage-bind-slo.yaml"
@@ -2572,12 +2615,19 @@ def _apply_improve_coverage(
 
     raw_family = str(metric_only[0].get("family_or_signal") or "")
     family = _prefer_thanos_twin_family(raw_family)
+    # L1c type-gate: consult the service's declared convention-metric type so a
+    # gauge named ``*_latency`` / ``*_duration`` gets ``max({fam}{})`` instead of a
+    # dead ``histogram_quantile`` on a nonexistent ``_bucket``. Try the renamed
+    # family first, then the raw family (pre-Thanos-twin) as a fallback.
+    is_hist = _declared_is_histogram(service, family)
+    if is_hist is None and raw_family and raw_family != family:
+        is_hist = _declared_is_histogram(service, raw_family)
     dash_rel = f"dashboards/{service.service_id}-dashboard-spec.yaml"
     dash_path = output_dir / dash_rel
     before = dash_path.read_text(encoding="utf-8") if dash_path.is_file() else ""
     entry.content_hash_before = content_hash(before) if before else None
 
-    expr = _coverage_bind_expr(family)
+    expr = _coverage_bind_expr(family, is_histogram=is_hist)
     panel = {
         "type": "timeseries",
         "title": f"Coverage bind: {family}",
@@ -2649,6 +2699,7 @@ def _apply_improve_coverage(
         family=family,
         output_dir=output_dir,
         result=result,
+        is_histogram=is_hist,
     )
     result.written_paths.extend(orient_written)
 
