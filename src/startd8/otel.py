@@ -188,6 +188,25 @@ def create_resource(
     return Resource.create(attributes)
 
 
+def _resolve_otlp_insecure(config: "OTelConfig") -> bool:
+    """Resolve the gRPC OTLP ``insecure`` flag (True = plaintext, no TLS).
+
+    #368 footgun: a **bare** endpoint (``localhost:4317``, no scheme) or an
+    ``http://`` endpoint leaves ``insecure`` unset, and the OTel gRPC exporter then
+    defaults to TLS — attempting TLS against a plaintext collector fails with
+    ``WRONG_VERSION_NUMBER`` and the export is silently lost. Resolve it explicitly:
+    an explicit ``OTEL_EXPORTER_OTLP_INSECURE`` env wins; otherwise infer from the
+    scheme — **only an explicit ``https://`` endpoint is secure**, so ``http://``
+    AND a bare ``host:port`` are both plaintext (the common local-collector case).
+    (Broader than the ``startswith("http://")`` heuristic, which misses the bare
+    endpoint that actually caused #368.)
+    """
+    env = os.getenv("OTEL_EXPORTER_OTLP_INSECURE")
+    if env is not None and env.strip() != "":
+        return env.strip().lower() in ("true", "1", "yes", "on")
+    return not (config.otlp_endpoint or "").lower().startswith("https://")
+
+
 def configure_tracing(
     config: OTelConfig,
 ) -> Optional[Any]:
@@ -215,6 +234,7 @@ def configure_tracing(
     exporter = OTLPSpanExporter(
         endpoint=config.otlp_endpoint,
         headers=config.otlp_headers or None,
+        insecure=_resolve_otlp_insecure(config),
     )
 
     processor = BatchSpanProcessor(
@@ -253,6 +273,7 @@ def configure_metrics(
     exporter = OTLPMetricExporter(
         endpoint=config.otlp_endpoint,
         headers=config.otlp_headers or None,
+        insecure=_resolve_otlp_insecure(config),
     )
     
     reader = PeriodicExportingMetricReader(
@@ -427,6 +448,7 @@ def configure_logging(config: OTelConfig) -> None:
     log_exporter = OTLPLogExporter(
         endpoint=config.otlp_endpoint,
         headers=config.otlp_headers or None,
+        insecure=_resolve_otlp_insecure(config),
     )
     logger_provider.add_log_record_processor(
         BatchLogRecordProcessor(log_exporter)

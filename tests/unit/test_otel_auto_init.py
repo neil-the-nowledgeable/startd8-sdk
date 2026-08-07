@@ -733,3 +733,44 @@ class TestConfigManagerOtel:
             assert "otel" in config
             assert config["otel"]["endpoint"] is None
             assert config["otel"]["mode"] is None
+
+
+# ---------------------------------------------------------------------------
+# #368 — OTLP insecure resolution (bare/http endpoint must not attempt TLS).
+# ---------------------------------------------------------------------------
+
+
+class TestResolveOtlpInsecure:
+    """A BARE (`host:4317`) or `http://` OTLP endpoint is plaintext — it must
+    resolve insecure=True so the gRPC exporter does not attempt TLS against a
+    plaintext collector (WRONG_VERSION_NUMBER, silent export loss — #368). Only an
+    explicit https:// endpoint is secure; an explicit env override always wins."""
+
+    def _insecure(self, endpoint, env=None):
+        import os as _os
+
+        from startd8.otel import OTelConfig, _resolve_otlp_insecure
+
+        prev = _os.environ.pop("OTEL_EXPORTER_OTLP_INSECURE", None)
+        try:
+            if env is not None:
+                _os.environ["OTEL_EXPORTER_OTLP_INSECURE"] = env
+            return _resolve_otlp_insecure(OTelConfig(otlp_endpoint=endpoint))
+        finally:
+            _os.environ.pop("OTEL_EXPORTER_OTLP_INSECURE", None)
+            if prev is not None:
+                _os.environ["OTEL_EXPORTER_OTLP_INSECURE"] = prev
+
+    def test_bare_endpoint_is_insecure(self):
+        # The exact #368 cause: bare host:port defaulted to TLS.
+        assert self._insecure("localhost:4317") is True
+
+    def test_http_endpoint_is_insecure(self):
+        assert self._insecure("http://localhost:4317") is True
+
+    def test_https_endpoint_is_secure(self):
+        assert self._insecure("https://collector.example:4317") is False
+
+    def test_explicit_env_wins_over_scheme(self):
+        assert self._insecure("localhost:4317", env="false") is False
+        assert self._insecure("https://c:4317", env="true") is True
