@@ -2200,11 +2200,21 @@ def generate_slo_definitions(
     # Find the right metrics for each SLO type
     histogram_metric = None
     counter_metric = None
+    summary_metric = None
     for m in service.convention_metrics:
         if m.type == "histogram" and "duration" in m.name and not histogram_metric:
             histogram_metric = m
         if m.type == "counter" and not counter_metric:
             counter_metric = m
+        # SCORE-3: a SUMMARY duration/latency family (e.g. Harbor core's
+        # harbor_core_http_request_duration_seconds) has no _bucket — its latency
+        # SLI is the avg (_sum/_count), NOT histogram_quantile (dead SLI, L1c).
+        if (
+            m.type == "summary"
+            and ("duration" in m.name or "latency" in m.name)
+            and not summary_metric
+        ):
+            summary_metric = m
 
     # Fallback: derive counter from histogram duration metric's _count suffix.
     # OTel histograms always have a _count companion that tracks total
@@ -2362,6 +2372,66 @@ def generate_slo_definitions(
                 },
                 "alerting": {
                     "name": f"{service.service_id}-latency-alert",
+                    "labels": {"severity": severity},
+                },
+            },
+        }
+        documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+
+    # SCORE-3 (system axis) — latency SLO for a SUMMARY duration family. A Prometheus
+    # Summary has NO _bucket, so histogram_quantile(rate(_bucket)) is a dead SLI (L1c);
+    # its latency SLI is the average (_sum/_count), which always binds. Only when there
+    # is a summary AND no histogram (no double latency SLO). References the summary
+    # family → lifts system coverage (Harbor core's *_request_duration_seconds).
+    if (
+        summary_metric
+        and not histogram_metric
+        and latency_raw
+        and "latency" in sli_kinds
+    ):
+        prom = _prom_name(summary_metric.name)
+        threshold = descriptor.scale_threshold_seconds(
+            _parse_duration_to_seconds(latency_raw)
+        )
+        slo = {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": f"{service.service_id}-latency-avg",
+                "labels": {
+                    "service": service.service_id,
+                    "protocol": service.transport,
+                    "generated_by": "startd8",
+                },
+            },
+            "spec": {
+                "description": (
+                    f"Average latency SLO for {service.service_id} "
+                    f"(summary family — avg via _sum/_count, not a dead histogram quantile)"
+                ),
+                "target": round(float(avail_raw), 2) if avail_raw else 99.0,
+                "timeWindow": {"duration": window, "isRolling": True},
+                "budgetPolicy": "occurrences",
+                "indicator": {
+                    "metadata": {"name": f"{service.service_id}-latency-avg-sli"},
+                    "spec": {
+                        "thresholdMetric": {
+                            "metricSource": {
+                                "type": "prometheus",
+                                "spec": {
+                                    "query": (
+                                        f"sum(rate({prom}_sum{total_selector}[5m])) "
+                                        f"/ sum(rate({prom}_count{total_selector}[5m]))"
+                                    ),
+                                },
+                            },
+                            "threshold": threshold,
+                            "operator": "lte",
+                        },
+                    },
+                },
+                "alerting": {
+                    "name": f"{service.service_id}-latency-avg-alert",
                     "labels": {"severity": severity},
                 },
             },
