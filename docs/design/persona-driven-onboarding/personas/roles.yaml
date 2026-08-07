@@ -1,0 +1,89 @@
+apiVersion: contextcore.io/v1alpha1
+kind: PersonaManifest
+metadata:
+  project: startd8-o11y-pilot
+  subject: toolchain-operation            # altitude (b): the people RUNNING the o11y pilot
+  note: >
+    DRAFT. Parallels the Insight-Finder bpi-astronomy PersonaManifest and the ContextCore retail
+    demo, but the "app" here is the observability-generation PILOT itself (startd8-sdk + ContextCore),
+    whose adoption depends on each operator meeting THEIR own view. Roles collapse to
+    `contextcore_persona` archetypes → three audience tiers. The BUSINESS/FUNCTIONAL tabs read the
+    same `observability-quality.json` our SCORE-1..4 work moves; the value framing comes from
+    business-targets `per_role_top_goals`. A second manifest (subject: observed-app) covers the
+    watched system (Harbor / online-boutique) — same shape, roles of the app's org.
+
+# Audience tiers (the demo's executive/manager/engineer portal tabs):
+#   business   ← engineering_leader, compliance_officer
+#   functional ← project_manager, operator(orchestration)
+#   technical  ← developer, operator(SRE)
+
+roles:
+  # ---- BUSINESS -----------------------------------------------------------
+  - id: pilot-sponsor
+    title: Pilot Sponsor / Eng Leader
+    audience_tier: business
+    contextcore_persona: engineering_leader
+    goals:
+      - "Is our observability good — and is it improving, run over run?"
+      - Justify the pilot's spend against risk/adoption.
+    consumes:
+      artifact: cc-portal-<project>-executive
+      kpis: [avg_metric_coverage_score, fidelity_grade, artifact_quality_composite, honest_gaps]
+      value_framing: aggregate $/yr pain (derived-business-observability; per_role_top_goals seed)
+    honest_gaps_signal: >
+      "Composite 67% but SLO 0%" — the portal tells the sponsor, in their own view, exactly which
+      axis the team skipped. Our SCORE-3 (system) + SCORE-4 (human) lift IS this number rising.
+    contextcore_value: { capabilities: [insight.query: portfolio health without a status meeting] }
+
+  - id: governance-officer
+    title: Governance / Compliance Officer
+    audience_tier: business
+    contextcore_persona: compliance_officer
+    goals: ["Are the critical-tier services actually covered (no false-green)?"]
+    consumes:
+      artifact: cc-portal-<project>-executive
+      kpis: [coverage_by_criticality, dead_sli_count, unbound_series]
+    honest_gaps_signal: "Self-reported gaps are the audit trail — a green that can't lie (FieldState)."
+
+  # ---- FUNCTIONAL ---------------------------------------------------------
+  - id: fde-orchestrator
+    title: Field Delivery Engineer / Pilot Orchestrator
+    audience_tier: functional
+    contextcore_persona: project_manager
+    goals:
+      - "What's the report card, and what do I fix NEXT?"
+      - Drive the remediation queue to closure without hand-rolling the pipeline.
+    consumes:
+      artifact: cc-portal-<project>-manager
+      kpis: [per_service_coverage, remediation_queue, run_over_run_delta]
+      value_framing: scoped $/yr pain per uncovered service
+    pain_points:
+      - Bus drops inbound (split-brain) → needs a durable per-service status, not chat.
+      - "Authored ≠ propagated" — a fix on main whose consumed surface is stale.
+    contextcore_value: { capabilities: [remediation.next, reconcile (propagation check)] }
+
+  # ---- TECHNICAL ----------------------------------------------------------
+  - id: o11y-sapper
+    title: SDK Engineer / o11y-sapper
+    audience_tier: technical
+    contextcore_persona: developer
+    goals: ["Which generator emits the dead/wrong artifact, and where's the fix?"]
+    consumes:
+      artifact: cc-portal-<project>-engineer  # + raw observability-quality.json
+      kpis: [red_coverage_per_artifact, metric_coverage_{human,system,bridge}, alert_depth, dead_sli]
+      value_framing: precise $/yr pain of the specific gap
+    pain_points:
+      - Name-proxy classifiers drift from declared type (L1c class) — needs the shape-invariant guard.
+      - Shadow-taxonomy: same concept recognized in >1 place.
+    contextcore_value: { capabilities: [insight.emit: decisions as spans, not lost in the bus] }
+
+  - id: live-pilot-sre
+    title: Live-Pilot SRE / Operator
+    audience_tier: technical
+    contextcore_persona: operator
+    service_tier_exposure: [critical, high, medium, low]
+    goals: ["Is the fleet up, are the SLIs live (not just present), did the journey pass?"]
+    consumes:
+      artifact: cc-portal-<project>-engineer
+      kpis: [binding_ratio, replayed_series, journey_pass, colima/env health]
+    pain_points: ["presence ≠ liveness (S4/EC-13)", "env flakes (Colima) masquerade as score drops"]
