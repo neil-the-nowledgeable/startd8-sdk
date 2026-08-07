@@ -647,6 +647,14 @@ def generate_dashboard_spec(
         prom = _prom_name(metric.name)
         is_latency = metric.type == "histogram" and "duration" in metric.name
         metric_base = latency_base if is_latency else prom
+        # SCORE-4: a Prometheus-native counter already carries ``_total``, and the
+        # counter query template appends ``_total`` — producing ``_total_total``,
+        # which the coverage normalizer maps to a DIFFERENT base so the counter
+        # reads UNCOVERED on the dashboard (the SLO path already uses a single
+        # ``_total``). Strip it here so the panel references the real series. OTel
+        # counters (no ``_total``) are unchanged → byte-identical.
+        if metric.type == "counter" and metric_base.endswith("_total"):
+            metric_base = metric_base[: -len("_total")]
         panel_type = _INSTRUMENT_TO_PANEL.get(metric.type, "timeseries")
         query_tpl = _INSTRUMENT_TO_QUERY.get(metric.type)
         if not query_tpl:
