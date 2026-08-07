@@ -32,7 +32,7 @@ sibling backlogs below already mine.)
 
 ### 🔴 Defect-first
 
-**CH-1 — Make the vocab-parity drift guard actually fire (offline vendored snapshot).** `S` · `fix` · **X6** (CROSS s1-vendored + s2-parity-runs + s1-capture; seeders 1+2).
+**CH-1 — Make the vocab-parity drift guard actually fire (offline vendored snapshot).** `S` · `fix` · **X6** (CROSS s1-vendored + s2-parity-runs + s1-capture; seeders 1+2). **→ RESOLVED (this branch): `test_vocabulary_parity_offline.py` + `data/contextcore_vocab_snapshot.json` — the 7 parity guards now fire offline in SDK CI; the `importorskip` sibling stays as the live upgrade check + a snapshot-vs-live freshness test forces refresh. (#359 had widened the surface to 7 guards all behind the same dead `importorskip`.)**
 The one guard against `REQUEST_KINDS`/`UNGROUNDED_KINDS`/`_TRIPLET_SIGNAL_KINDS`/`CANONICAL_SERVICE_KINDS` (`metric_descriptor.py:282`, a hand-copied literal of ContextCore's `ServiceKind`) drifting from upstream is `test_vocabulary_parity_contextcore.py:18`, which opens with `pytest.importorskip("contextcore.contracts.types")` — **ContextCore is not installed in the SDK venv, so it skips in every SDK CI run** (verified this session: same `ModuleNotFoundError` that skips the #345 carry test). Fix: commit a `contextcore_vocab_snapshot.json` (the enum values), assert the SDK mirror `==` snapshot **offline** (no importorskip), and keep the importorskip test as the live upgrade-path check. **Grounding:** `test_vocabulary_parity_contextcore.py:18`; `metric_descriptor.py:282`. *(Refresh mechanism has a design choice → not auto-applied; see CH-1a dependency on CH-6.)*
 
 ### 🚀 Enhanced capabilities

@@ -1,0 +1,53 @@
+{
+  "_provenance": {
+    "description": "Committed snapshot of ContextCore's normative observability vocabulary (#226/REQ-CCL-106), so the cross-repo parity guard fires OFFLINE in SDK CI where ContextCore is not installed (CH-1). The sibling test_vocabulary_parity_contextcore.py checks the SDK mirrors against the LIVE enums but importorskips, so it never fires in the SDK venv.",
+    "captured_from": "contextcore.contracts.types + contextcore.models.core",
+    "contextcore_commit": "c3cc7b8",
+    "captured": "2026-08-07",
+    "refresh_when": "test_snapshot_matches_live_contextcore fails (run against an installed ContextCore) — re-capture the four value sets and this block, then commit."
+  },
+  "SERVICE_KIND_VALUES": [
+    "async_worker",
+    "batch",
+    "cron",
+    "grpc_server",
+    "http_server",
+    "ml_inference",
+    "stream",
+    "unknown"
+  ],
+  "SIGNAL_KIND_VALUES": [
+    "availability",
+    "custom",
+    "freshness",
+    "lag",
+    "latency",
+    "queue_depth",
+    "retry_rate",
+    "run_success",
+    "saturation",
+    "throughput"
+  ],
+  "METRICS_SURFACE_VALUES": [
+    "node_metrics",
+    "none",
+    "otel_sdk_meter",
+    "prometheus_exporter",
+    "spanmetrics",
+    "traces_only"
+  ],
+  "DEPLOYMENT_RUNTIME_VALUES": [
+    "compose",
+    "kubernetes",
+    "unknown"
+  ],
+  "NON_K8S_TARGET_KINDS": [
+    "binary",
+    "compose_service",
+    "docker_container",
+    "docker_service",
+    "host",
+    "process",
+    "systemd"
+  ]
+}
