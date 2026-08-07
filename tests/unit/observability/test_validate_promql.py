@@ -1599,3 +1599,29 @@ def test_named_service_exact_name_live_is_bound_no_data(tmp_path):
     # refinement; the NR-7 no-exclusion guard below is the load-bearing intent).
     assert named[0].verdict == "bound_no_data"
     assert named[0].exclusion_reason == ""
+
+
+class TestF3IstioIdentityLabel:
+    """F3: Istio's mesh identity is `destination_service` (an FQDN); attribution
+    must extract it (first dot-segment), ranked below `service`/above `job`.
+    Byte-identical for Harbor/Thanos (no destination_* label)."""
+
+    def test_destination_service_fqdn_first_segment(self):
+        expr = 'sum(rate(istio_requests_total{destination_service="reviews.default.svc.cluster.local",response_code=~"5.."}[5m]))'
+        assert validate_promql._service_from_promql(expr) == "reviews"
+
+    def test_destination_workload(self):
+        assert validate_promql._service_from_promql('x{destination_workload="ratings-v1.default"}') == "ratings-v1"
+
+    def test_service_still_wins_over_destination(self):
+        # explicit `service` outranks `destination_service`.
+        assert validate_promql._service_from_promql('x{service="core", destination_service="core.ns.svc"}') == "core"
+
+    def test_harbor_thanos_unchanged(self):
+        assert validate_promql._service_from_promql('http_server_duration_count{service="core"}') == "core"
+        assert validate_promql._service_from_promql('thanos_build_info{job="thanos-receive"}') == "thanos-receive"
+
+    def test_identity_regex_built_from_keys_no_desync(self):
+        # Every declared identity key is matchable by the regex (built from the tuple).
+        for key in validate_promql._PROMQL_IDENTITY_KEYS:
+            assert validate_promql._PROMQL_IDENTITY_LABEL_RE.search(f'm{{{key}="v.suffix"}}'), key
