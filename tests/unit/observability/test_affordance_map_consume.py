@@ -2136,3 +2136,36 @@ class TestL1cCoverageBindTypeGate:
         assert _coverage_bind_expr("undeclared_latency") == _coverage_bind_expr(
             "undeclared_latency", is_histogram=None
         )
+
+
+class TestCoverageBindShapeMatchesTypeInvariant:
+    """Metabolized CLASS invariant (audit -> rung-4): the coverage-bind expr SHAPE
+    must match the DECLARED metric type — ``histogram_quantile`` ONLY for a
+    histogram. The rung-4 poka-yoke for the "proxy-guess, silently wrong" class
+    (L1c #397 / gauge-RED #395): any future renderer that emits histogram_quantile
+    for a non-histogram — even for a name that LOOKS histogram-y — trips here."""
+
+    @pytest.mark.parametrize(
+        "mtype,expect_quantile",
+        [("histogram", True), ("gauge", False), ("counter", False)],
+    )
+    def test_quantile_only_for_declared_histogram(self, mtype, expect_quantile):
+        from startd8.observability.affordance_map_consume import (
+            _coverage_bind_expr,
+            _declared_is_histogram,
+        )
+        from startd8.observability.artifact_generator_models import (
+            ConventionMetric,
+            ServiceHints,
+        )
+
+        # A name that LOOKS histogram-y regardless of the real declared type.
+        fam = "svc_request_latency"
+        svc = ServiceHints(
+            service_id="s",
+            transport="http",
+            language="go",
+            convention_metrics=[ConventionMetric(fam, mtype, "prometheus")],
+        )
+        expr = _coverage_bind_expr(fam, is_histogram=_declared_is_histogram(svc, fam))
+        assert ("histogram_quantile" in expr) is expect_quantile
