@@ -29,6 +29,14 @@ VASI_VERSION = "0.1.0"
 #: Filename suffix distinguishing WLQ jobs from prompt JobQueue jobs (FR-1, NR-2).
 JOB_FILE_SUFFIX = "_startd8_wloop.json"
 
+#: REQ-02 (contextcore Workflow Dry-Run) — the GUARDED MIRROR of contextcore's ``WouldAct`` vocabulary.
+#: The AUTHORITATIVE enum lives in contextcore (``contracts.dry_run.WouldAct``); startd8 must NOT import
+#: contextcore (mirroring the ``admit_from_wlq`` "read WLQ JSON, don't import" seam). This tuple is the
+#: startd8-side mirror of the ``would_act`` values that ride in ``WorkflowLoopJob.dry_run_trace`` verdicts.
+#: ``tests/.../test_dry_run_parity.py`` asserts this == contextcore's ``WOULD_ACT_VALUES`` (fails on drift in
+#: EITHER direction) — the single-source-vocabulary triad guard.
+DRY_RUN_WOULD_ACT_VALUES: tuple[str, ...] = ("yes", "no", "not-mine")
+
 # Patterns that mark text as an agent-surface CRP bundle / mustache template —
 # both are incompatible with the SDK `review_template` str.format contract
 # (spike: KeyError 'n'; NR-8 / FR-9 / FR-20.3).
@@ -312,7 +320,10 @@ class WorkflowLoopJob(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["0.1.0"] = "0.1.0"
+    # REQ-02 (contextcore Workflow Dry-Run): bumped 0.1.0 → 0.1.1 to carry the ADDITIVE dry_run fields below.
+    # Both are accepted so a pre-existing "0.1.0" job file still validates under ``extra="forbid"`` (the new
+    # fields default, so old jobs are unaffected — NR-4). A "0.1.0" file simply lacks dry_run (defaults False).
+    schema_version: Literal["0.1.0", "0.1.1"] = "0.1.1"
     job_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
     loop_id: str = Field(min_length=1)
     executor: LoopExecutor
@@ -333,6 +344,17 @@ class WorkflowLoopJob(BaseModel):
     artifacts: Dict[str, str] = Field(default_factory=dict)
     #: OQ-5: UTC ISO expiry while ``status=processing``; cleared on leave.
     lease_expires_at: Optional[str] = None
+    #: REQ-02 FR-1: the propagating dry-run flag. When True this is a trace/probe job — the wloop persist
+    #: chokepoint (``LoopQueueStorage.save_job``) describes the would-be enqueue/claim/complete WITHOUT
+    #: writing job-state. Additive, default-False → ZERO effect on live jobs (NR-4). The AUTHORITATIVE schema
+    #: for the verdicts this flag produces lives in contextcore (``contracts.dry_run``); startd8 carries only
+    #: this plain flag + a JSON-shaped trace (no contextcore import) — the single-source-vocabulary triad
+    #: seam, held in sync by ``tests/.../test_dry_run_parity.py`` (OQ-1). See ``dry_run_would_act_values``.
+    dry_run: bool = False
+    #: REQ-02 FR-3a: the ordered carried trace — a list of JSON-shaped ``DryRunVerdict`` dicts (contextcore's
+    #: ``DryRunVerdict.to_dict()`` shape), accumulated as the job flows so it arrives at the terminus with the
+    #: full path. Kept as untyped dicts here (no contextcore import); the parity test guards the shape.
+    dry_run_trace: List[Dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

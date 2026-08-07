@@ -86,11 +86,19 @@ def persist_drain_handoff(
     storage: LoopQueueStorage,
     job_id: str,
     handoff: DrainHandoff,
+    *,
+    dry_run: bool = False,
 ) -> DrainHandoff:
-    """Write JSON hand-off + markdown card; return hand-off with card path set."""
+    """Write JSON hand-off + markdown card; return hand-off with card path set.
+
+    REQ-02 Boundary 3 (FR-5): on a ``dry_run`` job, write **nothing** — return the hand-off with the path the
+    card *would* occupy (resolved but not created), so the drain hand-off is describable without a real
+    directed action (a drain hand-off is an action-firing artifact)."""
     artifact_dir = storage.artifact_dir(job_id)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
     card_path = artifact_dir / "drain-handoff.md"
+    if dry_run:
+        return handoff.model_copy(update={"markdown_card_path": str(card_path)})
+    artifact_dir.mkdir(parents=True, exist_ok=True)
     try:
         card_path.write_text(render_handoff_markdown(handoff), encoding="utf-8")
     except (ValueError, FileNotFoundError, OSError, UnicodeDecodeError) as e:

@@ -1,0 +1,15 @@
+{
+  "_README": "Vendored snapshot of contextcore's authoritative Workflow Dry-Run contract (REQ-02, OQ-1). The AUTHORITY lives in contextcore `src/contextcore/contracts/dry_run.py`; startd8-sdk must NOT import contextcore (the `admit_from_wlq` 'read JSON, don't import' seam). This file is the cross-repo MEMORY that `test_dry_run_parity.py` guards in BOTH directions: (a) startd8's `DRY_RUN_WOULD_ACT_VALUES` mirror == `would_act_values` below, and (b) when contextcore is importable, this snapshot == the live authority (so the snapshot can't rot). Update this file ONLY in lockstep with a contextcore `WouldAct`/`DryRunVerdict` schema change (coordinate the cross-repo edit).",
+  "source": "contextcore.contracts.dry_run",
+  "would_act_values": ["yes", "no", "not-mine"],
+  "verdict_fields": [
+    "stage_id",
+    "received",
+    "would_act",
+    "what_change",
+    "inputs",
+    "outputs",
+    "downstream_handoff",
+    "why"
+  ]
+}
