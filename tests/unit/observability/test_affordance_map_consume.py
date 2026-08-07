@@ -2169,3 +2169,58 @@ class TestCoverageBindShapeMatchesTypeInvariant:
         )
         expr = _coverage_bind_expr(fam, is_histogram=_declared_is_histogram(svc, fam))
         assert ("histogram_quantile" in expr) is expect_quantile
+
+
+class TestF4LabelEncodedErrorFamily:
+    """F4: Istio has no `*_errors_total` family — its error is the throughput
+    family filtered by a declared label-encoded `error_selector`
+    (`response_code=~"5.."`). The error slot must be non-None (the throughput
+    family) and the panel must apply the selector. Reuses the SAME
+    `ERR_CODE_FILTER_RE` the panel classifier uses (F2) — no drift. Byte-identical
+    for Harbor/Thanos (distinct name-based error family, no label-encoded selector)."""
+
+    _ISTIO = [
+        {"family_or_signal": "istio_requests_total", "signal_kind": "metric",
+         "error_selector": 'response_code=~"5.."', "covers": ["throughput", "availability"]},
+        {"family_or_signal": "istio_request_duration_milliseconds", "signal_kind": "metric"},
+    ]
+    _HARBOR = [
+        {"family_or_signal": "harbor_http_request_total", "signal_kind": "metric"},
+        {"family_or_signal": "harbor_http_request_errors_total", "signal_kind": "metric"},
+        {"family_or_signal": "harbor_http_request_duration_seconds", "signal_kind": "metric"},
+    ]
+
+    def test_istio_error_slot_is_throughput_family(self):
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        rate, err, dur = _pick_red_families(self._ISTIO)
+        assert rate == "istio_requests_total"
+        assert err == "istio_requests_total"  # label-encoded: error IS the rate family
+        assert dur == "istio_request_duration_milliseconds"
+
+    def test_istio_error_panel_applies_selector(self):
+        from startd8.observability.affordance_map_consume import _locus_red_dashboard_yaml
+
+        out = _locus_red_dashboard_yaml("reviews", self._ISTIO)
+        assert 'sum(rate(istio_requests_total{response_code=~"5.."}[$__rate_interval]))' in out
+
+    def test_harbor_distinct_error_family_unchanged(self):
+        from startd8.observability.affordance_map_consume import (
+            _locus_red_dashboard_yaml,
+            _pick_red_families,
+        )
+
+        rate, err, dur = _pick_red_families(self._HARBOR)
+        assert err == "harbor_http_request_errors_total" and err != rate
+        out = _locus_red_dashboard_yaml("core", self._HARBOR)
+        # plain rate over the distinct error family — no selector injected.
+        assert "sum(rate(harbor_http_request_errors_total[$__rate_interval]))" in out
+        assert "response_code" not in out
+
+    def test_no_selector_no_false_positive(self):
+        # a locus WITHOUT a label-encoded selector must NOT force err=rate.
+        from startd8.observability.affordance_map_consume import _pick_red_families
+
+        loci = [{"family_or_signal": "svc_requests_total", "signal_kind": "metric"}]
+        rate, err, dur = _pick_red_families(loci)
+        assert err is None

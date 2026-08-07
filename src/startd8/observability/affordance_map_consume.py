@@ -335,6 +335,7 @@ _ARTIFACT_SHAPE_GEN = frozenset({GEN_ENRICH_RUNBOOK, GEN_SHRINK})
 # classification). Imported under the local private names so `_pick_red_families`
 # reads unchanged.
 from startd8.observability.red_taxonomy import (  # noqa: E402
+    ERR_CODE_FILTER_RE as _ERR_CODE_FILTER_RE,
     RED_DUR_STRONG_RE as _RED_DUR_STRONG_RE,
     RED_DUR_WEAK_RE as _RED_DUR_WEAK_RE,
     RED_ERR_RE as _RED_ERR_RE,
@@ -416,15 +417,36 @@ def merge_needed_where_into_entries(
     return out
 
 
+def _label_encoded_error_selector(
+    loci: Sequence[Mapping[str, Any]],
+) -> Optional[str]:
+    """The declared ``error_selector`` when a locus encodes errors as a status/code
+    LABEL filter (Istio ``response_code=~"5.."``) — i.e. there is NO distinct error
+    family; the error is the throughput family FILTERED (F4).
+
+    Reuses ``red_taxonomy.ERR_CODE_FILTER_RE`` — the SAME single label-encoded-error
+    recognizer the panel classifier uses (F2) — so the family-level and panel-level
+    detectors can never drift.
+    """
+    for locus in loci:
+        selector = str(locus.get("error_selector") or "")
+        if selector and _ERR_CODE_FILTER_RE.search(selector):
+            return selector
+    return None
+
+
 def _pick_red_families(loci: Sequence[Mapping[str, Any]]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Distinct-family RED family selection (FR-1b, R1-F1/R1-F2).
 
-    No two of the three returned families are ever the same name: each slot is
-    filled only from names not already claimed by an earlier slot, and a slot
-    with no distinct candidate is left ``None`` (omitted) rather than filled by
-    a duplicate fallback. Order of assignment is error → duration → rate, so
-    the duration slot's timestamp exclusion and strong/weak preference apply
-    before rate's catch-all fallback claims a family duration would have used.
+    No two of the three returned families are ever the same name — EXCEPT the F4
+    label-encoded-error case: when there is no distinct error-named family but a
+    locus declares a label-encoded ``error_selector`` (Istio/Envoy
+    ``response_code=~"5.."``), the ERROR slot is the throughput (rate) family
+    itself, because the error genuinely IS that family filtered by the selector
+    (the panel builder applies the filter). Order of assignment is error →
+    duration → rate, so the duration slot's timestamp exclusion and strong/weak
+    preference apply before rate's catch-all fallback claims a family duration
+    would have used.
     """
     names = [str(l.get("family_or_signal")) for l in loci if l.get("family_or_signal")]
 
@@ -461,6 +483,13 @@ def _pick_red_families(loci: Sequence[Mapping[str, Any]]) -> Tuple[Optional[str]
             if n not in (err, dur):
                 rate = n
                 break
+
+    # F4: no distinct error family, but a locus declares a label-encoded error
+    # selector → the error IS the throughput family filtered; surface the RATE
+    # family in the error slot so the RED error role is present (the panel builder
+    # applies the selector). Deliberately allows err == rate for this case only.
+    if err is None and rate is not None and _label_encoded_error_selector(loci):
+        err = rate
 
     return rate, err, dur
 
@@ -2178,6 +2207,12 @@ def _locus_red_dashboard_yaml(
 ) -> str:
     """Minimal dashboard_spec YAML using only cited metric families (FR-G2/G3)."""
     rate, err, dur = _pick_red_families(loci)
+    # F4: when the error slot IS the throughput family (label-encoded errors), the
+    # error panel must apply the declared selector so it is a REAL error panel
+    # (``rate(fam{response_code=~"5.."})``), not a byte-copy of the rate panel.
+    err_selector = (
+        _label_encoded_error_selector(loci) if (err and err == rate) else None
+    )
     panels: List[Dict[str, Any]] = []
     used: List[str] = []
     if rate:
@@ -2192,11 +2227,16 @@ def _locus_red_dashboard_yaml(
         )
         used.append(rate)
     if err:
+        err_expr = (
+            f"sum(rate({err}{{{err_selector}}}[$__rate_interval]))"
+            if err_selector
+            else f"sum(rate({err}[$__rate_interval]))"
+        )
         panels.append(
             {
                 "type": "timeseries",
                 "title": "Error Rate",
-                "expr": f"sum(rate({err}[$__rate_interval]))",
+                "expr": err_expr,
                 "unit": "reqps",
                 "group": "Errors",
             }

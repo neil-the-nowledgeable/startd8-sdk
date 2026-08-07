@@ -43,7 +43,7 @@ import urllib.error
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
 
 import yaml
 
@@ -105,12 +105,32 @@ CROSS_CUTTING_SERVICE = ""
 _CROSS_CUTTING_MARKERS: Tuple[str, ...] = ("business-criticality",)
 
 #: PromQL identity-label keys, highest priority first (#362 preference 2).
-_PROMQL_IDENTITY_KEYS: Tuple[str, ...] = ("service_name", "service", "job")
+#: F3 (Istio): ``destination_service`` / ``destination_workload`` (the mesh
+#: identity label) rank below ``service``, above ``job``. ``service_name`` MUST
+#: precede ``service`` (regex alternation is leftmost-first).
+_PROMQL_IDENTITY_KEYS: Tuple[str, ...] = (
+    "service_name",
+    "service",
+    "destination_service",
+    "destination_workload",
+    "job",
+)
+
+#: Identity keys whose value is an FQDN (Istio ``destination_service`` =
+#: ``reviews.default.svc.cluster.local``) → the service id is the first
+#: dot-segment (``reviews``).
+_FQDN_IDENTITY_KEYS: FrozenSet[str] = frozenset(
+    {"destination_service", "destination_workload"}
+)
 
 #: Exact equality matcher: ``service="checkout"``, ``job='thanos-receive'``.
-#: Deliberately excludes ``=~`` (regex values are not service ids).
+#: Deliberately excludes ``=~`` (regex values are not service ids). The key
+#: alternation is BUILT FROM :data:`_PROMQL_IDENTITY_KEYS` so the two can never
+#: desync (single source of the identity-key set).
 _PROMQL_IDENTITY_LABEL_RE = re.compile(
-    r'\b(?P<key>service_name|service|job)\s*=\s*(?P<q>["\'])(?P<val>(?:(?!(?P=q)).)+)(?P=q)'
+    r"\b(?P<key>"
+    + "|".join(_PROMQL_IDENTITY_KEYS)
+    + r')\s*=\s*(?P<q>["\'])(?P<val>(?:(?!(?P=q)).)+)(?P=q)'
 )
 
 
@@ -312,6 +332,7 @@ def _service_from_promql(expr: str) -> Optional[str]:
     if not expr:
         return None
     best_key_rank: Optional[int] = None
+    best_key: Optional[str] = None
     best_val: Optional[str] = None
     key_rank = {k: i for i, k in enumerate(_PROMQL_IDENTITY_KEYS)}
     for m in _PROMQL_IDENTITY_LABEL_RE.finditer(expr):
@@ -321,7 +342,12 @@ def _service_from_promql(expr: str) -> Optional[str]:
             continue
         if best_key_rank is None or rank < best_key_rank:
             best_key_rank = rank
+            best_key = key
             best_val = m.group("val")
+    # F3: an FQDN mesh-identity value (Istio destination_service) → first
+    # dot-segment; other keys carry a bare id already.
+    if best_val and best_key in _FQDN_IDENTITY_KEYS:
+        best_val = best_val.split(".", 1)[0]
     return best_val
 
 
