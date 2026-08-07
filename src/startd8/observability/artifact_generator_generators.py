@@ -85,6 +85,9 @@ _INSTRUMENT_TO_PANEL: Dict[str, str] = {
     "gauge": "gauge",
     "up_down_counter": "timeseries",
     "observable_gauge": "gauge",
+    # SCORE-4: a Prometheus Summary has no _bucket → its dashboard panel is the
+    # average latency line (_sum/_count), not a histogram_quantile (L1c).
+    "summary": "timeseries",
 }
 
 
@@ -102,6 +105,12 @@ _INSTRUMENT_TO_QUERY: Dict[str, str] = {
     "gauge": "{metric}{selector}",
     "up_down_counter": "{metric}{selector}",
     "observable_gauge": "{metric}{selector}",
+    # SCORE-4: average latency for a summary — always binds (a summary always
+    # exposes _sum/_count), unlike histogram_quantile on a nonexistent _bucket.
+    "summary": (
+        "sum(rate({metric}_sum{selector}[$__rate_interval])) "
+        "/ sum(rate({metric}_count{selector}[$__rate_interval]))"
+    ),
 }
 
 

@@ -283,3 +283,23 @@ class TestScore3SummaryLatencySlo:
         ])
         result = generate_slo_definitions(svc, business)
         assert "-latency-avg" not in result.content  # only the histogram p99 path
+
+
+class TestScore4SummaryDashboardPanel:
+    """SCORE-4 (human axis): a SUMMARY duration family gets a dashboard panel — the
+    avg latency (_sum/_count), L1c-safe — so it's referenced by the dashboard,
+    lifting human coverage. Non-summary services are byte-identical."""
+
+    def test_summary_gets_avg_dashboard_panel(self, business):
+        svc = ServiceHints(
+            service_id="core", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("harbor_core_http_request_duration_seconds", "summary", "prometheus"),
+            ],
+        )
+        result = generate_dashboard_spec(svc, business)
+        assert result.status == "generated"
+        assert "harbor_core_http_request_duration_seconds_sum" in result.content
+        assert "harbor_core_http_request_duration_seconds_count" in result.content
+        # L1c: never a histogram quantile on a nonexistent _bucket.
+        assert "harbor_core_http_request_duration_seconds_bucket" not in result.content
