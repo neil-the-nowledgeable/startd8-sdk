@@ -15,6 +15,7 @@ from startd8.observability.artifact_generator import (
     GenerationReport,
     _apply_orientation_scoring,
     _bridge_human_actionable,
+    _classify_alert_depth,
     _iter_rule_dicts,
     _produced_service_targets,
     _recording_subscore,
@@ -361,3 +362,71 @@ class TestL1dNonScrapeableExclusion:
         # L1d is a SEPARATE grade-ready field: {keep, gap} only (cron dropped) → higher.
         assert agg["metric_coverage_excluded_count"] == 1
         assert agg["avg_metric_coverage_score_scrapeable"] > agg["avg_metric_coverage_score"]
+
+
+# ---------------------------------------------------------------------------
+# Alert-depth lens — the bridge VALUE axis, kept separate from coverage STATE
+# (FR-26 state-vs-value; absence alerts count for coverage but read as the floor)
+# ---------------------------------------------------------------------------
+
+
+class TestAlertDepthLens:
+    def test_absence_only_is_liveness_floor(self):
+        content = (
+            "groups:\n- name: x.slo\n  rules:\n"
+            "  - alert: FooAbsent\n    expr: absent(harbor_exporter_up{})\n    for: 15m\n"
+            "  - alert: BarAbsent\n    expr: absent(harbor_exporter_task_pending{})\n"
+        )
+        d = _classify_alert_depth([content])
+        assert d == {"symptom": 0, "liveness": 2, "tier": "liveness_only"}
+
+    def test_symptom_alert_wins_the_tier(self):
+        content = (
+            "groups:\n- name: x.slo\n  rules:\n"
+            "  - alert: LatencyHigh\n    expr: histogram_quantile(0.99, rate(x_bucket[5m])) > 0.5\n"
+            "  - alert: FooAbsent\n    expr: absent(x{})\n"
+        )
+        d = _classify_alert_depth([content])
+        assert d["symptom"] == 1 and d["liveness"] == 1
+        assert d["tier"] == "symptom"
+
+    def test_no_alerts_is_none(self):
+        assert _classify_alert_depth([])["tier"] == "none"
+
+    def test_depth_never_changes_bridge_coverage(self, tmp_path):
+        # A gauge service and an http service both reach bridge=1.0, but depth
+        # distinguishes them WITHOUT touching the graded coverage number.
+        meta = {
+            "project_id": "demo",
+            "instrumentation_hints": {
+                "gauge_svc": {
+                    "service_id": "gauge_svc", "transport": "http",
+                    "metrics": {"convention_based": [
+                        {"name": "svc_up", "type": "gauge", "source": "prometheus"},
+                    ]},
+                },
+                "http_svc": {
+                    "service_id": "http_svc", "transport": "http",
+                    "metrics": {"convention_based": [
+                        {"name": "http.server.duration", "type": "histogram", "source": "otel"},
+                    ]},
+                },
+            },
+        }
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        out = tmp_path / "out"
+        generate_observability_artifacts(onboarding_metadata_path=meta_path, output_dir=out)
+        q = json.loads((out / "observability-quality.json").read_text())
+        gauge = q["services"]["gauge_svc"]
+        http = q["services"]["http_svc"]
+        # Depth discriminates: liveness floor vs real symptom alerting.
+        assert gauge["alert_depth"]["tier"] == "liveness_only"
+        assert http["alert_depth"]["tier"] == "symptom"
+        # But coverage STATE is untouched by the depth lens — both honestly bridged
+        # (1.0), regardless of whether the alerting is symptom-grade or liveness-floor.
+        assert gauge["metric_coverage_bridge"] == 1.0
+        assert http["metric_coverage_bridge"] == 1.0
+        assert "alert_depth" in q["aggregate"]
+        assert q["aggregate"]["alert_depth"]["services_symptom"] >= 1
+        assert q["aggregate"]["alert_depth"]["services_liveness_only"] >= 1
