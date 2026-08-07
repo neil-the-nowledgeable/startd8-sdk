@@ -256,3 +256,64 @@ def test_fr13_red_name_regexes_defined_once():
         if "RED_RATE_RE = re.compile" in p.read_text(encoding="utf-8")
     )
     assert definers == ["red_taxonomy.py"], f"RED name regexes defined outside red_taxonomy: {definers}"
+
+
+# ---------------------------------------------------------------------------
+# F1 + F2 — Istio (response_code label-encoded errors) RED coverage.
+# The OBS-200a scorer and the shrink protect path both accept the descriptor
+# (F1, same-tier invariant); the descriptor-free tier recognizes a 5xx-class
+# code filter (F2) so an external Istio dashboard isn't scored a false 0.67.
+# ---------------------------------------------------------------------------
+
+from startd8.observability.metric_descriptor import MetricDescriptor
+from startd8.observability.red_taxonomy import RedRole, red_coverage, red_roles_present
+
+_ISTIO_DESC = MetricDescriptor(
+    profile="istio",
+    service_label_key="destination_service",
+    error_selector='response_code=~"5.."',
+    throughput_metric="istio_requests_total",
+    latency_bucket_metric="istio_request_duration_milliseconds_bucket",
+)
+_ISTIO_RED = [
+    {"title": "Request Rate", "expr": "sum(rate(istio_requests_total[5m]))"},
+    {"title": "Server Responses 5xx",
+     "expr": 'sum(rate(istio_requests_total{response_code=~"5.."}[5m]))'},
+    {"title": "Latency p99",
+     "expr": "histogram_quantile(0.99, rate(istio_request_duration_milliseconds_bucket[5m]))"},
+]
+_HTTP_RED = [
+    {"title": "Request Rate", "expr": "sum(rate(http_server_duration_count[5m]))"},
+    {"title": "Error Rate",
+     "expr": 'sum(rate(http_server_duration_count{status=~"5.."}[5m]))'},
+    {"title": "Latency",
+     "expr": "histogram_quantile(0.99, rate(http_server_duration_bucket[5m]))"},
+]
+
+
+class TestIstioRedCoverage:
+    def test_f1_grounded_scores_full(self):
+        # With the descriptor, the response_code error dimension is credited → 1.0.
+        assert red_coverage(_ISTIO_RED, _ISTIO_DESC) == 1.0
+
+    def test_f2_descriptor_free_scores_full(self):
+        # External Istio dashboard, NO descriptor: was 0.67 (false "missing Errors");
+        # the 5xx-code-filter recognition (F2) now credits the error panel.
+        assert red_coverage(_ISTIO_RED) == 1.0
+        assert RedRole.ERROR in red_roles_present(_ISTIO_RED[1:2])
+
+    def test_http_unchanged_grounded_equals_free(self):
+        # Byte-identity guard for the current corpus: grounded == free == 1.0.
+        assert red_coverage(_HTTP_RED) == 1.0
+        assert red_coverage(_HTTP_RED, _PROFILES["semconv-http"]) == 1.0
+
+    def test_overfill_guard_rate_by_code_is_not_error(self):
+        # A plain by(response_code) breakdown has no 5xx VALUE filter → not error.
+        byc = [{"title": "By Code",
+                "expr": "sum(rate(istio_requests_total[5m])) by (response_code)"}]
+        assert RedRole.ERROR not in red_roles_present(byc)
+
+    def test_5m_window_does_not_false_match(self):
+        # `[5m]` must not be read as a 5xx filter.
+        p = [{"title": "Rate", "expr": "sum(rate(istio_requests_total[5m]))"}]
+        assert RedRole.ERROR not in red_roles_present(p)
