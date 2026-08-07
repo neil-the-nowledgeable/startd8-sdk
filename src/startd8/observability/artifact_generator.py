@@ -1428,6 +1428,7 @@ def generate_observability_artifacts(
     observability_yaml_path: Optional[Path] = None,
     portal_coverage: Optional[Dict[str, Any]] = None,
     affordance_map: Any = None,
+    emit_field_states: bool = False,
 ) -> GenerationReport:
     """Top-level orchestrator.
 
@@ -1913,6 +1914,7 @@ def generate_observability_artifacts(
                 for s in services
                 if getattr(s, "metrics_surface", "") in NON_SCRAPEABLE_SURFACES
             },
+            emit_field_states=emit_field_states,
         )
 
     return report
@@ -2579,6 +2581,7 @@ def _write_quality_report(
     expected_sources: Optional[Dict[str, Dict[str, Any]]] = None,
     export_disposition: str = "",
     nonscrapeable_service_ids: Optional[Set[str]] = None,
+    emit_field_states: bool = False,
 ) -> None:
     """Write standalone observability-quality.json (REQ-KZ-OBS-730b).
 
@@ -2640,6 +2643,31 @@ def _write_quality_report(
             elif a.artifact_type == "slo_definition":
                 svc_system_contents.setdefault(a.service_id, []).append(a.content)
 
+    # FieldState explicit-state sidecar (channel B, FR-7). Accumulated only when
+    # `emit_field_states` is ON; keyed "<service>.<field>" and "aggregate.<field>".
+    # Flag-OFF: this stays empty and no `field_states` block is written (FR-11
+    # byte-identity).
+    field_states: Dict[str, Dict[str, Any]] = {}
+
+    def _set_coverage(
+        svc_data: Dict[str, Any], svc_id: str, field_name: str, fs: FieldState
+    ) -> None:
+        """Route ONE migrated coverage field through the single serializer (FR-9).
+
+        The plain value (channel A) is DERIVED from ``FieldState.value`` — never
+        assigned from a separate code path (the CCbC guard, FR-5/FR-6). Flag-ON
+        also records the sidecar (channel B, FR-7). Flag-OFF preserves current
+        on-disk behaviour: the plain key is set only when ``computed`` (so an
+        uncomputed field stays ABSENT, FR-11).
+        """
+        plain, sidecar = render_field_state(fs)
+        if fs.state == "computed":
+            svc_data[field_name] = plain  # channel A (derived), byte-identical
+        elif emit_field_states:
+            svc_data[field_name] = plain  # null (key now PRESENT, FR-12)
+        if emit_field_states:
+            field_states[f"{svc_id}.{field_name}"] = sidecar
+
     # compute per-service composite over ALL scored artifacts, blended with the
     # orientation-split metric coverage (human + system + bridge, equal thirds).
     for svc_id, svc_data in services.items():
@@ -2665,12 +2693,30 @@ def _write_quality_report(
             cov_human = cov_human_r.score
             cov_system = cov_system_r.score
             cov_bridge = cov_bridge_r.score
-            svc_data["metric_coverage_human"] = cov_human
-            svc_data["metric_coverage_system"] = cov_system
-            svc_data["metric_coverage_bridge"] = cov_bridge
+            # FR-26 strict-value rule: the coverage FieldState.value IS the strict
+            # `compute_metric_coverage` number, never an orientation/presence proxy.
+            # FR-9/FR-21: both producers set the plain key ONLY via the serializer.
+            _set_coverage(
+                svc_data, svc_id, "metric_coverage_human",
+                FieldState(value=cov_human, state="computed"),
+            )
+            _set_coverage(
+                svc_data, svc_id, "metric_coverage_system",
+                FieldState(value=cov_system, state="computed"),
+            )
+            _set_coverage(
+                svc_data, svc_id, "metric_coverage_bridge",
+                FieldState(value=cov_bridge, state="computed"),
+            )
             # Continuity aliases (REQ-OAT-051): names retained for downstream readers.
-            svc_data["metric_coverage_dashboarded"] = cov_human
-            svc_data["metric_coverage_alerted"] = cov_bridge
+            _set_coverage(
+                svc_data, svc_id, "metric_coverage_dashboarded",
+                FieldState(value=cov_human, state="computed"),
+            )
+            _set_coverage(
+                svc_data, svc_id, "metric_coverage_alerted",
+                FieldState(value=cov_bridge, state="computed"),
+            )
             # Shared denominator across orientations (CRP R1-S6).
             svc_data["expected_count"] = len(cov_human_r.expected)
             if expected_sources and svc_id in expected_sources:
@@ -2684,6 +2730,28 @@ def _write_quality_report(
                     + int(src.get("affordance_loci", 0))
                 )
                 svc_data["expected_sources"] = src
+        elif emit_field_states:
+            # Coverage guard FALSE (no service_metrics / compute_metric_coverage
+            # unavailable / service absent from service_metrics): the computation
+            # did not run on this path. Flag-ON → explicit `not_computed` per FR-12
+            # (the key goes from absent to `null + reason`, never a silent `0`).
+            # Flag-OFF → nothing set (byte-identical absence, FR-11) — this `elif`
+            # only fires when the flag is on.
+            for _field in (
+                "metric_coverage_human",
+                "metric_coverage_system",
+                "metric_coverage_bridge",
+                "metric_coverage_dashboarded",
+                "metric_coverage_alerted",
+            ):
+                _set_coverage(
+                    svc_data, svc_id, _field,
+                    FieldState(
+                        value=None,
+                        state="not_computed",
+                        reason="metric coverage not computed on this path",
+                    ),
+                )
 
         all_scores = svc_all_scores.get(svc_id, [])
         structural = sum(all_scores) / len(all_scores) if all_scores else 0.0
@@ -2737,7 +2805,12 @@ def _write_quality_report(
             _blk["metric_coverage_excluded_reason"] = "non_scrapeable_surface"
 
     def _avg(key: str) -> Optional[float]:
-        vals = [s[key] for s in services.values() if key in s]
+        # FR-14 null-rule: average over the MEASURED values only. Flag-ON, a
+        # `not_computed` service carries `key: None`; a `None` is "not measured",
+        # never a numeric 0 (skipping it here is the aggregate-side twin of the
+        # FR-16 no-null-flatten rule). Flag-OFF no `None` keys exist, so this is
+        # byte-identical to the prior `sum([s[key] ...])`.
+        vals = [s[key] for s in services.values() if key in s and s[key] is not None]
         return round(sum(vals) / len(vals), 4) if vals else None
 
     avg_human = _avg("metric_coverage_human")
@@ -2754,6 +2827,32 @@ def _write_quality_report(
     _present = [v for v in (avg_human, avg_system, avg_bridge) if v is not None]
     if _present:
         aggregate["avg_metric_coverage_score"] = round(sum(_present) / len(_present), 4)
+
+    # Aggregate sidecar (Build step 5, FR-7/FR-23): render each aggregate rollup
+    # as a FieldState keyed "aggregate.<field>". Flag-OFF adds nothing (FR-11);
+    # flag-ON emits `computed` for a present avg and `not_computed` for an absent
+    # one — the same explicit-state discrimination the per-service fields carry,
+    # so a downstream reader never has to `agg.get(...) or 0`.
+    if emit_field_states:
+        _agg_cov_fields = {
+            "avg_metric_coverage_human": avg_human,
+            "avg_metric_coverage_system": avg_system,
+            "avg_metric_coverage_bridge": avg_bridge,
+            "avg_metric_coverage_score": (
+                round(sum(_present) / len(_present), 4) if _present else None
+            ),
+        }
+        for _agg_key, _agg_val in _agg_cov_fields.items():
+            if _agg_val is not None:
+                _fs = FieldState(value=_agg_val, state="computed")
+            else:
+                _fs = FieldState(
+                    value=None,
+                    state="not_computed",
+                    reason="no measured per-service coverage to roll up",
+                )
+            _, _agg_sidecar = render_field_state(_fs)
+            field_states[f"aggregate.{_agg_key}"] = _agg_sidecar
 
     # L1d as a SEPARATE grade-ready lever (REQ FR-14/FR-23), emitted ALONGSIDE the
     # honest base so the grader can choose: the same composite over only the
@@ -2811,6 +2910,12 @@ def _write_quality_report(
             "sdk_module_path": emit_prov.get("sdk_module_path", ""),
         },
     }
+
+    # Channel B (FR-7): the `field_states` sidecar is emitted ONLY when the flag
+    # is on. Flag-OFF ⇒ `field_states` stays empty ⇒ no key ⇒ byte-identical (FR-11).
+    # `schema_version` does NOT bump here — the bump lands at the default-flip (FR-22).
+    if emit_field_states and field_states:
+        report["field_states"] = field_states
 
     dest = output_dir / "observability-quality.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
