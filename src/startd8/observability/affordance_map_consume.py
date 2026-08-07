@@ -31,7 +31,11 @@ from typing import (
 import yaml
 
 from startd8.logging_config import get_logger
-from startd8.observability.artifact_generator_models import rollup_avg_by_type
+from startd8.observability.artifact_generator_models import (
+    FieldState,
+    render_field_state,
+    rollup_avg_by_type,
+)
 
 logger = get_logger(__name__)
 
@@ -1043,16 +1047,55 @@ def write_affordance_actions_report(
 # ---- Merge helpers (FR-B3a / R1-S1) — WP-B0.5 --------------------------------
 
 
+# The migrated coverage fields (FR-4/§8 scope). The affordance-apply/merge path
+# never recomputes coverage, so flag-ON every one renders `not_computed`.
+_MERGE_COVERAGE_FIELDS = (
+    "metric_coverage_human",
+    "metric_coverage_system",
+    "metric_coverage_bridge",
+    "metric_coverage_dashboarded",
+    "metric_coverage_alerted",
+)
+# The reason string is CONTRACTED verbatim by the FR-20 acceptance gate.
+_MERGE_NOT_COMPUTED_REASON = "affordance-apply path; coverage not recomputed"
+
+
 def merge_quality_services(
     prior: Mapping[str, Any],
     touched: Mapping[str, Any],
+    emit_field_states: bool = False,
 ) -> Dict[str, Any]:
-    """Merge touched per-service quality blocks into a prior quality JSON."""
+    """Merge touched per-service quality blocks into a prior quality JSON.
+
+    ``emit_field_states`` (default OFF, FR-10/FR-11) gates the explicit-state
+    render. When ON, the export-durable fix (FR-3 build step): the merge path
+    never recomputes ``metric_coverage_*`` — so every service's coverage field
+    goes from ABSENT to ``{"value": null, "state": "not_computed", "reason": ...}``
+    (FR-20), never a silent ``0``. The SAME serializer as producer A (FR-21):
+    the plain value is DERIVED from ``FieldState.value``, never set independently.
+    Flag-OFF is byte-identical to the prior merge output (FR-11).
+    """
     out: Dict[str, Any] = dict(prior)
     prior_services = dict(prior.get("services") or {})
     for svc_id, block in touched.items():
         prior_services[svc_id] = block
     out["services"] = prior_services
+
+    field_states: Dict[str, Dict[str, Any]] = {}
+    if emit_field_states:
+        for svc_id, block in prior_services.items():
+            if not isinstance(block, dict):
+                continue
+            for _field in _MERGE_COVERAGE_FIELDS:
+                fs = FieldState(
+                    value=None,
+                    state="not_computed",
+                    reason=_MERGE_NOT_COMPUTED_REASON,
+                )
+                plain, sidecar = render_field_state(fs)
+                block[_field] = plain  # channel A (derived null), key now PRESENT
+                field_states[f"{svc_id}.{_field}"] = sidecar
+
     if "aggregate" in prior and isinstance(prior["aggregate"], dict):
         composites = [
             v.get("composite_score")
@@ -1075,6 +1118,21 @@ def merge_quality_services(
         # (#356 inert on real data). CCbC: the drop is now unrepresentable.
         agg.update(rollup_avg_by_type(prior_services))
         out["aggregate"] = agg
+
+    if emit_field_states and field_states:
+        # The merge aggregate never recomputes avg_metric_coverage_* either →
+        # not_computed sidecar entries so a reader sees explicit state, not absence.
+        for _agg_field in ("avg_metric_coverage_score",):
+            _, _agg_sidecar = render_field_state(
+                FieldState(
+                    value=None,
+                    state="not_computed",
+                    reason=_MERGE_NOT_COMPUTED_REASON,
+                )
+            )
+            field_states[f"aggregate.{_agg_field}"] = _agg_sidecar
+        out["field_states"] = field_states
+
     return out
 
 
@@ -2882,8 +2940,15 @@ def apply_affordance_actions(
 def merge_and_write_reports(
     output_dir: Path,
     apply: ApplyResult,
+    emit_field_states: bool = False,
 ) -> None:
-    """Merge touched quality/manifest rows into prior files on disk."""
+    """Merge touched quality/manifest rows into prior files on disk.
+
+    ``emit_field_states`` (default OFF, FR-10) threads to
+    :func:`merge_quality_services` so the affordance-apply/merge path emits
+    explicit ``not_computed`` FieldStates instead of leaving ``metric_coverage_*``
+    absent (the export-durable fix, FR-3/FR-20). Flag-OFF ⇒ byte-identical (FR-11).
+    """
     # Gate on real upserts — touched_service_ids alone used to wipe sibling
     # manifest rows when quality/manifest payloads were empty.
     if not apply.quality_touched and not apply.manifest_touched:
@@ -2904,7 +2969,9 @@ def merge_and_write_reports(
         if scores:
             block["composite_score"] = round(sum(scores) / len(scores), 4)
         touched_services[svc_id] = block
-    merged_q = merge_quality_services(prior_q, touched_services)
+    merged_q = merge_quality_services(
+        prior_q, touched_services, emit_field_states=emit_field_states
+    )
     # Tip honesty (bus 93e86298): stamp emit-time sdk_sha when the merged aggregate
     # carries none (an affordance-merge from an empty prior otherwise writes a
     # provenance-less quality.json, so remeasure can't fail-closed on a shadowed

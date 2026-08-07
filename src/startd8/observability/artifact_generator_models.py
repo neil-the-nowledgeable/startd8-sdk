@@ -430,3 +430,109 @@ def rollup_avg_by_type(services: Dict[str, Any]) -> Dict[str, float]:
         for atype, scores in by_type.items()
         if scores
     }
+
+
+# ---------------------------------------------------------------------------
+# FieldState — explicit-state emission (CCbC Tier B, Phase 1)
+# ---------------------------------------------------------------------------
+#
+# REQ: docs/design/FIELDSTATE_EXPLICIT_STATE_REQUIREMENTS.md
+#
+# The `metric_coverage_*` fields on `observability-quality.json` today emit a
+# bare `0.0` (computed) OR are ABSENT (the affordance-merge path never ran the
+# computation). Both render to the SAME consumer conclusion ("0"), so a real
+# `0` and a "never computed" are indistinguishable — the misread class that
+# stuck the structural grade at B (bus 93e86298 / gen-report-card.py:158/:299
+# `agg.get(...) or 0`).
+#
+# `FieldState` makes the state EXPLICIT: `{value, state, reason}` where a `null`
+# is unambiguously "not measured" and a `0.0` is unambiguously "measured zero"
+# (FR-4). `render_field_state` is the SINGLE serializer (FR-9): it produces BOTH
+# the plain-value channel (channel A, DERIVED from `FieldState.value`) and the
+# structured sidecar (channel B). Neither producer may construct the plain value
+# and the sidecar independently — that is the drift this whole feature exists to
+# kill (FR-5/FR-8/FR-21).
+
+# The closed enum of states (FR-2). `unbound` is RESERVED for the Phase-3
+# live-binding surface (deployed-but-unscraped) and is NOT emitted by the
+# statically-computable `metric_coverage_*` Phase-1 producers.
+FIELD_STATE_NAMES = ("computed", "not_computed", "excluded", "unbound")
+
+
+@dataclass(frozen=True)
+class FieldState:
+    """Explicit state for a migrated scoring field (FR-1..FR-4).
+
+    Serializes to ``{"value": <float|null>, "state": <str>, "reason": <str|null>,
+    "expected": [...]?, "covered": [...]?}``. ``value`` is a ``float`` iff
+    ``state == "computed"`` (FR-4); ``reason`` is a non-empty ``str`` iff
+    ``state != "computed"`` (FR-3). ``expected``/``covered`` are OPTIONAL and
+    emitted only when non-empty (byte-identity discipline mirroring
+    ``CoverageReport.to_fr_coverage``).
+
+    Validation is enforced by ``__post_init__`` (FR-19) so no ill-formed
+    ``FieldState`` can be constructed — the single guard that makes a ``null``
+    unambiguously "not measured" and a ``0.0`` unambiguously "measured zero".
+    """
+
+    value: Optional[float]
+    state: str
+    reason: Optional[str] = None
+    expected: List[str] = field(default_factory=list)
+    covered: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # FR-19 (a): unknown state.
+        if self.state not in FIELD_STATE_NAMES:
+            raise ValueError(
+                f"FieldState.state must be one of {FIELD_STATE_NAMES}, got {self.state!r}"
+            )
+        if self.state == "computed":
+            # FR-19 (b): computed with value None.
+            if self.value is None:
+                raise ValueError(
+                    "FieldState(state='computed') requires a float value, got None"
+                )
+            # FR-3: reason must be null/omitted when computed.
+            if self.reason is not None and self.reason != "":
+                raise ValueError(
+                    "FieldState(state='computed') must not carry a reason "
+                    f"(got {self.reason!r})"
+                )
+        else:
+            # FR-19 (c): non-computed with a value.
+            if self.value is not None:
+                raise ValueError(
+                    f"FieldState(state={self.state!r}) requires value=None, "
+                    f"got {self.value!r}"
+                )
+            # FR-19 (d): non-computed with empty/absent reason.
+            if not self.reason:
+                raise ValueError(
+                    f"FieldState(state={self.state!r}) requires a non-empty reason"
+                )
+
+
+def render_field_state(fs: "FieldState") -> Tuple[Optional[float], Dict[str, Any]]:
+    """The SINGLE serializer (FR-9): one ``FieldState`` → (plain_value, sidecar_dict).
+
+    Returns a 2-tuple whose FIRST element is the canonical plain-value channel
+    (channel A, FR-6) — ``fs.value`` verbatim (a ``float`` when ``computed``,
+    else ``None``) — and whose SECOND element is the structured sidecar (channel
+    B, FR-7): ``{"value", "state", "reason"}`` plus the OPTIONAL ``expected`` /
+    ``covered`` keys emitted only when non-empty.
+
+    Both channels derive from the SAME instance, so the plain value can never
+    drift from the sidecar's ``value`` (FR-5). ``FieldState.__post_init__`` has
+    already refused any ill-formed state (FR-19), so this is a pure render.
+    """
+    sidecar: Dict[str, Any] = {
+        "value": fs.value,
+        "state": fs.state,
+        "reason": fs.reason,
+    }
+    if fs.expected:
+        sidecar["expected"] = list(fs.expected)
+    if fs.covered:
+        sidecar["covered"] = list(fs.covered)
+    return fs.value, sidecar
