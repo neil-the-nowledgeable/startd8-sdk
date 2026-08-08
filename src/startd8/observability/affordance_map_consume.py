@@ -3084,10 +3084,12 @@ def merge_and_write_reports(
         if _prov.get("sdk_sha"):
             _mq_agg["sdk_sha"] = _prov["sdk_sha"]
             _mq_agg["sdk_sha_source"] = _prov.get("sdk_sha_source", "absent")
+            _mq_agg["sdk_capabilities"] = _prov.get("sdk_capabilities", [])
             merged_q.setdefault("provenance", {}).update(
                 {
                     "sdk_sha": _prov.get("sdk_sha", ""),
                     "sdk_sha_source": _prov.get("sdk_sha_source", "absent"),
+                    "sdk_capabilities": _prov.get("sdk_capabilities", []),
                 }
             )
     qpath.write_text(json.dumps(merged_q, indent=2) + "\n", encoding="utf-8")
