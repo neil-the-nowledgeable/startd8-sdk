@@ -220,6 +220,66 @@ class TestLoadBusinessContext:
         assert ctx.availability is None
         assert ctx.slo_window == "30d"
 
+    def test_deployment_mode_env_override(self, manifest_yaml, monkeypatch):
+        # STARTD8_DEPLOYMENT_MODE (set by `capdevpipe run --deployment-mode`, sdk#417)
+        # is the durable-pass override — the .contextcore.yaml is run-derived and often
+        # declares no deployment.mode, so the env is how the durable pass sets it. Without
+        # this consumer, sdk#417 was inert. The manifest fixture declares no mode.
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "installed")
+        ctx = load_business_context(manifest_yaml, {})
+        assert ctx.deployment_mode == "installed"
+
+    def test_deployment_mode_env_wins_over_manifest(self, tmp_path, monkeypatch):
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text("spec:\n  deployment:\n    mode: deployed\n")
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "installed")
+        ctx = load_business_context(p, {})
+        assert ctx.deployment_mode == "installed"  # explicit operator override wins
+
+    def test_deployment_mode_absent_env_byte_identical(self, tmp_path, monkeypatch):
+        # Empty/unset env ⇒ falls through to the manifest ⇒ unchanged (the guard).
+        monkeypatch.delenv("STARTD8_DEPLOYMENT_MODE", raising=False)
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text("spec:\n  deployment:\n    mode: deployed\n")
+        assert load_business_context(p, {}).deployment_mode == "deployed"
+        # and no manifest mode + no env ⇒ None (criticality-only)
+        assert load_business_context(None, {}).deployment_mode is None
+
+    def test_deployment_mode_env_case_normalized(self, manifest_yaml, monkeypatch):
+        # A mis-cased env value is normalized (not silently dropped to deployed behavior).
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "Installed")
+        assert load_business_context(manifest_yaml, {}).deployment_mode == "installed"
+
+    def test_deployment_mode_env_invalid_ignored_with_warning(self, tmp_path, monkeypatch, caplog):
+        # A typo/bad value must NOT silently produce deployed behavior — it's ignored (falls back to
+        # the manifest) and warned, so the operator sees why the mode didn't take.
+        import logging
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "install")  # typo for 'installed'
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text("spec:\n  deployment:\n    mode: deployed\n")
+        with caplog.at_level(logging.WARNING):
+            ctx = load_business_context(p, {})
+        assert ctx.deployment_mode == "deployed"  # fell back to manifest, did NOT become 'install'
+        assert any("STARTD8_DEPLOYMENT_MODE" in r.message for r in caplog.records)
+
+    def test_deployment_mode_env_invalid_no_manifest_falls_to_none(self, monkeypatch):
+        # Bad env + no manifest mode ⇒ None (not the bogus value) — no silent bad mode.
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "prod")
+        assert load_business_context(None, {}).deployment_mode is None
+
+    def test_deployment_mode_provenance_tracer_logs(self, manifest_yaml, monkeypatch, caplog):
+        # The durable-pass tracer must emit the resolved mode, its source, the raw env seen, and the
+        # startd8 tree — so a silent generate-path no-op is diagnosable from one log line.
+        import logging
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "installed")
+        with caplog.at_level(logging.INFO):
+            load_business_context(manifest_yaml, {})
+        line = next((r.getMessage() for r in caplog.records if "deployment_mode resolved" in r.getMessage()), None)
+        assert line is not None
+        assert "resolved='installed'" in line
+        assert "source=env:STARTD8_DEPLOYMENT_MODE" in line
+        assert "startd8_src=" in line
+
 
 # ---------------------------------------------------------------------------
 # Helper tests
@@ -864,6 +924,73 @@ class TestEmitTimeSdkSha:
         if prov["sdk_sha_source"] == "git_rev_parse":
             assert len(prov["sdk_sha"]) >= 7
             assert prov["sdk_module_path"].endswith("startd8/__init__.py") or "startd8" in prov["sdk_module_path"]
+
+    def test_stamp_carries_capabilities(self):
+        # the provenance stamp now self-describes what this generator can do.
+        from startd8.observability.artifact_generator import (
+            _emit_time_sdk_sha, OBSERVABILITY_CAPABILITIES,
+        )
+        prov = _emit_time_sdk_sha()
+        assert set(prov["sdk_capabilities"]) == set(OBSERVABILITY_CAPABILITIES)
+        assert "secondary-red-families" in prov["sdk_capabilities"]
+
+
+class TestStaleSdkGuard:
+    """The stale-SDK-import poka-yoke: a durable pass declares the features it expects; if the
+    quality was scored by an OLDER startd8 (the import-shadow that no-op'd sdk#411/#429), the
+    guard fails LOUD instead of the run silently reading a depressed coverage number."""
+
+    def _current_quality(self):
+        from startd8.observability.artifact_generator import OBSERVABILITY_CAPABILITIES
+        return {"provenance": {"sdk_sha": "abc1234", "sdk_module_path": "/cur/startd8",
+                               "sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}}
+
+    def test_current_sdk_passes(self):
+        from startd8.observability.artifact_generator import require_observability_capabilities
+        missing = require_observability_capabilities(
+            self._current_quality(), {"gauge-freshness-installed", "secondary-red-families"})
+        assert missing == []
+
+    def test_stale_sdk_fails_loud(self):
+        # a quality scored by a pre-sdk#429 startd8 lacks 'secondary-red-families' → must RAISE.
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError,
+        )
+        stale = {"provenance": {"sdk_sha": "0ldsha1", "sdk_module_path": "/tmp/stale/startd8",
+                                "sdk_capabilities": ["gauge-absence-alerts", "summary-latency-slo"]}}
+        with pytest.raises(StaleSdkError) as ei:
+            require_observability_capabilities(stale, {"secondary-red-families", "gauge-freshness-installed"})
+        msg = str(ei.value)
+        assert "secondary-red-families" in msg and "gauge-freshness-installed" in msg
+        assert "0ldsha1" in msg and "/tmp/stale/startd8" in msg  # names the offending SDK
+
+    def test_pre_capability_stamp_sdk_fails_loud(self):
+        # an OLD quality.json with NO sdk_capabilities key at all (pre-stamp SDK) → still bites.
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError,
+        )
+        with pytest.raises(StaleSdkError):
+            require_observability_capabilities({"aggregate": {}}, {"secondary-red-families"})
+
+    def test_non_strict_returns_missing(self):
+        from startd8.observability.artifact_generator import require_observability_capabilities
+        missing = require_observability_capabilities(
+            {"provenance": {"sdk_capabilities": []}}, {"secondary-red-families"}, strict=False)
+        assert missing == ["secondary-red-families"]
+
+    def test_unregistered_key_is_caller_error_not_stale(self):
+        # lacuna-audit footgun: requiring an UNREGISTERED capability must NOT masquerade as a stale
+        # SDK (which would lie about the thing the guard exists to detect). It's a ValueError.
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError, OBSERVABILITY_CAPABILITIES,
+        )
+        current = {"provenance": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}}
+        import pytest as _pytest
+        with _pytest.raises(ValueError) as ei:
+            require_observability_capabilities(current, {"alert-depth"})  # real feature, unregistered key
+        assert "not registered" in str(ei.value)
+        # and it is NOT the stale-SDK error
+        assert not isinstance(ei.value, StaleSdkError)
 
 
 class TestEvaluatorExpectedSetUnion:
@@ -2952,3 +3079,50 @@ def test_coverage_bind_panel_expr_default_is_backward_compatible():
     hist = _coverage_bind_panel_expr(fam)
     assert "histogram_quantile" in hist and f"{fam}_bucket" in hist
     assert hist == _coverage_bind_panel_expr(fam, is_summary=False)
+
+
+class TestStaleSdkGuardSidecarShape:
+    """Guard-readability (S6): the durable pass reads the scorecard SIDECAR (the run-dir quality.json
+    is torn down). The sidecar embeds the generate's stamp under a `quality` sub-block, so the guard
+    must find it there too — not just at top level."""
+
+    def test_reads_sidecar_quality_aggregate(self):
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError, OBSERVABILITY_CAPABILITIES,
+        )
+        # a scorecard sidecar with the generate's stamp nested under quality.aggregate (where sdk#432
+        # also writes it) — a CURRENT generate → guard passes.
+        sidecar = {"tooling": {"startd8": "auditsha"},
+                   "quality": {"aggregate": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES),
+                                             "sdk_sha": "gensha1"}}}
+        assert require_observability_capabilities(sidecar, {"secondary-red-families"}, strict=False) == []
+        # a STALE generate → the nested aggregate has no capabilities → fires (correct verdict).
+        stale_sidecar = {"quality": {"aggregate": {"avg_metric_coverage_score": 0.3}}}
+        with pytest.raises(StaleSdkError):
+            require_observability_capabilities(stale_sidecar, {"secondary-red-families"})
+
+    def test_sidecar_provenance_also_searched(self):
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, OBSERVABILITY_CAPABILITIES,
+        )
+        sidecar = {"quality": {"provenance": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}}}
+        assert require_observability_capabilities(sidecar, {"gauge-freshness-installed"}, strict=False) == []
+
+
+class TestAssertCapabilitiesCLI:
+    def _run(self, tmp_path, payload, require):
+        import json
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+        p = tmp_path / "q.json"; p.write_text(json.dumps(payload))
+        return CliRunner().invoke(observability_app, ["assert-capabilities", str(p), "--require", require])
+
+    def test_cli_ok_on_current(self, tmp_path):
+        from startd8.observability.artifact_generator import OBSERVABILITY_CAPABILITIES
+        r = self._run(tmp_path, {"provenance": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}},
+                      "secondary-red-families,gauge-freshness-installed")
+        assert r.exit_code == 0 and "OK" in r.output
+
+    def test_cli_fails_loud_on_stale_sidecar(self, tmp_path):
+        r = self._run(tmp_path, {"quality": {"aggregate": {}}}, "secondary-red-families")
+        assert r.exit_code == 2 and "STALE SDK" in r.output

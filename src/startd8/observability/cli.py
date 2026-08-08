@@ -28,6 +28,7 @@ from .bind_and_verify import bind_and_verify
 from .contrast import build_contrast, render_markdown
 from .fidelity_scorecard import build_fidelity_scorecard
 from .metric_descriptor import match_profiles, profile_signatures
+from .onboarding_validate import render_report, validate_onboarding_metadata
 from .prometheus_query import Auth, list_metric_names
 from .validate_promql import redact, run_validation
 
@@ -39,6 +40,26 @@ observability_app = typer.Typer(
 @observability_app.callback()
 def _observability_callback() -> None:
     """Presence of a callback keeps this a command *group*."""
+
+
+@observability_app.command("validate-onboarding")
+def validate_onboarding(
+    onboarding_metadata: Path = typer.Option(
+        ..., "--onboarding-metadata", "-m", help="Path to onboarding-metadata.json to lint.",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
+) -> None:
+    """$0 read-only preflight: lint onboarding-metadata against the SDK consumer contract BEFORE a
+    generation pass — reports present-vs-defaulted fields, did-you-mean typos, and malformed values.
+
+    Exit 0 = clean; exit 1 = errors/warnings an author should act on (nothing is generated either way).
+    """
+    report = validate_onboarding_metadata(onboarding_metadata)
+    if json_out:
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+    else:
+        typer.echo(render_report(report))
+    raise typer.Exit(code=0 if report.ok else 1)
 
 
 @observability_app.command("validate-promql")
@@ -401,6 +422,46 @@ def scorecard_cmd(
         typer.echo(f"scorecard written to {output} (status={data.get('status')})")
     else:
         typer.echo(md)
+
+
+@observability_app.command("assert-capabilities")
+def assert_capabilities_cmd(
+    quality_path: Path = typer.Argument(
+        ...,
+        help="observability-quality.json OR a scorecard sidecar (.json) — either shape works.",
+    ),
+    require: str = typer.Option(
+        ...,
+        "--require",
+        help="Comma-separated capability keys the GENERATE must carry, e.g. "
+        "gauge-freshness-installed,secondary-red-families,summary-latency-slo",
+    ),
+) -> None:
+    """Fail LOUD if the o11y quality/scorecard was produced by a startd8 MISSING required
+    capabilities — the stale-SDK-import guard (sdk#432) as a one-command preflight for a durable
+    pass. Reads a raw observability-quality.json OR the scorecard sidecar (the run-dir the raw file
+    lives in is torn down; the sidecar survives and embeds the generate's stamp under `quality`).
+
+    Exit 0 = the generate carries all required capabilities. Exit 2 = StaleSdkError (names the
+    missing features + the offending sdk_sha/path) OR an unregistered-key caller error.
+    """
+    from .artifact_generator import require_observability_capabilities, StaleSdkError
+
+    try:
+        data = json.loads(Path(quality_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        typer.echo(f"error: cannot read {quality_path}: {exc}", err=True)
+        raise typer.Exit(2)
+    required = [c.strip() for c in require.split(",") if c.strip()]
+    try:
+        require_observability_capabilities(data, required)
+    except StaleSdkError as exc:
+        typer.echo(f"STALE SDK — {exc}", err=True)
+        raise typer.Exit(2)
+    except ValueError as exc:  # unregistered capability key (caller error, not stale)
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2)
+    typer.echo(f"OK — the generate carries all required capabilities: {sorted(required)}")
 
 
 @observability_app.command("compare")

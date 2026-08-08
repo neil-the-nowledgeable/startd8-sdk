@@ -8,6 +8,7 @@ Extracted verbatim from ``artifact_generator.py`` (Tier-2 refactor, step 2).
 
 import json  # noqa: F401
 import logging
+import os
 import re  # noqa: F401
 from datetime import datetime, timezone  # noqa: F401
 from pathlib import Path  # noqa: F401
@@ -183,6 +184,48 @@ def classify_route_states(services: List[ServiceHints]) -> List[Dict[str, Any]]:
     return rows
 
 
+#: The onboarding-metadata contract MAJOR this consumer understands. The producer (ContextCore /
+#: cap-dev-pipe) MAY stamp a top-level ``schema_version`` (``"MAJOR.MINOR"``, mirroring the SDK's own
+#: output convention at artifact_generator.py). A MINOR bump is additive and safe to ignore; a MAJOR
+#: bump means fields this consumer reads may have moved/renamed. Bump this when the consumer is taught
+#: a new MAJOR. (#226 contract-health CH-6.)
+SUPPORTED_ONBOARDING_SCHEMA_MAJOR = 1
+
+#: The two valid deployment modes (matches cli_capdevpipe's --deployment-mode flag + cli_generate's
+#: --mode + scaffold_codegen). The env override (STARTD8_DEPLOYMENT_MODE) is validated against this so
+#: a typo can't silently produce deployed behavior.
+_VALID_DEPLOYMENT_MODES = frozenset({"installed", "deployed"})
+
+
+def _warn_on_unrecognized_schema_version(data: Dict[str, Any], path: Path) -> None:
+    """Warn — never fail — when the onboarding-metadata declares a schema MAJOR this consumer does not
+    understand (CH-6 version handshake). Absent ``schema_version`` ⇒ silent (back-compat: today's
+    producers stamp none, so this is a no-op until one opts in). A malformed value warns too. Degrade-
+    safe: a schema drift surfaces as a legible 'consumer supports vX' log line instead of vanishing into
+    the structural ``.get()`` defaults downstream (the silent-fallback the CEP CH-6 finding named)."""
+    if not isinstance(data, dict):
+        return
+    raw = data.get("schema_version")
+    if raw is None:
+        return
+    try:
+        major = int(str(raw).split(".", 1)[0])
+    except (ValueError, TypeError):
+        logger.warning(
+            "Onboarding metadata at %s declares an unparseable schema_version %r; "
+            "proceeding best-effort (consumer supports MAJOR %d).",
+            path, raw, SUPPORTED_ONBOARDING_SCHEMA_MAJOR,
+        )
+        return
+    if major != SUPPORTED_ONBOARDING_SCHEMA_MAJOR:
+        logger.warning(
+            "Onboarding metadata at %s declares schema_version %r (MAJOR %d) but this consumer "
+            "supports MAJOR %d — proceeding best-effort; some fields may be unrecognized or "
+            "mis-read. Reconcile the producer/consumer contract.",
+            path, raw, major, SUPPORTED_ONBOARDING_SCHEMA_MAJOR,
+        )
+
+
 def load_onboarding_metadata(path: Path) -> Dict[str, Any]:
     """Load onboarding-metadata.json and return raw dict.
 
@@ -200,6 +243,9 @@ def load_onboarding_metadata(path: Path) -> Dict[str, Any]:
                 f"Onboarding metadata at {path} is not valid JSON "
                 f"(line {e.lineno}, column {e.colno}): {e.msg}"
             ) from e
+    # CH-6: a producer-declared schema MAJOR we don't understand warns (never fails) — a legible
+    # cross-repo drift signal instead of silent .get() degradation.
+    _warn_on_unrecognized_schema_version(data, path)
     logger.info("Loaded onboarding metadata from %s (%d top-level keys)", path, len(data))
     return data
 
@@ -376,6 +422,7 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
                 error_selector=str(s.get("error_selector", "")),
                 enabling_flag=str(s.get("enabling_flag", "")),
                 target=target,
+                unit=str(s.get("unit", "")),  # contextcore#404 — producer-stamped unit (optional)
             )
         )
     return out
@@ -601,7 +648,46 @@ def load_business_context(
     ctx.criticality = business.get("criticality", "medium")
     # Deployment mode (Increment 2): drives importance-scaled defaults toward extreme forgiveness for
     # locally-installed apps. From spec.deployment.mode; absent ⇒ None ⇒ criticality-only.
-    ctx.deployment_mode = (spec.get("deployment") or {}).get("mode")
+    # STARTD8_DEPLOYMENT_MODE env OVERRIDES the manifest (durable-pass operator override, the twin of
+    # the affordance-map env + sdk#417's `capdevpipe run --deployment-mode`): the `.contextcore.yaml`
+    # is run-DERIVED from a plan that often declares no deployment.mode, so the env is how the durable
+    # pass sets it without editing the derived manifest. Empty/unset env ⇒ falls through to the
+    # manifest ⇒ byte-identical when the override is absent (empty-default IS the guard).
+    # Normalize + validate the override: the durable pass sets this env DIRECTLY (bypassing the
+    # `capdevpipe run --deployment-mode` flag's validation), so a mis-cased/typo'd value ("Installed",
+    # "install", "prod") must NOT slip through — it would silently produce deployed behavior (the
+    # freshness gate is exact-match `== "installed"`, the threshold key falls back to "default"), i.e.
+    # the operator sets "installed", sees no lift, and thinks deploy-mode is broken. Fail LOUD instead.
+    _raw_override = (os.environ.get("STARTD8_DEPLOYMENT_MODE") or "").strip()
+    _mode_override = _raw_override.lower()
+    if _mode_override and _mode_override not in _VALID_DEPLOYMENT_MODES:
+        logger.warning(
+            "STARTD8_DEPLOYMENT_MODE=%r is not one of %s; IGNORING the override and falling back to "
+            "the manifest's spec.deployment.mode. (A mis-cased/typo'd value would otherwise silently "
+            "produce deployed behavior — no gauge-freshness SLOs, production thresholds.)",
+            _raw_override,
+            sorted(_VALID_DEPLOYMENT_MODES),
+        )
+        _mode_override = ""
+    ctx.deployment_mode = _mode_override or (spec.get("deployment") or {}).get("mode")
+    # Self-diagnosing provenance (durable-pass tracer): emits the resolved mode, its SOURCE, the RAW
+    # env value this process actually saw, and WHICH startd8 tree this code came from — so a durable
+    # pass whose deployment_mode increment silently no-ops (e.g. sdk#411 gauge-freshness not firing)
+    # can be diagnosed from ONE log line: env-not-inherited (raw None) vs wrong-startd8 (unexpected
+    # src path) vs reader-worked-but-grader-dropped-it (resolved=='installed' yet coverage flat).
+    _mode_src = (
+        "env:STARTD8_DEPLOYMENT_MODE" if _mode_override
+        else "manifest:spec.deployment.mode" if (spec.get("deployment") or {}).get("mode")
+        else "none:criticality-only"
+    )
+    logger.info(
+        "deployment_mode resolved=%r source=%s (STARTD8_DEPLOYMENT_MODE=%r seen in os.environ) "
+        "startd8_src=%s",
+        ctx.deployment_mode,
+        _mode_src,
+        os.environ.get("STARTD8_DEPLOYMENT_MODE"),
+        __file__,
+    )
     # spec.deployment.runtime (compose|kubernetes|unknown) — gates the runtime-correct artifact set
     # (an explicit 'unknown' suppresses the k8s ServiceMonitor; FP-3 fail-closed).
     ctx.deployment_runtime = (spec.get("deployment") or {}).get("runtime")

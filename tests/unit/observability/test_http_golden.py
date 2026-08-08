@@ -417,3 +417,197 @@ class TestScore3GaugeFreshnessSlo:
         result = generate_slo_definitions(svc, biz)
         # exactly one freshness SLO (3 name-slots per SLO: metadata + sli + alert).
         assert result.content.count("harbor_queue_depth-freshness") == 3
+
+    def test_declared_emitted_series_gauge_gets_freshness_slo(self):
+        # sdk#411 follow-up (S6 root cause): a prometheus_exporter-style service emits its
+        # gauges into declared_emitted_series, NOT convention_metrics. Before the fix the
+        # convention-only loop produced ZERO freshness SLOs for it (Harbor exporter stuck at
+        # live system coverage 7/22=0.3182). The declared-series gauges must now get one each,
+        # and a non-gauge declared series must NOT.
+        from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+        svc = ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[],  # the trap: exporter carries NO convention gauge
+            declared_emitted_series=[
+                DeclaredEmittedSeries("harbor_statistics_total_projects", "gauge"),
+                DeclaredEmittedSeries("harbor_statistics_total_users", "gauge"),
+                DeclaredEmittedSeries("harbor_core_http_requests_total", "counter"),
+            ],
+        )
+        result = generate_slo_definitions(svc, self._biz("installed"))
+        assert result.status == "generated"
+        assert "harbor_statistics_total_projects-freshness" in result.content
+        assert "harbor_statistics_total_users-freshness" in result.content
+        assert "count_over_time(harbor_statistics_total_projects{" in result.content
+        # a counter is not a gauge → no freshness SLO from the gauge lane
+        assert "harbor_core_http_requests_total-freshness" not in result.content
+
+    def test_declared_series_gauge_deduped_against_convention(self):
+        # Same gauge name in BOTH sources → exactly ONE freshness SLO (convention wins);
+        # no double-count on the system axis.
+        from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+        svc = ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[ConventionMetric("harbor_queue_depth", "gauge", "prometheus")],
+            declared_emitted_series=[DeclaredEmittedSeries("harbor_queue_depth", "gauge")],
+        )
+        result = generate_slo_definitions(svc, self._biz("installed"))
+        assert result.content.count("harbor_queue_depth-freshness") == 3
+
+    def test_declared_series_gauge_defers_in_deployed(self):
+        # The declared-series gauge lane is ALSO installed-only — deployed defers (byte-identical).
+        from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+        svc = ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[],
+            declared_emitted_series=[
+                DeclaredEmittedSeries("harbor_statistics_total_projects", "gauge"),
+            ],
+        )
+        result = generate_slo_definitions(svc, self._biz("deployed"))
+        assert "freshness" not in result.content
+
+
+class TestScore3SecondaryRedFamilies:
+    """S7 (system axis): a service can emit MORE than one RED-shaped family. The primary
+    counter/summary get their groundable SLOs; SECONDARY counters/summaries have no
+    groundable magnitude here (business declares only request latency), so each gets the
+    honest data-availability treatment (installed mode). Lifts the jobservice residual;
+    single-family services + deployed mode are byte-identical."""
+
+    def _multi(self):
+        return ServiceHints(
+            service_id="jobservice", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("job_http_request_total", "counter", "prometheus"),        # primary
+                ConventionMetric("job_http_request_duration_seconds", "summary", "prometheus"),  # primary
+                ConventionMetric("job_task_total", "counter", "prometheus"),                 # secondary
+                ConventionMetric("job_task_process_time_seconds", "summary", "prometheus"),  # secondary
+            ],
+        )
+
+    def _biz(self, mode):
+        return BusinessContext(
+            criticality="high", availability="99.9", latency_p99="500ms", throughput="100rps",
+            project_id="golden-test", slo_window="30d", deployment_mode=mode, metrics_interval="30s",
+        )
+
+    def test_installed_covers_secondary_families(self):
+        c = generate_slo_definitions(self._multi(), self._biz("installed")).content
+        # secondary counter → freshness on its bare series
+        assert "job_task_total-freshness" in c
+        assert "count_over_time(job_task_total{" in c
+        # secondary summary → freshness on its _count series (a summary has no bare series)
+        assert "job_task_process_time_seconds-freshness" in c
+        assert "count_over_time(job_task_process_time_seconds_count{" in c
+        # marked for the cross-pilot rollup
+        assert "red_leg: secondary" in c
+        # the PRIMARY families keep their groundable SLOs, NOT freshness
+        assert "job_http_request_total-freshness" not in c
+
+    def test_deployed_defers_secondary(self):
+        c = generate_slo_definitions(self._multi(), self._biz("deployed")).content
+        assert "-freshness" not in c  # no fabricated production SLO
+        assert "red_leg" not in c
+
+    def test_single_family_service_byte_identical(self):
+        # only primary counter + summary → no secondary block fires (installed).
+        svc = ServiceHints(
+            service_id="core", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("core_http_request_total", "counter", "prometheus"),
+                ConventionMetric("core_http_request_duration_seconds", "summary", "prometheus"),
+            ],
+        )
+        c = generate_slo_definitions(svc, self._biz("installed")).content
+        assert "red_leg" not in c
+        assert "-freshness" not in c
+
+
+class TestOpenSloHelperParity:
+    """Mirror test for the distilled `_openslo_doc` scaffold: it must reproduce EXACTLY the dict the
+    5 hand-written SLO blocks used to build (key order included — yaml.dump(sort_keys=False) is
+    order-sensitive), so the consolidation can't silently drift the byte output. Covers both
+    indicator shapes (threshold + ratio) and the latency-p99 sli/alert-name override."""
+
+    def test_threshold_scaffold_matches_reference(self):
+        from startd8.observability.artifact_generator_generators import (
+            _openslo_doc, _threshold_indicator,
+        )
+        got = _openslo_doc(
+            name="svc-latency-avg",
+            labels={"service": "svc", "protocol": "http", "generated_by": "startd8"},
+            description="Average latency SLO for svc",
+            target=99.9,
+            window="30d",
+            severity="critical",
+            indicator_spec=_threshold_indicator("sum(rate(x_sum[5m]))/sum(rate(x_count[5m]))", 0.5, "lte"),
+        )
+        expected = {
+            "apiVersion": "openslo/v1", "kind": "SLO",
+            "metadata": {"name": "svc-latency-avg",
+                         "labels": {"service": "svc", "protocol": "http", "generated_by": "startd8"}},
+            "spec": {
+                "description": "Average latency SLO for svc", "target": 99.9,
+                "timeWindow": {"duration": "30d", "isRolling": True}, "budgetPolicy": "occurrences",
+                "indicator": {"metadata": {"name": "svc-latency-avg-sli"},
+                              "spec": {"thresholdMetric": {
+                                  "metricSource": {"type": "prometheus",
+                                                   "spec": {"query": "sum(rate(x_sum[5m]))/sum(rate(x_count[5m]))"}},
+                                  "threshold": 0.5, "operator": "lte"}}},
+                "alerting": {"name": "svc-latency-avg-alert", "labels": {"severity": "critical"}},
+            },
+        }
+        assert got == expected
+        # key ORDER parity (yaml.dump is order-sensitive) — the whole point of the mirror test
+        assert list(got["spec"].keys()) == list(expected["spec"].keys())
+
+    def test_ratio_scaffold_and_sli_override(self):
+        from startd8.observability.artifact_generator_generators import _openslo_doc
+        ind = {"ratioMetric": {"counter": {"metricSource": {"type": "prometheus", "spec": {"query": "rate(t[5m])"}}},
+                               "good": {"metricSource": {"type": "prometheus", "spec": {"query": "rate(g[5m])"}}}}}
+        got = _openslo_doc(name="svc-latency-p99", labels={"service": "svc"}, description="d",
+                           target=99.0, window="30d", severity="warning", indicator_spec=ind,
+                           sli_name="svc-latency-sli", alert_name="svc-latency-alert")
+        # the p99 quirk: sli/alert are the OVERRIDES, not {name}-sli
+        assert got["spec"]["indicator"]["metadata"]["name"] == "svc-latency-sli"
+        assert got["spec"]["alerting"]["name"] == "svc-latency-alert"
+        assert got["spec"]["indicator"]["spec"] == ind  # ratio shape passed through verbatim
+
+    def test_sli_alert_default_naming(self):
+        from startd8.observability.artifact_generator_generators import _openslo_doc, _threshold_indicator
+        got = _openslo_doc(name="svc-x-freshness", labels={}, description="d", target=97.0,
+                           window="30d", severity="warning",
+                           indicator_spec=_threshold_indicator("count_over_time(x[1h])/120", 0.97, "gte"))
+        assert got["spec"]["indicator"]["metadata"]["name"] == "svc-x-freshness-sli"
+        assert got["spec"]["alerting"]["name"] == "svc-x-freshness-alert"
+
+
+class TestMetricUnitSuffixAuthority:
+    """Metabolize (shadow-taxonomy → suffix authority): _metric_unit read a name-SUBSTRING proxy
+    (`request`→reqps won over any latency check; no `seconds` entry) → it mislabeled every
+    out-of-corpus latency (Saleor/Mastodon). The suffix-first reader reads the name's OWN unit.
+    This test BITES: the two out-of-corpus names FAIL on the old substring table, PASS now; and the
+    Go/Prometheus corpus stays byte-identical (parity)."""
+
+    def test_out_of_corpus_latency_now_correct(self):
+        from startd8.observability.artifact_generator_generators import _metric_unit
+        # these returned 'reqps' / '' on the old substring table — the bug the audit caught.
+        assert _metric_unit("django_http_requests_latency_seconds") == "s"
+        assert _metric_unit("sidekiq_job_process_time_seconds") == "s"
+        assert _metric_unit("celery_task_runtime_seconds") == "s"
+
+    def test_corpus_names_byte_identical(self):
+        # every Go/Prometheus corpus shape resolves to the SAME unit it did before (parity guard).
+        from startd8.observability.artifact_generator_generators import _metric_unit
+        assert _metric_unit("harbor_core_http_request_duration_seconds") == "s"
+        assert _metric_unit("istio_request_duration_milliseconds") == "ms"  # F1 stays correct
+        assert _metric_unit("harbor_core_http_request_total") == "reqps"
+        assert _metric_unit("x_request_size_bytes") == "bytes"
+        assert _metric_unit("thanos_objstore_operations_total") == ""  # no unit, no proxy — byte-identical
+        assert _metric_unit("some_metric_no_unit") == ""
+
+    def test_millis_not_crossmatched_by_seconds(self):
+        # _milliseconds must NOT be read as seconds (the F1 hazard, now structural via suffix order).
+        from startd8.observability.artifact_generator_generators import _metric_unit
+        assert _metric_unit("x_duration_milliseconds") == "ms"
