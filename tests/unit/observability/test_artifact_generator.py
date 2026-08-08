@@ -267,6 +267,19 @@ class TestLoadBusinessContext:
         monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "prod")
         assert load_business_context(None, {}).deployment_mode is None
 
+    def test_deployment_mode_provenance_tracer_logs(self, manifest_yaml, monkeypatch, caplog):
+        # The durable-pass tracer must emit the resolved mode, its source, the raw env seen, and the
+        # startd8 tree — so a silent generate-path no-op is diagnosable from one log line.
+        import logging
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "installed")
+        with caplog.at_level(logging.INFO):
+            load_business_context(manifest_yaml, {})
+        line = next((r.getMessage() for r in caplog.records if "deployment_mode resolved" in r.getMessage()), None)
+        assert line is not None
+        assert "resolved='installed'" in line
+        assert "source=env:STARTD8_DEPLOYMENT_MODE" in line
+        assert "startd8_src=" in line
+
 
 # ---------------------------------------------------------------------------
 # Helper tests

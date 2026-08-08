@@ -669,6 +669,24 @@ def load_business_context(
         )
         _mode_override = ""
     ctx.deployment_mode = _mode_override or (spec.get("deployment") or {}).get("mode")
+    # Self-diagnosing provenance (durable-pass tracer): emits the resolved mode, its SOURCE, the RAW
+    # env value this process actually saw, and WHICH startd8 tree this code came from — so a durable
+    # pass whose deployment_mode increment silently no-ops (e.g. sdk#411 gauge-freshness not firing)
+    # can be diagnosed from ONE log line: env-not-inherited (raw None) vs wrong-startd8 (unexpected
+    # src path) vs reader-worked-but-grader-dropped-it (resolved=='installed' yet coverage flat).
+    _mode_src = (
+        "env:STARTD8_DEPLOYMENT_MODE" if _mode_override
+        else "manifest:spec.deployment.mode" if (spec.get("deployment") or {}).get("mode")
+        else "none:criticality-only"
+    )
+    logger.info(
+        "deployment_mode resolved=%r source=%s (STARTD8_DEPLOYMENT_MODE=%r seen in os.environ) "
+        "startd8_src=%s",
+        ctx.deployment_mode,
+        _mode_src,
+        os.environ.get("STARTD8_DEPLOYMENT_MODE"),
+        __file__,
+    )
     # spec.deployment.runtime (compose|kubernetes|unknown) — gates the runtime-correct artifact set
     # (an explicit 'unknown' suppresses the k8s ServiceMonitor; FP-3 fail-closed).
     ctx.deployment_runtime = (spec.get("deployment") or {}).get("runtime")
