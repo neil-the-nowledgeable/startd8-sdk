@@ -394,3 +394,26 @@ class TestScore3GaugeFreshnessSlo:
         # 15s interval → 3600/15 = 240 expected samples per hour.
         result = generate_slo_definitions(self._svc(), self._biz("installed", "15s"))
         assert "/ 240" in result.content
+
+    def test_no_double_slo_when_gauge_also_declared_fr(self):
+        # Guard: the convention-freshness path (this) and the declared-functional
+        # SLO path must stay disjoint for a real gauge — a gauge declared ALSO as a
+        # freshness FR must NOT get two freshness SLOs (which would double-count it on
+        # the system axis). Exactly one freshness SLO references the gauge.
+        from startd8.observability.artifact_generator_models import FunctionalRequirement
+        svc = ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[ConventionMetric("harbor_queue_depth", "gauge", "prometheus")],
+        )
+        biz = BusinessContext(
+            criticality="high", availability="99.9", latency_p99="500ms",
+            throughput="100rps", project_id="golden-test", slo_window="30d",
+            deployment_mode="installed", metrics_interval="30s",
+            functional_requirements=[
+                FunctionalRequirement(id="f1", signal_kind="freshness",
+                                      service="exporter", target="99"),
+            ],
+        )
+        result = generate_slo_definitions(svc, biz)
+        # exactly one freshness SLO (3 name-slots per SLO: metadata + sli + alert).
+        assert result.content.count("harbor_queue_depth-freshness") == 3
