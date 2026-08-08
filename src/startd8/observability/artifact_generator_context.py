@@ -191,6 +191,11 @@ def classify_route_states(services: List[ServiceHints]) -> List[Dict[str, Any]]:
 #: a new MAJOR. (#226 contract-health CH-6.)
 SUPPORTED_ONBOARDING_SCHEMA_MAJOR = 1
 
+#: The two valid deployment modes (matches cli_capdevpipe's --deployment-mode flag + cli_generate's
+#: --mode + scaffold_codegen). The env override (STARTD8_DEPLOYMENT_MODE) is validated against this so
+#: a typo can't silently produce deployed behavior.
+_VALID_DEPLOYMENT_MODES = frozenset({"installed", "deployed"})
+
 
 def _warn_on_unrecognized_schema_version(data: Dict[str, Any], path: Path) -> None:
     """Warn — never fail — when the onboarding-metadata declares a schema MAJOR this consumer does not
@@ -647,7 +652,22 @@ def load_business_context(
     # is run-DERIVED from a plan that often declares no deployment.mode, so the env is how the durable
     # pass sets it without editing the derived manifest. Empty/unset env ⇒ falls through to the
     # manifest ⇒ byte-identical when the override is absent (empty-default IS the guard).
-    _mode_override = (os.environ.get("STARTD8_DEPLOYMENT_MODE") or "").strip()
+    # Normalize + validate the override: the durable pass sets this env DIRECTLY (bypassing the
+    # `capdevpipe run --deployment-mode` flag's validation), so a mis-cased/typo'd value ("Installed",
+    # "install", "prod") must NOT slip through — it would silently produce deployed behavior (the
+    # freshness gate is exact-match `== "installed"`, the threshold key falls back to "default"), i.e.
+    # the operator sets "installed", sees no lift, and thinks deploy-mode is broken. Fail LOUD instead.
+    _raw_override = (os.environ.get("STARTD8_DEPLOYMENT_MODE") or "").strip()
+    _mode_override = _raw_override.lower()
+    if _mode_override and _mode_override not in _VALID_DEPLOYMENT_MODES:
+        logger.warning(
+            "STARTD8_DEPLOYMENT_MODE=%r is not one of %s; IGNORING the override and falling back to "
+            "the manifest's spec.deployment.mode. (A mis-cased/typo'd value would otherwise silently "
+            "produce deployed behavior — no gauge-freshness SLOs, production thresholds.)",
+            _raw_override,
+            sorted(_VALID_DEPLOYMENT_MODES),
+        )
+        _mode_override = ""
     ctx.deployment_mode = _mode_override or (spec.get("deployment") or {}).get("mode")
     # spec.deployment.runtime (compose|kubernetes|unknown) — gates the runtime-correct artifact set
     # (an explicit 'unknown' suppresses the k8s ServiceMonitor; FP-3 fail-closed).
