@@ -53,7 +53,7 @@ An FR whose `service` matches no fleet member (`f.service in (None, "", service.
 
 ## 🃏 Wildcard (single-seeder, zero descendants — the orthogonality lane)
 
-**CH-6 — `schema_version` on the onboarding-metadata contract + consumer version-tolerance.** `S` · `new-capability` · seed **s1:S5** (only seeder 1 raised it; no VARY/CROSS descendants).
+**CH-6 — `schema_version` on the onboarding-metadata contract + consumer version-tolerance.** **→ SDK HALF DONE (this branch): consumer version-tolerance — `load_onboarding_metadata` warns (never fails) on an unrecognized schema MAJOR; absent = byte-identical. Producer-stamp (`schema_version` in onboarding-metadata) remains a ContextCore ask.** `S` · `new-capability` · seed **s1:S5** (only seeder 1 raised it; no VARY/CROSS descendants).
 The contract carries **no version field** (`onboarding-metadata.json` keys = `project_id`/`_note`/`instrumentation_hints`), and the consumer reads it purely structurally (`.get()` with silent defaults), so a producer schema bump degrades to *"observed by nothing"* rather than a legible mismatch — even though the SDK already stamps `schema_version` on its **own** output (`artifact_generator.py:1704`). Have the producer stamp `schema_version` and the consumer warn (not fail) on an unrecognized major. **The one true version-handshake idea; it underwrites CH-1's snapshot-refresh and CH-2's drift-diff (a version bump is the signal both watch for) — worth surfacing separately so a swarm of test-guards doesn't bury it.**
 
 ---
