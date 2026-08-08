@@ -1,7 +1,7 @@
 # Declared-Series Latency Threshold Unit-Scaling — Requirements
 
 **Project:** startd8 observability generator   **Criticality:** medium
-**Version:** 0.3.1 (post-planning + lessons + principles)   **Date:** 2026-08-08
+**Version:** 0.4 (IMPLEMENTED)   **Date:** 2026-08-08
 **Pairs with:** the embedded Plan (§Plan) below
 **Origin:** F1 of the [Istio generality survivorship-audit](./GENERALITY_SURVIVORSHIP_AUDIT_ISTIO.md).
 
@@ -94,9 +94,10 @@ plausible. This spec makes the declared path scale like the convention path.
 
 ## Open questions
 
-- **OQ-1 — Unknown-unit fallback (FR-3):** default-to-seconds-with-a-note, or threshold-defer? Lean
-  default-to-seconds + a provenance mark (least surprise; seconds is the OTel/`histogram` convention),
-  but confirm against a real no-suffix subject.
+- **OQ-1 → RESOLVED (default-to-seconds).** Confirmed against a REAL no-suffix subject: Harbor's
+  `harbor_task_queue_latency` (covers latency, no unit suffix). Implemented as seconds (the OTel/
+  `histogram` base unit) → numeric `0.5`. The ContextCore `unit` stamp (contextcore#404) will make this
+  explicit rather than assumed.
 - **OQ-2 — Honor `s.target` on the declared-base path?** Today it's ignored. Folding it in makes the fix
   "correct latency threshold" not just "scale the default." Small, but scope-expanding — decide before
   implementing.
@@ -117,7 +118,13 @@ plausible. This spec makes the declared path scale like the convention path.
 4. **I-4 (verify):** run the full observability suite; confirm only declared-latency targets changed and the Istio/Thanos gRPC + golden round-trips still pass.
 
 ## Appendix A — Accepted (with where merged)
-*(none yet — pre-review)*
+- **FR-1/FR-2/FR-3 — IMPLEMENTED** (this branch): `_METRIC_UNITS` learns milliseconds (ordered before
+  `duration`); `generate_declared_base_slos` scales the declared-latency default via the single-sourced
+  `scale_seconds_to_unit` (metric_descriptor.py, also backing `MetricDescriptor.scale_threshold_seconds`).
+  **Live-verified:** real Harbor `out/*/onboarding-metadata.json` no longer ship the string `target: 500ms`
+  on core/jobservice/registry — they now emit numeric `0.5` (seconds). ZERO existing goldens changed
+  (none locked the buggy value). New: `test_declared_latency_unit_scaling.py`.
+- **OQ-1 → default-to-seconds** (grounded on Harbor's suffix-less `harbor_task_queue_latency`).
 
 ## Appendix B — Rejected (with rationale)
 *(none yet)*
