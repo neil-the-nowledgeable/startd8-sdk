@@ -153,6 +153,18 @@ def run_command(
             "the observability stage's generate(affordance_map=). Absent → unchanged."
         ),
     ),
+    deployment_mode: Optional[str] = typer.Option(
+        None,
+        "--deployment-mode",
+        help=(
+            "Set the deployment mode ('installed' | 'deployed') for the observability "
+            "generate, so the durable pass can realize mode-gated artifacts (e.g. sdk#411's "
+            "installed-mode gauge-freshness SLOs). Thin entry point over the "
+            "STARTD8_DEPLOYMENT_MODE env — the exact twin of --affordance-map; the pipeline "
+            "runs in-process so the env reaches the observability stage's BusinessContext. "
+            "Absent → unchanged (the stage's existing default)."
+        ),
+    ),
 ) -> None:
     """Delegate to the embedded Python orchestrator with passthrough pipeline flags.
 
@@ -165,10 +177,21 @@ def run_command(
     (``pipeline/stages/observability.py:_resolve_affordance_map_export`` →
     ``generate(affordance_map=)``) — the flag only sets ``STARTD8_AFFORDANCE_MAP_EXPORT``,
     it does not add a second resolution path. The pipeline runs in-process, so the env
-    reaches the stage.
+    reaches the stage. ``--deployment-mode`` follows the identical shape (sets
+    ``STARTD8_DEPLOYMENT_MODE``), so the durable pass can realize mode-gated observability
+    artifacts; the observability stage reads it into its ``BusinessContext`` (loop half,
+    mirroring ``_resolve_affordance_map_export``).
     """
     if affordance_map is not None:
         os.environ["STARTD8_AFFORDANCE_MAP_EXPORT"] = str(affordance_map)
+    if deployment_mode is not None:
+        if deployment_mode not in ("installed", "deployed"):
+            console.print(
+                "[red]error[/red]: --deployment-mode must be 'installed' or 'deployed', "
+                f"got {deployment_mode!r}"
+            )
+            raise typer.Exit(_EXIT_ERROR)
+        os.environ["STARTD8_DEPLOYMENT_MODE"] = deployment_mode
     try:
         exit_code = run_embedded_pipeline(
             cwd=Path.cwd(),

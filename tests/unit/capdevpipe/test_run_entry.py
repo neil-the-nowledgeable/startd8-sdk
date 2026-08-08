@@ -431,3 +431,45 @@ class TestAffordanceMapFlag:
         result, _ = self._invoke(monkeypatch, ["run"])
         assert result.exit_code == 0
         assert "STARTD8_AFFORDANCE_MAP_EXPORT" not in os.environ
+
+
+class TestDeploymentModeFlag:
+    """`capdevpipe run --deployment-mode installed|deployed` is the exact twin of
+    --affordance-map: a THIN entry point that only SETS STARTD8_DEPLOYMENT_MODE so the
+    durable pass can realize mode-gated observability artifacts (e.g. sdk#411's
+    installed-mode gauge-freshness SLOs). The observability stage reads the env into its
+    BusinessContext (loop half). Absent → env untouched; invalid value → fail loud."""
+
+    def _invoke(self, monkeypatch, args):
+        from typer.testing import CliRunner
+
+        import startd8.cli_capdevpipe as mod
+
+        monkeypatch.setattr(
+            mod, "run_embedded_pipeline",
+            lambda **kw: 0,
+        )
+        monkeypatch.delenv("STARTD8_DEPLOYMENT_MODE", raising=False)
+        return CliRunner().invoke(mod.capdevpipe_app, args)
+
+    def test_installed_sets_env(self, monkeypatch):
+        result = self._invoke(monkeypatch, ["run", "--deployment-mode", "installed"])
+        assert result.exit_code == 0
+        assert os.environ.get("STARTD8_DEPLOYMENT_MODE") == "installed"
+
+    def test_deployed_sets_env(self, monkeypatch):
+        result = self._invoke(monkeypatch, ["run", "--deployment-mode", "deployed"])
+        assert result.exit_code == 0
+        assert os.environ.get("STARTD8_DEPLOYMENT_MODE") == "deployed"
+
+    def test_absent_leaves_env_untouched(self, monkeypatch):
+        result = self._invoke(monkeypatch, ["run"])
+        assert result.exit_code == 0
+        assert "STARTD8_DEPLOYMENT_MODE" not in os.environ
+
+    def test_invalid_value_fails_loud(self, monkeypatch):
+        # A bad mode must fail (mirrors cli_generate's --mode validation), NOT
+        # silently set a nonsense env the stage would then trust.
+        result = self._invoke(monkeypatch, ["run", "--deployment-mode", "prod"])
+        assert result.exit_code != 0
+        assert "STARTD8_DEPLOYMENT_MODE" not in os.environ
