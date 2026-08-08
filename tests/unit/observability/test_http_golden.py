@@ -417,3 +417,59 @@ class TestScore3GaugeFreshnessSlo:
         result = generate_slo_definitions(svc, biz)
         # exactly one freshness SLO (3 name-slots per SLO: metadata + sli + alert).
         assert result.content.count("harbor_queue_depth-freshness") == 3
+
+
+class TestScore3SecondaryRedFamilies:
+    """S7 (system axis): a service can emit MORE than one RED-shaped family. The primary
+    counter/summary get their groundable SLOs; SECONDARY counters/summaries have no
+    groundable magnitude here (business declares only request latency), so each gets the
+    honest data-availability treatment (installed mode). Lifts the jobservice residual;
+    single-family services + deployed mode are byte-identical."""
+
+    def _multi(self):
+        return ServiceHints(
+            service_id="jobservice", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("job_http_request_total", "counter", "prometheus"),        # primary
+                ConventionMetric("job_http_request_duration_seconds", "summary", "prometheus"),  # primary
+                ConventionMetric("job_task_total", "counter", "prometheus"),                 # secondary
+                ConventionMetric("job_task_process_time_seconds", "summary", "prometheus"),  # secondary
+            ],
+        )
+
+    def _biz(self, mode):
+        return BusinessContext(
+            criticality="high", availability="99.9", latency_p99="500ms", throughput="100rps",
+            project_id="golden-test", slo_window="30d", deployment_mode=mode, metrics_interval="30s",
+        )
+
+    def test_installed_covers_secondary_families(self):
+        c = generate_slo_definitions(self._multi(), self._biz("installed")).content
+        # secondary counter → freshness on its bare series
+        assert "job_task_total-freshness" in c
+        assert "count_over_time(job_task_total{" in c
+        # secondary summary → freshness on its _count series (a summary has no bare series)
+        assert "job_task_process_time_seconds-freshness" in c
+        assert "count_over_time(job_task_process_time_seconds_count{" in c
+        # marked for the cross-pilot rollup
+        assert "red_leg: secondary" in c
+        # the PRIMARY families keep their groundable SLOs, NOT freshness
+        assert "job_http_request_total-freshness" not in c
+
+    def test_deployed_defers_secondary(self):
+        c = generate_slo_definitions(self._multi(), self._biz("deployed")).content
+        assert "-freshness" not in c  # no fabricated production SLO
+        assert "red_leg" not in c
+
+    def test_single_family_service_byte_identical(self):
+        # only primary counter + summary → no secondary block fires (installed).
+        svc = ServiceHints(
+            service_id="core", transport="http", language="go",
+            convention_metrics=[
+                ConventionMetric("core_http_request_total", "counter", "prometheus"),
+                ConventionMetric("core_http_request_duration_seconds", "summary", "prometheus"),
+            ],
+        )
+        c = generate_slo_definitions(svc, self._biz("installed")).content
+        assert "red_leg" not in c
+        assert "-freshness" not in c

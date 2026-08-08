@@ -2542,6 +2542,76 @@ def generate_slo_definitions(
             }
             documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
 
+    # S7 (system axis) — data-availability for SECONDARY RED families the primary SLOs don't cover.
+    # The primary counter got an availability SLO and the primary summary a request-latency SLO, but a
+    # service can emit MORE RED-shaped families (jobservice: harbor_jobservice_task_total counter +
+    # harbor_jobservice_task_process_time_seconds summary). Neither has a groundable SLO magnitude here
+    # — the business context declares only REQUEST latency, and applying it to task-processing time
+    # would be an FR-26 fabrication (wrong domain) — so each gets the same honest data-availability
+    # (freshness) treatment as gauges, INSTALLED mode only: references the family → lifts the system
+    # axis (the jobservice 7/9 residual). `red_leg: secondary` marks them for the cross-pilot rollup.
+    # Byte-identical for single-family services (core) and in deployed/default mode.
+    if (getattr(business, "deployment_mode", None) or "") == "installed":
+        _st_avail = round(float(avail_raw), 2) if avail_raw else 99.0
+        _st_int = _parse_duration_to_seconds(
+            getattr(business, "metrics_interval", None) or "30s"
+        )
+        _st_sph = max(1, int(3600 / _st_int)) if _st_int else 120
+        _covered = {m.name for m in (counter_metric, summary_metric, histogram_metric) if m}
+        for _m in service.convention_metrics:
+            if _m.type not in ("counter", "summary") or _m.name in _covered:
+                continue
+            _sp = _prom_name(_m.name)
+            # a summary has no bare series — its always-present _count is the scrape signal;
+            # a counter's bare series works directly.
+            _series = f"{_sp}_count" if _m.type == "summary" else _sp
+            slo = {
+                "apiVersion": "openslo/v1",
+                "kind": "SLO",
+                "metadata": {
+                    "name": f"{service.service_id}-{_sp}-freshness",
+                    "labels": {
+                        "service": service.service_id,
+                        "protocol": service.transport,
+                        "generated_by": "startd8",
+                        "red_leg": "secondary",
+                    },
+                },
+                "spec": {
+                    "description": (
+                        f"Data-availability (freshness) SLO for the secondary {_m.type} family "
+                        f"{_sp} — being scraped as expected. Installed/local-mode forgiving default; "
+                        f"no fabricated magnitude threshold (FR-26)."
+                    ),
+                    "target": _st_avail,
+                    "timeWindow": {"duration": window, "isRolling": True},
+                    "budgetPolicy": "occurrences",
+                    "indicator": {
+                        "metadata": {"name": f"{service.service_id}-{_sp}-freshness-sli"},
+                        "spec": {
+                            "thresholdMetric": {
+                                "metricSource": {
+                                    "type": "prometheus",
+                                    "spec": {
+                                        "query": (
+                                            f"count_over_time({_series}{total_selector}[1h]) "
+                                            f"/ {_st_sph}"
+                                        ),
+                                    },
+                                },
+                                "threshold": round(_st_avail / 100.0, 4),
+                                "operator": "gte",
+                            },
+                        },
+                    },
+                    "alerting": {
+                        "name": f"{service.service_id}-{_sp}-freshness-alert",
+                        "labels": {"severity": severity},
+                    },
+                },
+            }
+            documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+
     if not documents:
         return ArtifactResult(
             artifact_type="slo_definition",
