@@ -1439,6 +1439,13 @@ class WorkflowLoopQueue:
                 job.status is LoopJobStatus.PROCESSING and has_live_lease
             ):
                 # Orphan sentinel on a non-held job (crash before save_job left it PENDING) → sweep.
+                # H1: an *in-flight* acquire is momentarily "sentinel present + job still PENDING on disk"
+                # (the CAS creates the sentinel, then save_job writes PROCESSING). Sweeping it here would
+                # steal a live claim and re-open the double-drain. The sentinel carries `acquired_at`;
+                # only sweep orphans OLDER than a grace window, so a fresh in-flight acquire is protected.
+                # A missing/unparseable acquired_at is treated as old (genuinely broken → sweep).
+                if self._sentinel_within_grace(job.job_id, now):
+                    continue
                 self.storage.release_sentinel(job.job_id)
                 if job.lease_owner is not None:
                     job.lease_owner = None
@@ -1449,6 +1456,22 @@ class WorkflowLoopQueue:
                     job.status.value,
                 )
         return reclaimed
+
+    #: H1: an orphan sentinel younger than this is assumed to be an in-flight acquire (the CAS-create →
+    #: save_job window is sub-second; a generous grace absorbs FS/GC pauses) and is NOT swept.
+    _ORPHAN_SWEEP_GRACE_SECONDS = 30
+
+    def _sentinel_within_grace(self, job_id: str, now: datetime) -> bool:
+        """True if the sentinel's ``acquired_at`` is younger than the sweep grace (protect in-flight)."""
+        info = self.storage.read_sentinel(job_id)
+        acquired_at = (info or {}).get("acquired_at")
+        if not acquired_at:
+            return False  # no timestamp → not an in-flight acquire we can vouch for → sweepable
+        try:
+            age = (now - datetime.fromisoformat(acquired_at)).total_seconds()
+        except (ValueError, TypeError):
+            return False
+        return age < self._ORPHAN_SWEEP_GRACE_SECONDS
 
     @staticmethod
     def _check_sdk_budget(job: WorkflowLoopJob, *, at: str) -> None:
@@ -1665,7 +1688,15 @@ class WorkflowLoopQueue:
         # REQ-24 FR-1/FR-6/L-2: the atomic-claim CAS lives at this single INTO-PROCESSING chokepoint,
         # so *every* acquire path (run_next + drain_sdk_workflow + drain_one_shot + the two agent-surface
         # drains) is race-safe, not just run_next's. Symmetric to the OUT-branch sentinel release below.
-        if status is LoopJobStatus.PROCESSING and self.config.lease_ttl_seconds > 0:
+        if status is LoopJobStatus.PROCESSING:
+            # H2: the CAS runs on EVERY acquire, independent of lease_ttl_seconds — mutual exclusion and
+            # lease-expiry are orthogonal. `ttl<=0` yields a non-expiring lease (no auto-reclaim; recover
+            # via `wloop requeue`), but the sentinel still serializes surfaces. Coupling the two (the old
+            # `and ttl > 0` gate) silently disabled mutual exclusion whenever reclaim was disabled.
+            # M2: owner defaults to the job's own surface_id when no explicit claimer is set. The O_EXCL
+            # create still serializes two *same-surface* racers (the loser's `previous` is PENDING → it
+            # raises); the per-adapter `.claude`/`.codex` locks are what *distinguish* same-surface
+            # sessions — do not delete them as "redundant".
             owner = job.lease_owner or job.surface_id or "unknown"
             if not self.storage.try_acquire_sentinel(
                 job.job_id, owner, dry_run=job.dry_run
@@ -1679,9 +1710,13 @@ class WorkflowLoopQueue:
                     )
             job.lease_owner = owner
             job.lease_expires_at = (
-                datetime.now(timezone.utc)
-                + timedelta(seconds=self.config.lease_ttl_seconds)
-            ).isoformat()
+                (
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=self.config.lease_ttl_seconds)
+                ).isoformat()
+                if self.config.lease_ttl_seconds > 0
+                else None  # non-expiring lease (ttl disabled) — still mutually exclusive
+            )
         elif status is not LoopJobStatus.PROCESSING:
             # OUT branch: the single cleanup chokepoint (FR-4/R1-F5) — every leave-PROCESSING path
             # (release / complete_drain / cancel / requeue / reclaim) unlinks the sentinel + clears
