@@ -2147,7 +2147,7 @@ def _rescore_dashboard_specs_after_binds(
             vr = validate_dashboard(
                 art.content,
                 art.output_path,
-                autofix=False,
+                autofix=True,
                 service_id=art.service_id,
                 transport=transport,
             )
@@ -2156,6 +2156,32 @@ def _rescore_dashboard_specs_after_binds(
                 "post-bind dashboard re-score failed for %s", art.service_id
             )
             continue
+        # Class B fix-once (terminal normalize): the affordance RED/coverage/orientation binds
+        # append panels AFTER Phase 4.5's gridPos repair ran, and those panels carry no gridPos
+        # (see _apply_affordance_coverage_bind_panels — the panel dict has no gridPos key). This
+        # re-score is the TRUE emit boundary — the last stage before _write_artifacts writes
+        # art.content — so re-establish the gridPos invariant over the FULLY-MERGED post-bind spec
+        # here, positioning every panel ANY binder appended (not just this pilot's appender).
+        # repair_gridpos only fills panels lacking a position (existing gridPos preserved); the
+        # leading comment header is preserved byte-for-byte. Structural/layout only — never
+        # synthesizes panel CONTENT (substrate-honesty carve-out). See
+        # PROPOSAL_generation_invariant_classes.md Class B.
+        if getattr(vr, "repairs_applied", None):
+            try:
+                from startd8.validators.observability_artifact_checks import (
+                    repair_gridpos,
+                )
+
+                _spec = yaml.safe_load(art.content) or {}
+                _spec, _ = repair_gridpos(_spec)
+                art.content = _coverage_bind_preserve_header(
+                    art.content,
+                    yaml.dump(_spec, default_flow_style=False, sort_keys=False),
+                )
+            except Exception:
+                logger.exception(
+                    "post-bind gridPos re-normalize failed for %s", art.service_id
+                )
         art.quality = {
             "score": round(vr.score, 4),
             "checks_passed": vr.checks_passed,
