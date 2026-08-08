@@ -418,6 +418,55 @@ class TestScore3GaugeFreshnessSlo:
         # exactly one freshness SLO (3 name-slots per SLO: metadata + sli + alert).
         assert result.content.count("harbor_queue_depth-freshness") == 3
 
+    def test_declared_emitted_series_gauge_gets_freshness_slo(self):
+        # sdk#411 follow-up (S6 root cause): a prometheus_exporter-style service emits its
+        # gauges into declared_emitted_series, NOT convention_metrics. Before the fix the
+        # convention-only loop produced ZERO freshness SLOs for it (Harbor exporter stuck at
+        # live system coverage 7/22=0.3182). The declared-series gauges must now get one each,
+        # and a non-gauge declared series must NOT.
+        from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+        svc = ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[],  # the trap: exporter carries NO convention gauge
+            declared_emitted_series=[
+                DeclaredEmittedSeries("harbor_statistics_total_projects", "gauge"),
+                DeclaredEmittedSeries("harbor_statistics_total_users", "gauge"),
+                DeclaredEmittedSeries("harbor_core_http_requests_total", "counter"),
+            ],
+        )
+        result = generate_slo_definitions(svc, self._biz("installed"))
+        assert result.status == "generated"
+        assert "harbor_statistics_total_projects-freshness" in result.content
+        assert "harbor_statistics_total_users-freshness" in result.content
+        assert "count_over_time(harbor_statistics_total_projects{" in result.content
+        # a counter is not a gauge → no freshness SLO from the gauge lane
+        assert "harbor_core_http_requests_total-freshness" not in result.content
+
+    def test_declared_series_gauge_deduped_against_convention(self):
+        # Same gauge name in BOTH sources → exactly ONE freshness SLO (convention wins);
+        # no double-count on the system axis.
+        from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+        svc = ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[ConventionMetric("harbor_queue_depth", "gauge", "prometheus")],
+            declared_emitted_series=[DeclaredEmittedSeries("harbor_queue_depth", "gauge")],
+        )
+        result = generate_slo_definitions(svc, self._biz("installed"))
+        assert result.content.count("harbor_queue_depth-freshness") == 3
+
+    def test_declared_series_gauge_defers_in_deployed(self):
+        # The declared-series gauge lane is ALSO installed-only — deployed defers (byte-identical).
+        from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+        svc = ServiceHints(
+            service_id="exporter", transport="http", language="go",
+            convention_metrics=[],
+            declared_emitted_series=[
+                DeclaredEmittedSeries("harbor_statistics_total_projects", "gauge"),
+            ],
+        )
+        result = generate_slo_definitions(svc, self._biz("deployed"))
+        assert "freshness" not in result.content
+
 
 class TestScore3SecondaryRedFamilies:
     """S7 (system axis): a service can emit MORE than one RED-shaped family. The primary
