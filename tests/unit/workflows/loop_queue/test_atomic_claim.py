@@ -146,18 +146,69 @@ def test_expired_lease_reclaimed_and_sentinel_removed(tmp_path: Path):
     queue.claim("exp", "surfB")  # next claim wins
 
 
+def _backdate_sentinel(queue, job_id: str, seconds: int) -> None:
+    """Rewrite the sentinel's acquired_at into the past (simulate a real, aged crash-orphan)."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    path = queue.storage.claim_lock_path(job_id)
+    info = json.loads(path.read_text())
+    info["acquired_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    ).isoformat()
+    path.write_text(json.dumps(info))
+
+
 def test_crash_orphan_sentinel_on_pending_job_is_swept(tmp_path: Path):
     """The permanent-wedge case (R1-F1/R1-S4): crash between O_EXCL and save_job leaves a sentinel
     on a still-PENDING job; lease_expired() returns False on a None lease, so only the orphan sweep
-    recovers it."""
+    recovers it. H1: the orphan must be OLDER than the sweep grace to be reclaimed."""
     queue = _make_queue(tmp_path / "q")
     _enqueue_pending(queue, tmp_path, "orphan")
-    # simulate the crash: sentinel exists, job never left PENDING, no lease stamped
+    # simulate an AGED crash orphan: sentinel exists, job never left PENDING, acquired long ago
     assert queue.storage.try_acquire_sentinel("orphan", "deadproc")
+    _backdate_sentinel(queue, "orphan", queue._ORPHAN_SWEEP_GRACE_SECONDS + 60)
     assert queue.get("orphan").status is LoopJobStatus.PENDING
     queue.reclaim_expired_leases()
     assert not queue.storage.claim_lock_path("orphan").exists()
     queue.claim("orphan", "surfB")  # no longer wedged
+
+
+def test_orphan_sweep_grace_protects_in_flight_acquire(tmp_path: Path):
+    """H1: a FRESH sentinel on a PENDING job (an in-flight acquire mid CAS→save_job) must NOT be
+    swept — doing so would steal a live claim and re-open the double-drain."""
+    queue = _make_queue(tmp_path / "q")
+    _enqueue_pending(queue, tmp_path, "inflight")
+    assert queue.storage.try_acquire_sentinel("inflight", "surfA")  # acquired_at = now
+    queue.reclaim_expired_leases()
+    assert queue.storage.claim_lock_path("inflight").exists()  # protected by grace
+
+
+def test_cas_active_even_when_ttl_disabled(tmp_path: Path):
+    """H2: lease_ttl_seconds=0 disables auto-reclaim but MUST NOT disable mutual exclusion — the CAS
+    still runs, so a second claim is still refused."""
+    queue = _make_queue(tmp_path / "q", ttl=0)
+    _enqueue_pending(queue, tmp_path, "nolease")
+    queue.claim("nolease", "surfA")
+    assert queue.storage.claim_lock_path("nolease").exists()  # sentinel created despite ttl=0
+    assert queue.get("nolease").lease_expires_at is None       # non-expiring lease
+    with pytest.raises(LoopClaimHeld):
+        queue.claim("nolease", "surfB")                        # still mutually exclusive
+
+
+def test_write_failure_unlinks_empty_sentinel(tmp_path: Path, monkeypatch):
+    """M3: if os.write fails after the O_EXCL create, the empty sentinel must be unlinked — not left
+    to wedge every future claim."""
+    import os as _os
+
+    queue = _make_queue(tmp_path / "q")
+    _enqueue_pending(queue, tmp_path, "wf")
+    monkeypatch.setattr(_os, "write", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        queue.storage.try_acquire_sentinel("wf", "surfA")
+    assert not queue.storage.claim_lock_path("wf").exists()  # no empty-sentinel wedge
+    monkeypatch.undo()
+    queue.claim("wf", "surfB")  # claim works after the transient failure
 
 
 # --- FR-2 / R1-S6: dry-run must not leak a sentinel ------------------------

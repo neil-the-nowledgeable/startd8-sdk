@@ -91,7 +91,14 @@ class LoopQueueStorage:
             return False
         try:
             os.write(fd, payload)
-        finally:
+        except Exception:
+            # M3: the O_EXCL create already succeeded, so a write failure would leave an EMPTY sentinel
+            # (owner unreadable) that blocks every future claim until the orphan-sweep clears it. Unlink
+            # it here so a transient write error doesn't wedge the job — the claim simply didn't happen.
+            os.close(fd)
+            path.unlink(missing_ok=True)
+            raise
+        else:
             os.close(fd)
         return True
 
