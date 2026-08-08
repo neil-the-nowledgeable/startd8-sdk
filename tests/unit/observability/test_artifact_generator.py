@@ -935,6 +935,43 @@ class TestEmitTimeSdkSha:
         assert "secondary-red-families" in prov["sdk_capabilities"]
 
 
+class TestManifestProvenance:
+    """Metabolize (audit-then-metabolize): the quality report stamped the SDK substrate (sdk_sha)
+    but was BLIND to the MANIFEST substrate — so two runs on different manifests with the same SDK
+    had byte-identical provenance and their coverage numbers got compared as commensurable (the
+    export-durable→spine-newest coverage whiplash). _manifest_provenance stamps manifest_sha +
+    deployment_mode so the substrate is visible and a cross-substrate comparison is detectable."""
+
+    class _Biz:
+        def __init__(self, mode):
+            self.deployment_mode = mode
+
+    def test_stamps_manifest_sha_and_mode(self, tmp_path):
+        import hashlib
+        from startd8.observability.artifact_generator import _manifest_provenance
+        mf = tmp_path / "onboarding.json"
+        mf.write_text('{"project_id": "harbor"}')
+        prov = _manifest_provenance(mf, self._Biz("installed"))
+        assert prov["manifest_sha"] == hashlib.sha256(mf.read_bytes()).hexdigest()
+        assert prov["deployment_mode"] == "installed"
+        assert prov["manifest_path"] == str(mf)
+
+    def test_different_manifests_bite(self, tmp_path):
+        # The whiplash bite: two DIFFERENT manifests must yield DIFFERENT manifest_sha.
+        from startd8.observability.artifact_generator import _manifest_provenance
+        a = tmp_path / "a.json"; a.write_text('{"covers": "throughput"}')
+        b = tmp_path / "b.json"; b.write_text('{"covers": null}')
+        pa = _manifest_provenance(a, self._Biz("installed"))
+        pb = _manifest_provenance(b, self._Biz("installed"))
+        assert pa["manifest_sha"] != pb["manifest_sha"]
+
+    def test_absent_path_fails_soft(self):
+        # No manifest path ⇒ empty stamp, never raises (byte-identical for callers not threading it).
+        from startd8.observability.artifact_generator import _manifest_provenance
+        prov = _manifest_provenance(None, self._Biz(""))
+        assert prov["manifest_sha"] == "" and prov["manifest_path"] == "" and prov["deployment_mode"] == ""
+
+
 class TestStaleSdkGuard:
     """The stale-SDK-import poka-yoke: a durable pass declares the features it expects; if the
     quality was scored by an OLDER startd8 (the import-shadow that no-op'd sdk#411/#429), the
