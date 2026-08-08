@@ -422,6 +422,7 @@ def _parse_declared_series(raw: Any) -> List["DeclaredEmittedSeries"]:
                 error_selector=str(s.get("error_selector", "")),
                 enabling_flag=str(s.get("enabling_flag", "")),
                 target=target,
+                unit=str(s.get("unit", "")),  # contextcore#404 — producer-stamped unit (optional)
             )
         )
     return out
