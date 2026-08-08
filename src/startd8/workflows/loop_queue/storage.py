@@ -60,8 +60,14 @@ class LoopQueueStorage:
     # -- REQ-24: atomic claim sentinel (the per-job CAS gate, FR-1) ----------
 
     def claim_lock_path(self, job_id: str) -> Path:
-        """The per-job ``CLAIM.lock`` sentinel — its ``O_EXCL`` creation is the compare-and-set."""
-        return self.artifact_dir(job_id) / "CLAIM.lock"
+        """The per-job WLQ claim sentinel — its ``O_EXCL`` creation is the compare-and-set.
+
+        Named ``wlq-claim.lock`` (NOT ``CLAIM.lock``) to avoid colliding with the drain adapters'
+        pre-existing per-job locks: codex's bare ``CLAIM.lock`` (``codex-loop`` FR-17) and claude's
+        ``CLAIM.lock.claude``. This is the surface-neutral WLQ-owned primitive; those are the
+        deprecated per-adapter layer (REQ-24 It-3).
+        """
+        return self.artifact_dir(job_id) / "wlq-claim.lock"
 
     def try_acquire_sentinel(
         self, job_id: str, owner: Optional[str], *, dry_run: bool = False

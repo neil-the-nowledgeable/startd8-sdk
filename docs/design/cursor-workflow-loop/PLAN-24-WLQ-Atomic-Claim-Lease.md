@@ -18,7 +18,7 @@
    (`models.py:346`, beside `lease_expires_at`). No migration — additive optional field; existing job
    files deserialize with `lease_owner=None`.
 2. **Sentinel helper (FR-1).** Add `claim_lock_path(job_id) -> Path` to `LoopQueueStorage`
-   (`storage.py`, beside `handoff_path`/`result_path`) → `artifact_dir(job_id)/CLAIM.lock`. Add
+   (`storage.py`, beside `handoff_path`/`result_path`) → `artifact_dir(job_id)/wlq-claim.lock`. Add
    `try_acquire_sentinel(job_id, owner, *, dry_run=False) -> bool` (os.open `O_CREAT|O_EXCL|O_WRONLY`,
    write the sentinel schema **`{"owner": "<surface_id>", "acquired_at": "<UTC ISO-8601>"}`** as valid
    UTF-8 JSON, close; `FileExistsError` → `False`) **[R1-S3]** and `release_sentinel(job_id, *,
@@ -49,7 +49,7 @@
    **Add an orphan sweep [R1-F1/R1-S4]:** because `lease_expired()` returns `False` when
    `lease_expires_at` is `None` (`models.py:425`), a crash between `O_EXCL` create and `save_job`
    leaves a sentinel whose job is `PENDING` (or `PROCESSING` with no lease) that TTL alone never
-   reclaims → permanent wedge. Sweep: for each existing `CLAIM.lock`, if its job is not validly held
+   reclaims → permanent wedge. Sweep: for each existing `wlq-claim.lock`, if its job is not validly held
    (job `PENDING`, or `PROCESSING` with absent/expired `lease_expires_at`), unlink the sentinel +
    clear `lease_owner`. Keep sentinel-first acquire ordering (step 3) — reversing it would reopen the
    TOCTOU; the orphan sweep, not ordering, is the crash-window remedy.
@@ -81,7 +81,7 @@
   calls `barrier.wait()` immediately before the acquire so both hit `try_acquire_sentinel`
   concurrently [R1-S1].** Without the barrier one process finishes before the other starts and the
   TOCTOU window is never exercised → structural false green. Assert **exactly one** wins, one gets
-  exit-3 / `None`, and exactly one `CLAIM.lock` exists. Processes not threads — the primitive is
+  exit-3 / `None`, and exactly one `wlq-claim.lock` exists. Processes not threads — the primitive is
   cross-process.
 - **Single-holder (FR-2).** Second `claim` on a held job exits 3; a `claim` with no `--surface` exits
   non-zero and creates no sentinel.
@@ -91,11 +91,11 @@
   variant: `PROCESSING` with `lease_expires_at=None`); assert `reclaim_expired_leases` unlinks it and
   the next `claim` wins (guards the permanent-wedge case).
 - **Happy-path cleanup (FR-4) [R1-S9].** After a full `run_next` → drain → consume cycle, assert
-  `CLAIM.lock` is gone and `lease_owner is None` (catches sentinel leak on the normal
+  `wlq-claim.lock` is gone and `lease_owner is None` (catches sentinel leak on the normal
   `complete_drain → _transition` path).
 - **Owner-authority (FR-4) [R1-S2/R1-S5].** (a) surface B `run_next` on a job held by surface A does
   not consume it; (b) after TTL takeover by B, A's late `release` leaves B's sentinel intact.
-- **Dry-run no-leak (FR-2) [R1-S6].** `claim --dry-run` leaves no `CLAIM.lock` on disk.
+- **Dry-run no-leak (FR-2) [R1-S6].** `claim --dry-run` leaves no `wlq-claim.lock` on disk.
 - **All-5-acquire-sites gated (FR-6) [L-2].** A direct `drain_sdk_workflow`/`drain_one_shot` race (not
   via `run_next`) → exactly one wins; asserts the chokepoint covers non-`run_next` paths.
 - **Recovery-verb override (FR-7) [L-1].** `requeue`/`cancel` on a job held by another surface succeeds
@@ -200,7 +200,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
 | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
 | R1-S8 | Risks | medium | Verify that the `requeue` sentinel-cleanup site count matches the actual code. The plan references `requeue (`:238/:248`)` but the code (queue.py) shows `lease_expires_at = None` at lines 248 and 262, not 238 and 248. Line 248 is inside the `AWAITING_TRIAGE → PENDING` early-return branch; line 262 is the general requeue. Both paths must call `release_sentinel`. If the plan's line reference is wrong, one of the two sites may be missed during implementation. | The Reference-Audit in REQ-24 §0.1 and the plan's It-1 step 6 enumerate ``:238/:248`` as the requeue sites. Actual code at queue.py shows the two `lease_expires_at = None` assignments at 248 and 262. This 10-line discrepancy is within refactor range but enough for an implementer to miss one site. | It-1 step 6 — Release + authority; cross-reference FR-4 "Every `lease_expires_at = None` site" | Re-run `grep -n 'lease_expires_at\s*=\s*None' queue.py` as a pre-commit check; confirm both 248 and 262 (and any others added since) call `release_sentinel`. |
-| R1-S9 | Validation | medium | Add an It-2 test that verifies sentinel cleanup after `run-next` consume (not just explicit `release`): call `run_next` on a job, complete the drain, assert sentinel is gone and `lease_owner=None`. | The It-2 acceptance criteria cover the race (one winner) and stale reclaim but not the normal happy-path cleanup. Without this test, sentinel leakage on normal `complete_drain` → `_transition` → non-PROCESSING path could go undetected. | It-2 — Stale reclaim bullet; add as a new bullet | Assert: after a full `run_next` → drain cycle on a job, `CLAIM.lock` does not exist and `job.lease_owner` is None. |
+| R1-S9 | Validation | medium | Add an It-2 test that verifies sentinel cleanup after `run-next` consume (not just explicit `release`): call `run_next` on a job, complete the drain, assert sentinel is gone and `lease_owner=None`. | The It-2 acceptance criteria cover the race (one winner) and stale reclaim but not the normal happy-path cleanup. Without this test, sentinel leakage on normal `complete_drain` → `_transition` → non-PROCESSING path could go undetected. | It-2 — Stale reclaim bullet; add as a new bullet | Assert: after a full `run_next` → drain cycle on a job, `wlq-claim.lock` does not exist and `job.lease_owner` is None. |
 
 ---
 

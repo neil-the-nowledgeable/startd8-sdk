@@ -31,9 +31,14 @@ TTL, resolved). Upstream ask: `OSS/Istio/analysis/CODE_ASKS_fleet_and_loop_REQ_P
 | `exit 3, retryable` is a given | `cli_wloop.py` is Typer; exit codes are `typer.Exit(code=…)`, not implicit. | FR-2 must specify `typer.Exit(code=3)` and document 0=won / 3=held-retryable / non-3-nonzero=error so drainers can branch. → **FR-2** |
 
 **Resolved open questions (from planning):**
-- **OQ-A → Sentinel home = `storage.artifact_dir(job_id)/CLAIM.lock`.** The per-job artifact dir
+- **OQ-A → Sentinel home = `storage.artifact_dir(job_id)/wlq-claim.lock`.** The per-job artifact dir
   already exists (`storage.py:55`); the sentinel rides beside `drain-handoff.json` / `drain-result.json`,
   so cleanup and discovery are trivial and per-job-scoped (not per-root like the old `CLAIM.lock.claude`).
+  **Name corrected during It-3 (was `CLAIM.lock`):** the codex adapter already owns a bare per-job
+  `CLAIM.lock` (`codex-loop` FR-17) and claude owns `CLAIM.lock.claude` — reusing `CLAIM.lock` collided
+  and broke 3 codex tests (contention on the shared path). The WLQ sentinel is the surface-neutral
+  `wlq-claim.lock`; the adapters' `CLAIM.lock*` are the deprecated per-adapter layer. (Overloaded-name
+  lesson — grep the consumers before choosing a filename.)
 - **OQ-B → Local-filesystem assumption is explicit.** `O_EXCL` atomicity is guaranteed on local FS;
   NFS/`O_EXCL` is out of scope (NR). The queue root is a local `.startd8/` dir today.
 
@@ -48,7 +53,7 @@ TTL, resolved). Upstream ask: `OSS/Istio/analysis/CODE_ASKS_fleet_and_loop_REQ_P
   Corrected here; all other refs verified live (see Reference-Audit below). This is why FR-3 cites
   `reclaim_expired_leases`/the TTL, not a method name.
 - **[Single-source vocabulary ownership]** — WLQ **job state remains the one source of truth**; the
-  `CLAIM.lock` sentinel and `lease_owner` are **derived records**, not a second authority. Reinforced
+  `wlq-claim.lock` sentinel and `lease_owner` are **derived records**, not a second authority. Reinforced
   in FR-4 by unlinking the sentinel + clearing `lease_owner` at *every* `lease_expires_at = None` site,
   so the sentinel can never drift out of sync with job state.
 - **[Propagation gate]** *(build-time, carried to PLAN It-3, not a spec change)* — "PR merged ≠ tip on
@@ -68,7 +73,7 @@ TTL, resolved). Upstream ask: `OSS/Istio/analysis/CODE_ASKS_fleet_and_loop_REQ_P
 | `atomic_write_json` (temp+rename) `file_operations.py:174` · fcntl `FileLock` `:183` | ✅ exist |
 | `wloop_app` Typer verbs `cli_wloop.py:38` | ✅ exists; `claim`/`release` **to-be-created** |
 | `WorkflowLoopJob.lease_owner` | ⛔ **to-be-created** (FR-5) |
-| `CLAIM.lock` sentinel + `claim_lock_path`/`try_acquire_sentinel` | ⛔ **to-be-created** (FR-1) |
+| `wlq-claim.lock` sentinel + `claim_lock_path`/`try_acquire_sentinel` | ⛔ **to-be-created** (FR-1) |
 
 ### 0.2 Design-Principle Hardening (v0.3.1)
 
@@ -126,7 +131,7 @@ Declared profile: **internal**
 ## Functional requirements
 
 - **FR-1 — Atomic acquire (CAS via sentinel).** Acquiring a `PENDING` job creates
-  `storage.artifact_dir(job_id)/CLAIM.lock` via `O_CREAT|O_EXCL` (a separate sentinel, **never** the
+  `storage.artifact_dir(job_id)/wlq-claim.lock` via `O_CREAT|O_EXCL` (a separate sentinel, **never** the
   job envelope); on success it stamps `lease_owner=<surface_id>` + `lease_expires_at` (reusing
   `_transition`'s existing stamp) — never read-then-write. **The `O_EXCL` create is positioned at the
   single `_transition`-INTO-`PROCESSING` chokepoint (`queue.py:1509-1512`, where the lease is stamped)
@@ -140,7 +145,7 @@ Declared profile: **internal**
   create and `save_job` (two separate FS ops) is handled by FR-3's orphan sweep, not by ordering.
   Touches: `src/startd8/workflows/loop_queue/queue.py` (claim path),
   `src/startd8/workflows/loop_queue/storage.py` (sentinel path helper). Verify: two processes race one
-  `PENDING` job → exactly one `CLAIM.lock` created, one `won`, one non-zero.
+  `PENDING` job → exactly one `wlq-claim.lock` created, one `won`, one non-zero.
 - **FR-2 — Single holder.** A second `claim` on a job whose sentinel exists and whose lease is not
   expired returns `typer.Exit(code=3)` (retryable); exit codes: `0`=won, `3`=held-retryable,
   other-nonzero=error. `--surface <sid>` is **required** (no default) — an acquire with no owner is
@@ -149,8 +154,8 @@ Declared profile: **internal**
   held job's second `claim` exits `3`; a `claim` with no `--surface` exits non-zero (never acquires).
 - **FR-3 — Stale reclaim + sentinel cleanup + orphan sweep (extends existing).** A lease past
   `lease_ttl_seconds` is reclaimable via the existing `reclaim_expired_leases`, **and that reclaim now
-  also unlinks the orphaned `CLAIM.lock`** so the next `claim` can win. **Reclaim must additionally
-  sweep crash-orphaned sentinels [R1-F1/R1-S4]:** a `CLAIM.lock` whose job is not in a validly-held
+  also unlinks the orphaned `wlq-claim.lock`** so the next `claim` can win. **Reclaim must additionally
+  sweep crash-orphaned sentinels [R1-F1/R1-S4]:** a `wlq-claim.lock` whose job is not in a validly-held
   state — job is `PENDING` (crash before `save_job`), or `PROCESSING` with `lease_expires_at` absent or
   expired — is an orphan and is unlinked (+ `lease_owner` cleared). This is required because
   `lease_expired()` returns `False` when `lease_expires_at` is `None` (`models.py:425`), so a
@@ -238,7 +243,7 @@ never hand-authored into a job file.
 | Entry (name) | Kind | Words/Structure | Notes |
 |--------------|------|-----------------|-------|
 | `WorkflowLoopJob.lease_owner` | field | structure | new `Optional[str]`; drift-hashed |
-| `CLAIM.lock` sentinel | file path | structure | `storage.artifact_dir(job_id)/CLAIM.lock`; `O_EXCL` = CAS; content `{"owner","acquired_at"}` UTC-ISO JSON |
+| `wlq-claim.lock` sentinel | file path | structure | `storage.artifact_dir(job_id)/wlq-claim.lock`; `O_EXCL` = CAS; content `{"owner","acquired_at"}` UTC-ISO JSON |
 | `wloop claim` | cli-verb | structure | `--job-id`, `--surface`; exit 0/3/other |
 | `wloop release` | cli-verb | structure | `--job-id`; owner-checked |
 | `reclaim_expired_leases` (extended) | queue-op | structure | now also unlinks sentinel |
@@ -329,7 +334,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 
 | ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
 | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
-| R1-F1 | Risks | high | Add an explicit acceptance criterion to FR-1 covering the crash window: "if the process dies after `O_EXCL` succeeds but before `save_job` completes, a subsequent `reclaim_expired_leases` call must detect and unlink the orphaned sentinel." | FR-1 Verify clause says "two processes race one `PENDING` job → exactly one `CLAIM.lock` created, one `won`, one non-zero." This tests the happy race path but not the crash-after-acquire path. `lease_expired()` at `models.py:424` returns `False` when `lease_expires_at` is `None`, so an orphan with a missing expiry is never reclaimed (permanent wedge). The design must specify how reclaim handles this case. | FR-1 — Verify clause; cross-reference FR-3 | Add test: sentinel present, job status=PROCESSING, `lease_expires_at=None` — assert `reclaim_expired_leases` unlinks the sentinel and requeues the job. |
+| R1-F1 | Risks | high | Add an explicit acceptance criterion to FR-1 covering the crash window: "if the process dies after `O_EXCL` succeeds but before `save_job` completes, a subsequent `reclaim_expired_leases` call must detect and unlink the orphaned sentinel." | FR-1 Verify clause says "two processes race one `PENDING` job → exactly one `wlq-claim.lock` created, one `won`, one non-zero." This tests the happy race path but not the crash-after-acquire path. `lease_expired()` at `models.py:424` returns `False` when `lease_expires_at` is `None`, so an orphan with a missing expiry is never reclaimed (permanent wedge). The design must specify how reclaim handles this case. | FR-1 — Verify clause; cross-reference FR-3 | Add test: sentinel present, job status=PROCESSING, `lease_expires_at=None` — assert `reclaim_expired_leases` unlinks the sentinel and requeues the job. |
 | R1-F2 | Interfaces | high | FR-6's Verify clause specifies "the other raises/exits non-zero" but does not distinguish between what `run_next` raises vs. what it returns when `_try_claim` returns False in the internal CAS path. For programmatic callers of `run_next` (not the CLI), the exception type or return value is the contract. | FR-2 specifies `typer.Exit(code=3)` for the CLI verb. FR-6 covers `run_next` internally but says only "raises/exits non-zero." Callers of `WorkflowLoopQueue.run_next()` need to know whether to catch `LoopQueueValidationError`, `LoopQueueBlockedError`, or check a return value. Without a typed contract, integrators will write catch-all handlers. | FR-6 — Verify clause; also Contract projection table | Add: "`run_next` returns `None` (or raises `LoopQueueValidationError`) when `_try_claim` returns False — specify which, and add it to the Contract projection table." Verify: unit test that calls `queue.run_next()` when another process holds the sentinel — assert the correct exception type (not `typer.Exit`). |
 | R1-F3 | Risks | medium | FR-3 states "`0` disables (unchanged)" — but with the sentinel in place, `lease_ttl_seconds=0` disables reclaim entirely and orphaned sentinels from crashed holders become permanent wedges with no operator recovery path. The requirement should specify the manual recovery mechanism for sentinel orphans when TTL is disabled. | FR-3 inherits the `0 disables` behavior from the parent OQ-5 requirement. The parent's TTL=0 meant "no automatic reclaim; use explicit requeue." With sentinels added, `requeue` now also must unlink the sentinel (It-1 step 6 covers this), so manual `requeue` is the recovery. But FR-3 does not say this — operators running TTL=0 may not know that `wloop requeue` is the recovery primitive. | FR-3 — body prose | Add: "When `lease_ttl_seconds=0`, automatic reclaim is disabled; sentinel orphans from crashed holders must be recovered via `wloop requeue --job-id <id>` (which also unlinks the sentinel per FR-4)." |
 | R1-F4 | Security | medium | FR-4 does not specify the error type or message returned when a non-owner calls `release`. The "rejected" outcome is behaviorally specified but not typed — callers cannot write precise exception handlers. | FR-4 Verify clause says "a non-owner `release` is rejected" but does not specify whether this is `LoopQueueValidationError`, `typer.Exit(code=1)` (CLI), or a silent no-op. A non-owner could be a bug (wrong surface ID) or an attack (spoofed surface ID); the response should be consistent and loggable. | FR-4 — Verify clause | Specify: "non-owner `release` raises `LoopQueueValidationError` (internal) / exits non-zero with a descriptive message (CLI); the rejection is logged at WARNING level with job_id and attempting owner." Verify: unit test catches the correct exception type with a specific message. |
