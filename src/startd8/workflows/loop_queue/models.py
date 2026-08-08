@@ -37,6 +37,12 @@ JOB_FILE_SUFFIX = "_startd8_wloop.json"
 #: EITHER direction) — the single-source-vocabulary triad guard.
 DRY_RUN_WOULD_ACT_VALUES: tuple[str, ...] = ("yes", "no", "not-mine")
 
+#: REQ-02/REQ-03 — the GUARDED MIRROR of contextcore's ``GAP_WHAT_CHANGE`` sentinel (a received-but-no-verdict
+#: hop, ``DryRunVerdict.gap()``). The Rundown spine-walk emits this on a dangling spine edge so the navigator's
+#: ``DryRunVerdict.is_gap()`` (``what_change == GAP_WHAT_CHANGE and received is False``) detects the hole.
+#: ``test_dry_run_parity.py`` asserts this == contextcore's ``GAP_WHAT_CHANGE`` (fails on drift either way).
+DRY_RUN_GAP_WHAT_CHANGE: str = "⟨GAP: no verdict emitted⟩"
+
 # Patterns that mark text as an agent-surface CRP bundle / mustache template —
 # both are incompatible with the SDK `review_template` str.format contract
 # (spike: KeyError 'n'; NR-8 / FR-9 / FR-20.3).

@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from startd8.workflows.loop_queue.models import (
+    DRY_RUN_GAP_WHAT_CHANGE,
     DRY_RUN_WOULD_ACT_VALUES,
     WorkflowLoopJob,
 )
@@ -41,6 +42,12 @@ def test_startd8_mirror_matches_vendored_contract():
         "startd8 DRY_RUN_WOULD_ACT_VALUES drifted from the vendored contextcore contract — "
         "coordinate the schema change in contextcore.contracts.dry_run first, then update the snapshot."
     )
+    # REQ-03: the Rundown spine-walk emits the GAP sentinel; it must match the contract byte-for-byte
+    # (the navigator's is_gap() compares what_change == GAP_WHAT_CHANGE).
+    assert DRY_RUN_GAP_WHAT_CHANGE == contract["gap_what_change"], (
+        "startd8 DRY_RUN_GAP_WHAT_CHANGE drifted from the vendored contextcore GAP sentinel — "
+        "a drifted sentinel means the navigator's is_gap() will not detect a Rundown GAP row."
+    )
 
 
 def test_vendored_contract_matches_live_contextcore_authority():
@@ -60,6 +67,10 @@ def test_vendored_contract_matches_live_contextcore_authority():
     # the verdict field set is also part of the contract the job's dry_run_trace dicts carry
     assert list(dr._VERDICT_FIELDS) == contract["verdict_fields"], (
         "DryRunVerdict field set drifted from the snapshot"
+    )
+    # REQ-03: the GAP sentinel the Rundown spine-walk emits must match the live authority
+    assert dr.GAP_WHAT_CHANGE == contract["gap_what_change"], (
+        "the vendored GAP sentinel drifted from the live contextcore GAP_WHAT_CHANGE"
     )
 
 
