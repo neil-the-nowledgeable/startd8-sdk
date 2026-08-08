@@ -236,8 +236,30 @@ def _severity_for(
     return severity
 
 
+#: Real unit SUFFIXES — a metric's unit is conventionally its trailing ``_<unit>`` (Prometheus/OTel).
+#: Checked BEFORE the name-heuristic ``_METRIC_UNITS`` table so a name reads its OWN unit instead of a
+#: substring PROXY: the table has no ``seconds`` entry and ``request`` matches first, so a latency
+#: named ``*_latency_seconds`` / ``*_time_seconds`` was mislabeled ``reqps`` / ``''`` (Saleor, Mastodon)
+#: — clean only because the Go-Prometheus corpus uses ``*_duration_seconds`` (which the ``duration``
+#: heuristic caught). Suffix-first is the "read what it emits, don't assume the corpus shape" fix
+#: (metabolize: substring-proxy → suffix authority). More-specific suffix first.
+_UNIT_SUFFIXES: Tuple[Tuple[str, str], ...] = (
+    ("_milliseconds", "ms"),
+    ("_microseconds", "us"),
+    ("_nanoseconds", "ns"),
+    ("_seconds", "s"),
+    ("_bytes", "bytes"),
+)
+
+
 def _metric_unit(metric_name: str) -> str:
-    """Infer unit from metric name patterns."""
+    """Infer a metric's unit — from its own unit SUFFIX first (the real convention), then the legacy
+    name-heuristic table (``duration``/``size``/``request``/``response``) for names with no recognized
+    unit suffix. Byte-identical for the Go corpus (``*_duration_seconds`` → ``s`` either way); fixes an
+    out-of-corpus latency substring-proxy mislabel (``*_latency_seconds`` → ``s``, not ``reqps``)."""
+    for suffix, unit in _UNIT_SUFFIXES:
+        if metric_name.endswith(suffix):
+            return unit
     for pattern, unit in _METRIC_UNITS.items():
         if pattern in metric_name:
             return unit

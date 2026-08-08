@@ -532,3 +532,33 @@ class TestOpenSloHelperParity:
                            indicator_spec=_threshold_indicator("count_over_time(x[1h])/120", 0.97, "gte"))
         assert got["spec"]["indicator"]["metadata"]["name"] == "svc-x-freshness-sli"
         assert got["spec"]["alerting"]["name"] == "svc-x-freshness-alert"
+
+
+class TestMetricUnitSuffixAuthority:
+    """Metabolize (shadow-taxonomy → suffix authority): _metric_unit read a name-SUBSTRING proxy
+    (`request`→reqps won over any latency check; no `seconds` entry) → it mislabeled every
+    out-of-corpus latency (Saleor/Mastodon). The suffix-first reader reads the name's OWN unit.
+    This test BITES: the two out-of-corpus names FAIL on the old substring table, PASS now; and the
+    Go/Prometheus corpus stays byte-identical (parity)."""
+
+    def test_out_of_corpus_latency_now_correct(self):
+        from startd8.observability.artifact_generator_generators import _metric_unit
+        # these returned 'reqps' / '' on the old substring table — the bug the audit caught.
+        assert _metric_unit("django_http_requests_latency_seconds") == "s"
+        assert _metric_unit("sidekiq_job_process_time_seconds") == "s"
+        assert _metric_unit("celery_task_runtime_seconds") == "s"
+
+    def test_corpus_names_byte_identical(self):
+        # every Go/Prometheus corpus shape resolves to the SAME unit it did before (parity guard).
+        from startd8.observability.artifact_generator_generators import _metric_unit
+        assert _metric_unit("harbor_core_http_request_duration_seconds") == "s"
+        assert _metric_unit("istio_request_duration_milliseconds") == "ms"  # F1 stays correct
+        assert _metric_unit("harbor_core_http_request_total") == "reqps"
+        assert _metric_unit("x_request_size_bytes") == "bytes"
+        assert _metric_unit("thanos_objstore_operations_total") == ""  # no unit, no proxy — byte-identical
+        assert _metric_unit("some_metric_no_unit") == ""
+
+    def test_millis_not_crossmatched_by_seconds(self):
+        # _milliseconds must NOT be read as seconds (the F1 hazard, now structural via suffix order).
+        from startd8.observability.artifact_generator_generators import _metric_unit
+        assert _metric_unit("x_duration_milliseconds") == "ms"
