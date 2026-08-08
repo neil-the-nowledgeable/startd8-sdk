@@ -30,6 +30,7 @@ from .metric_descriptor import (
     profile_for_kinds,
     profile_for_transport,
     resolve_sli_kinds,
+    scale_seconds_to_unit,
 )
 from .spec import Receiver
 
@@ -115,6 +116,12 @@ _INSTRUMENT_TO_QUERY: Dict[str, str] = {
 
 
 _METRIC_UNITS: Dict[str, str] = {
+    # ORDER MATTERS — `_metric_unit` returns the FIRST pattern found in the name. The ms patterns
+    # MUST precede "duration", because "duration" is a substring of `*_duration_milliseconds` too
+    # (F1: `istio_request_duration_milliseconds` was mis-read as seconds). "milliseconds" also
+    # contains "seconds", so any future "seconds" pattern must likewise follow these.
+    "milliseconds": "ms",
+    "millis": "ms",
     "duration": "s",
     "size": "bytes",
     "request": "reqps",
@@ -1515,6 +1522,16 @@ def generate_declared_base_slos(
             shape, threshold_field = shape_field
             query = _functional_sli_query(shape, s.name, selector)
             target, _tier = _resolve_threshold(threshold_field, business, [])
+            if threshold_field == "latency_p99" and target:
+                # F1 (FR-2/FR-3): the declared latency SLI is `histogram_quantile(...)`, which returns
+                # the series' NATIVE unit. Scale the default threshold ("500ms" → 0.5s) into that unit
+                # so `target` is a NUMBER matching the SLI — mirroring the convention path — instead of
+                # shipping the raw unit-suffixed string "500ms". Unit inferred from the series name;
+                # unknown suffix ⇒ seconds (the histogram/OTel base unit, FR-3). The ContextCore `unit`
+                # stamp (contextcore#404) will later retire this name-inference guess.
+                _unit = _metric_unit(s.name) or "s"
+                _scaled = scale_seconds_to_unit(_parse_duration_to_seconds(str(target)), _unit)
+                target = int(_scaled) if _scaled == int(_scaled) else _scaled
             slo = {
                 "apiVersion": "openslo/v1",
                 "kind": "SLO",

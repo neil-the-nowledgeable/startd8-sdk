@@ -133,7 +133,18 @@ class MetricDescriptor:
         emit ``500``. Returns a value comparable against ``histogram_quantile``
         output for this descriptor.
         """
-        return seconds * 1000.0 if self.latency_unit == "ms" else seconds
+        return scale_seconds_to_unit(seconds, self.latency_unit)
+
+
+def scale_seconds_to_unit(seconds: float, unit: str) -> float:
+    """The single latency-threshold unit scaler (F1): a seconds-valued threshold → the target unit.
+
+    ``ms`` ⇒ ×1000; anything else ⇒ seconds (the OTel/histogram base unit). Callers that only know a
+    metric NAME (the declared-series path) infer ``unit`` via ``_metric_unit``; ``MetricDescriptor``
+    passes its ``latency_unit``. One authority so the convention and declared paths cannot scale
+    differently.
+    """
+    return seconds * 1000.0 if unit == "ms" else seconds
 
 
 # ---------------------------------------------------------------------------
