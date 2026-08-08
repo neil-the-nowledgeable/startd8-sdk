@@ -35,6 +35,7 @@ from .models import (
     CrpReviewRequest,
     DrainHandoff,
     DrainResult,
+    LoopClaimHeld,
     LoopExecutor,
     LoopJobStatus,
     LoopQueueBlockedError,
@@ -227,12 +228,74 @@ class WorkflowLoopQueue:
             payload["jobs"] = [j.model_dump(mode="json") for j in matched]
         return payload
 
+    def claim(self, job_id: str, surface: str) -> WorkflowLoopJob:
+        """REQ-24 FR-1/FR-2: atomically claim a PENDING job for ``surface``.
+
+        Two racers both see PENDING and both call this; the ``_transition`` CAS (the ``O_EXCL``
+        sentinel create) admits exactly one — the loser raises :class:`LoopClaimHeld` (retryable).
+        ``surface`` is required so the claim always has an owner (CCbC / FR-5).
+        """
+        if not surface:
+            raise LoopQueueValidationError(
+                "claim requires a non-empty surface id (FR-2 / CCbC)"
+            )
+        job = self.get(job_id)
+        if job.status is LoopJobStatus.PROCESSING and not job.lease_expired():
+            raise LoopClaimHeld(
+                f"job {job_id!r} already held by "
+                f"{self.storage.sentinel_owner(job_id)!r}"
+            )
+        if job.status is not LoopJobStatus.PENDING:
+            raise LoopQueueValidationError(
+                f"job {job_id!r} not claimable: status={job.status.value}"
+            )
+        job.lease_owner = surface
+        return self._transition(job, LoopJobStatus.PROCESSING, f"claimed by {surface}")
+
+    def release(self, job_id: str, owner: Optional[str] = None) -> WorkflowLoopJob:
+        """REQ-24 FR-4: release a claim back to PENDING. Only the holder may release.
+
+        Authority is the *on-disk sentinel owner* (the physical truth). A non-owner is rejected +
+        logged; this also closes the release-vs-reacquire TOCTOU (R1-S5) — after a TTL takeover the
+        sentinel belongs to the new holder, so the prior owner's late release is refused and the new
+        holder's sentinel stays intact. ``owner=None`` is an operator release (skips the check).
+        """
+        job = self.get(job_id)
+        on_disk = self.storage.sentinel_owner(job_id)
+        if owner is not None and on_disk is not None and on_disk != owner:
+            logger.warning(
+                "WLQ release rejected job_id=%s attempted_by=%s held_by=%s",
+                job_id,
+                owner,
+                on_disk,
+            )
+            raise LoopQueueValidationError(
+                f"job {job_id!r} is held by {on_disk!r}, not {owner!r}"
+            )
+        return self._transition(
+            job, LoopJobStatus.PENDING, f"released by {owner or 'operator'}"
+        )
+
+    def _warn_if_displacing(self, job: WorkflowLoopJob, verb: str) -> None:
+        """REQ-24 FR-7: cancel/requeue are operator overrides — a forced release of a *live* claim
+        held by another surface is loud (WARNING naming the displaced owner), never silent theft."""
+        on_disk = self.storage.sentinel_owner(job.job_id)
+        if on_disk and not job.lease_expired():
+            logger.warning(
+                "WLQ %s displacing live claim job_id=%s held_by=%s "
+                "(operator override, FR-7)",
+                verb,
+                job.job_id,
+                on_disk,
+            )
+
     def cancel(self, job_id: str) -> WorkflowLoopJob:
         job = self.get(job_id)
         if job.status in (LoopJobStatus.COMPLETED, LoopJobStatus.CANCELLED):
             raise LoopQueueValidationError(
                 f"cannot cancel job {job_id!r} in status={job.status.value}"
             )
+        self._warn_if_displacing(job, "cancel")
         return self._transition(job, LoopJobStatus.CANCELLED, "cancelled explicitly")
 
     def requeue(self, job_id: str) -> WorkflowLoopJob:
@@ -242,6 +305,7 @@ class WorkflowLoopQueue:
         (deferred-triage resume / policy migration).
         """
         job = self.get(job_id)
+        self._warn_if_displacing(job, "requeue")
         if job.status is LoopJobStatus.AWAITING_TRIAGE and job.loop_id == "crp":
             request = job.crp_request()
             if job.rounds_completed() < request.max_rounds:
@@ -300,7 +364,8 @@ class WorkflowLoopQueue:
         agents: Optional[List[BaseAgent]] = None,
         on_progress: Optional[ProgressCallback] = None,
         dry_run: bool = False,
-    ) -> Union[DrainHandoff, WorkflowLoopJob]:
+        surface: Optional[str] = None,
+    ) -> Optional[Union[DrainHandoff, WorkflowLoopJob]]:
         """Advance one queue step.
 
         For a pending agent-surface CRP job this emits and persists a VASI
@@ -313,10 +378,45 @@ class WorkflowLoopQueue:
         For ``executor=sdk-workflow`` CRP jobs this maps
         :class:`CrpReviewRequest` → catalog workflow and runs it in-process
         (Increment 1.1 / FR-9).
+
+        REQ-24 FR-6: the pending→processing acquire goes through the ``_transition`` CAS chokepoint,
+        so two concurrent ``run_next`` calls on one job race safely — **the loser returns ``None``**
+        (the typed programmatic contract for a lost claim, distinct from the CLI's exit-3). ``surface``
+        is the caller's owner id (used for the acquire and the consume-branch ownership check).
         """
+        try:
+            return self._run_next_impl(
+                job_id,
+                agents=agents,
+                on_progress=on_progress,
+                dry_run=dry_run,
+                surface=surface,
+            )
+        except LoopClaimHeld:
+            logger.info(
+                "WLQ run_next lost claim job_id=%s surface=%s (returning None)",
+                job_id,
+                surface,
+            )
+            return None
+
+    def _run_next_impl(
+        self,
+        job_id: Optional[str] = None,
+        *,
+        agents: Optional[List[BaseAgent]] = None,
+        on_progress: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
+        surface: Optional[str] = None,
+    ) -> Union[DrainHandoff, WorkflowLoopJob]:
         self.reclaim_expired_leases()
         job = self._select_job(job_id)
         if job.status is LoopJobStatus.PROCESSING:
+            # REQ-24 R1-S2: a non-owning surface must not consume another surface's in-flight job.
+            if surface and job.lease_owner and job.lease_owner != surface:
+                raise LoopQueueValidationError(
+                    f"job {job.job_id!r} is held by {job.lease_owner!r}, not {surface!r}"
+                )
             if job.executor is LoopExecutor.SDK_WORKFLOW:
                 raise LoopQueueValidationError(
                     f"sdk-workflow job {job.job_id!r} is stuck processing; "
@@ -333,6 +433,10 @@ class WorkflowLoopQueue:
             raise LoopQueueValidationError(
                 f"job {job.job_id!r} is not drainable: status={job.status.value}"
             )
+        # REQ-24 FR-6: stamp the caller's surface as the claim owner so the acquire (via the
+        # `_transition` CAS in the drain methods below) records who holds it.
+        if surface:
+            job.lease_owner = surface
         if job.executor is LoopExecutor.SDK_WORKFLOW:
             unmet = self._unmet_dependencies(job)
             if unmet:
@@ -1272,24 +1376,46 @@ class WorkflowLoopQueue:
                 raise LoopQueueBlockedError(message)
 
     def reclaim_expired_leases(self) -> List[str]:
-        """OQ-5: reclaim abandoned ``processing`` jobs whose lease expired."""
+        """OQ-5 + REQ-24 FR-3: reclaim abandoned ``processing`` leases AND sweep crash-orphaned sentinels.
+
+        Two cases, both of which the bare-timestamp check alone misses (``lease_expired()`` returns
+        ``False`` when ``lease_expires_at`` is ``None``, so a crash-orphan would never be reclaimed →
+        permanent wedge):
+          * A ``PROCESSING`` job without a *live* lease (expired, or absent after a crash) → reclaim to
+            PENDING, unlinking its sentinel.
+          * A leftover ``CLAIM.lock`` on any non-held job (e.g. a crash between the ``O_EXCL`` create and
+            ``save_job`` left the job PENDING) → sweep the orphan sentinel so the next claim can win.
+        """
         if self.config.lease_ttl_seconds <= 0:
             return []
         reclaimed: List[str] = []
         now = datetime.now(timezone.utc)
         for job in self.list_jobs():
-            if job.status is not LoopJobStatus.PROCESSING:
-                continue
-            if not job.lease_expired(now=now):
-                continue
-            job.lease_expires_at = None
-            self._transition(
-                job,
-                LoopJobStatus.PENDING,
-                "lease expired; reclaimed for drain (OQ-5)",
-            )
-            reclaimed.append(job.job_id)
-            logger.info("WLQ reclaimed expired lease job_id=%s", job.job_id)
+            has_live_lease = bool(job.lease_expires_at) and not job.lease_expired(now=now)
+            if job.status is LoopJobStatus.PROCESSING and not has_live_lease:
+                self.storage.release_sentinel(job.job_id)
+                job.lease_owner = None
+                job.lease_expires_at = None
+                self._transition(
+                    job,
+                    LoopJobStatus.PENDING,
+                    "lease expired/orphaned; reclaimed for drain (OQ-5/FR-3)",
+                )
+                reclaimed.append(job.job_id)
+                logger.info("WLQ reclaimed job_id=%s", job.job_id)
+            elif self.storage.claim_lock_path(job.job_id).exists() and not (
+                job.status is LoopJobStatus.PROCESSING and has_live_lease
+            ):
+                # Orphan sentinel on a non-held job (crash before save_job left it PENDING) → sweep.
+                self.storage.release_sentinel(job.job_id)
+                if job.lease_owner is not None:
+                    job.lease_owner = None
+                    self.storage.save_job(job)
+                logger.info(
+                    "WLQ swept orphan sentinel job_id=%s status=%s",
+                    job.job_id,
+                    job.status.value,
+                )
         return reclaimed
 
     @staticmethod
@@ -1504,15 +1630,35 @@ class WorkflowLoopQueue:
         reason: Optional[str],
     ) -> WorkflowLoopJob:
         previous = job.status
-        job.status = status
-        job.status_reason = reason
+        # REQ-24 FR-1/FR-6/L-2: the atomic-claim CAS lives at this single INTO-PROCESSING chokepoint,
+        # so *every* acquire path (run_next + drain_sdk_workflow + drain_one_shot + the two agent-surface
+        # drains) is race-safe, not just run_next's. Symmetric to the OUT-branch sentinel release below.
         if status is LoopJobStatus.PROCESSING and self.config.lease_ttl_seconds > 0:
+            owner = job.lease_owner or job.surface_id or "unknown"
+            if not self.storage.try_acquire_sentinel(
+                job.job_id, owner, dry_run=job.dry_run
+            ):
+                on_disk = self.storage.sentinel_owner(job.job_id)
+                # Re-entrant re-stamp is allowed ONLY if we already held it (was PROCESSING, same
+                # owner). A PENDING→PROCESSING that loses the O_EXCL race is a genuine lost claim.
+                if not (previous is LoopJobStatus.PROCESSING and on_disk == owner):
+                    raise LoopClaimHeld(
+                        f"job {job.job_id!r} claim lost — held by {on_disk!r} (CAS)"
+                    )
+            job.lease_owner = owner
             job.lease_expires_at = (
                 datetime.now(timezone.utc)
                 + timedelta(seconds=self.config.lease_ttl_seconds)
             ).isoformat()
         elif status is not LoopJobStatus.PROCESSING:
+            # OUT branch: the single cleanup chokepoint (FR-4/R1-F5) — every leave-PROCESSING path
+            # (release / complete_drain / cancel / requeue / reclaim) unlinks the sentinel + clears
+            # the owner here, so the sentinel can never drift out of sync with job state.
+            self.storage.release_sentinel(job.job_id, dry_run=job.dry_run)
             job.lease_expires_at = None
+            job.lease_owner = None
+        job.status = status
+        job.status_reason = reason
         self.storage.save_job(job)
         logger.info(
             "WLQ status job_id=%s %s->%s reason=%s",

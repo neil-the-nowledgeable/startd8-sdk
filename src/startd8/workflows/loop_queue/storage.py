@@ -20,8 +20,10 @@ observed in a partially-written state across agent sessions (Mujō / FR-3).
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ...logging_config import get_logger
 from ...utils.file_operations import atomic_write_json
@@ -54,6 +56,77 @@ class LoopQueueStorage:
 
     def artifact_dir(self, job_id: str) -> Path:
         return self.queue_root / job_id
+
+    # -- REQ-24: atomic claim sentinel (the per-job CAS gate, FR-1) ----------
+
+    def claim_lock_path(self, job_id: str) -> Path:
+        """The per-job WLQ claim sentinel — its ``O_EXCL`` creation is the compare-and-set.
+
+        Named ``wlq-claim.lock`` (NOT ``CLAIM.lock``) to avoid colliding with the drain adapters'
+        pre-existing per-job locks: codex's bare ``CLAIM.lock`` (``codex-loop`` FR-17) and claude's
+        ``CLAIM.lock.claude``. This is the surface-neutral WLQ-owned primitive; those are the
+        deprecated per-adapter layer (REQ-24 It-3).
+        """
+        return self.artifact_dir(job_id) / "wlq-claim.lock"
+
+    def try_acquire_sentinel(
+        self, job_id: str, owner: Optional[str], *, dry_run: bool = False
+    ) -> bool:
+        """REQ-24 FR-1: atomically create the sentinel. Returns True=won, False=already held.
+
+        ``O_CREAT|O_EXCL`` makes the create atomic on a local FS: two racers → exactly one wins,
+        the other gets ``FileExistsError``. On ``dry_run`` we skip the real create and report success
+        (a probe must never leak a sentinel that blocks the next real claim — REQ-02 / R1-S6).
+        """
+        if dry_run:
+            return True
+        path = self.claim_lock_path(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            {"owner": owner, "acquired_at": datetime.now(timezone.utc).isoformat()}
+        ).encode("utf-8")
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            return False
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        return True
+
+    def read_sentinel(self, job_id: str) -> Optional[Dict[str, str]]:
+        """The sentinel's ``{owner, acquired_at}`` payload, or None if absent (``{}`` if unreadable)."""
+        path = self.claim_lock_path(job_id)
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def sentinel_owner(self, job_id: str) -> Optional[str]:
+        info = self.read_sentinel(job_id)
+        return info.get("owner") if info else None
+
+    def release_sentinel(
+        self, job_id: str, *, expected_owner: Optional[str] = None, dry_run: bool = False
+    ) -> bool:
+        """REQ-24 FR-4: unlink the sentinel. Returns True if released (or already absent).
+
+        ``expected_owner`` guards the release-vs-reacquire TOCTOU (R1-S5): if given and the on-disk
+        owner differs, we refuse (return False) rather than unlink a *different* (fresh) owner's
+        sentinel after a TTL takeover. ``missing_ok`` is intentional and load-bearing — release and
+        reclaim can race on expiry, and both must succeed (R1-S7).
+        """
+        if dry_run:
+            return True
+        if expected_owner is not None:
+            on_disk = self.sentinel_owner(job_id)
+            if on_disk is not None and on_disk != expected_owner:
+                return False
+        self.claim_lock_path(job_id).unlink(missing_ok=True)
+        return True
 
     def handoff_path(self, job_id: str) -> Path:
         return self.artifact_dir(job_id) / "drain-handoff.json"

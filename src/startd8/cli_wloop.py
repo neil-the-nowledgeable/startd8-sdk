@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional, TypeVar
 import typer
 
 from .workflows.loop_queue import (
+    LoopClaimHeld,
     LoopQueueBlockedError,
     LoopQueueConfig,
     LoopQueueError,
@@ -63,6 +64,10 @@ def _run(action: Callable[[], T]) -> T:
     route_sdk_logs_to_stderr()
     try:
         return action()
+    except LoopClaimHeld as e:
+        # REQ-24 FR-2: a lost/held claim is retryable — same exit code as Blocked (3).
+        print(f"Held: {e}", file=sys.stderr)
+        raise typer.Exit(3)
     except LoopQueueBlockedError as e:
         print(f"Blocked: {e}", file=sys.stderr)
         raise typer.Exit(3)
@@ -118,19 +123,27 @@ def status(
 @wloop_app.command("run-next")
 def run_next(
     job_id: Optional[str] = typer.Option(None, "--job-id"),
+    surface: Optional[str] = typer.Option(
+        None, "--surface", help="Owner surface id (REQ-24 FR-6): gates the acquire + consume."
+    ),
     root: Path = typer.Option(DEFAULT_QUEUE_RELATIVE, "--root", help=_ROOT_HELP),
 ) -> None:
-    """Emit a VASI hand-off, or consume its drain-result write-back."""
-    _print_json(_run(lambda: _queue(root).run_next(job_id)))
+    """Emit a VASI hand-off, or consume its drain-result write-back.
+
+    With ``--surface`` the acquire is owner-stamped and the consume rejects a non-owner (FR-6). On a
+    lost claim ``run_next`` returns ``null`` (the job is held by another surface — retry).
+    """
+    _print_json(_run(lambda: _queue(root).run_next(job_id, surface=surface)))
 
 
 @wloop_app.command("drain")
 def drain(
     job_id: Optional[str] = typer.Option(None, "--job-id"),
+    surface: Optional[str] = typer.Option(None, "--surface", help="Owner surface id (FR-6)."),
     root: Path = typer.Option(DEFAULT_QUEUE_RELATIVE, "--root", help=_ROOT_HELP),
 ) -> None:
     """Alias for ``run-next``."""
-    _print_json(_run(lambda: _queue(root).run_next(job_id)))
+    _print_json(_run(lambda: _queue(root).run_next(job_id, surface=surface)))
 
 
 @wloop_app.command("render")
@@ -141,6 +154,28 @@ def render(
     """Render/reuse an agent-surface CRP bundle without draining."""
     bundle = _run(lambda: _queue(root).render(job_id))
     _print_json({"job_id": job_id, "bundle_path": str(bundle)})
+
+
+@wloop_app.command("claim")
+def claim(
+    job_id: str = typer.Option(..., "--job-id"),
+    surface: str = typer.Option(..., "--surface", help="Owner surface id (required, FR-2/CCbC)."),
+    root: Path = typer.Option(DEFAULT_QUEUE_RELATIVE, "--root", help=_ROOT_HELP),
+) -> None:
+    """REQ-24 FR-1: atomically claim a PENDING job. Exit 0=won, 3=held (retry), 2=not claimable."""
+    _print_json(_run(lambda: _queue(root).claim(job_id, surface)))
+
+
+@wloop_app.command("release")
+def release(
+    job_id: str = typer.Option(..., "--job-id"),
+    surface: Optional[str] = typer.Option(
+        None, "--surface", help="Owner id; omit for an operator release."
+    ),
+    root: Path = typer.Option(DEFAULT_QUEUE_RELATIVE, "--root", help=_ROOT_HELP),
+) -> None:
+    """REQ-24 FR-4: release a claim back to PENDING. Only the holder (or an operator) may release."""
+    _print_json(_run(lambda: _queue(root).release(job_id, surface)))
 
 
 @wloop_app.command("cancel")
