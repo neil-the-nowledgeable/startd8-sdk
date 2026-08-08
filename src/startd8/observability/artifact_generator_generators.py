@@ -244,6 +244,21 @@ def _metric_unit(metric_name: str) -> str:
     return ""
 
 
+def _normalize_unit(unit: str) -> str:
+    """Normalize a producer-stamped unit string (contextcore#404) to the SDK's ``s``/``ms`` tokens.
+
+    ``"seconds"``/``"sec"``/``"s"`` ⇒ ``"s"``; ``"milliseconds"``/``"millis"``/``"ms"`` ⇒ ``"ms"``.
+    Anything unrecognized (or empty) ⇒ ``""`` so the caller falls through to name-inference — a stamped
+    unit never *worsens* the guess.
+    """
+    u = (unit or "").strip().lower()
+    if u in ("s", "sec", "secs", "second", "seconds"):
+        return "s"
+    if u in ("ms", "milli", "millis", "millisecond", "milliseconds"):
+        return "ms"
+    return ""
+
+
 def _descriptor_for(
     service: ServiceHints, descriptor: Optional[MetricDescriptor]
 ) -> MetricDescriptor:
@@ -1528,8 +1543,9 @@ def generate_declared_base_slos(
                 # so `target` is a NUMBER matching the SLI — mirroring the convention path — instead of
                 # shipping the raw unit-suffixed string "500ms". Unit inferred from the series name;
                 # unknown suffix ⇒ seconds (the histogram/OTel base unit, FR-3). The ContextCore `unit`
-                # stamp (contextcore#404) will later retire this name-inference guess.
-                _unit = _metric_unit(s.name) or "s"
+                # stamp (contextcore#404) OVERRIDES the name-inference when present (the producer read
+                # the metric — it beats the guess, e.g. suffix-less `harbor_task_queue_latency`).
+                _unit = _normalize_unit(s.unit) or _metric_unit(s.name) or "s"
                 _scaled = scale_seconds_to_unit(_parse_duration_to_seconds(str(target)), _unit)
                 target = int(_scaled) if _scaled == int(_scaled) else _scaled
             slo = {

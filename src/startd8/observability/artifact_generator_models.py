@@ -57,6 +57,11 @@ class DeclaredEmittedSeries:
     #: ``FunctionalRequirement.target`` — NOT a float. Absent (``None``) ⇒ the functional SLI binds its
     #: query but is *threshold-deferred* (no SLO written); the SDK never synthesizes a target (NR-1).
     target: Optional[str] = None
+    #: contextcore#404: the producer-stamped unit of the series (``"seconds"``/``"milliseconds"``/…).
+    #: When present it OVERRIDES the SDK's name-suffix inference for latency threshold scaling — the
+    #: producer read the metric, so it beats the guess (retires the fragile inference on suffix-less
+    #: names like ``harbor_task_queue_latency``). Absent/unrecognized ⇒ name-inference (byte-identical).
+    unit: str = ""
 
 
 @dataclass
