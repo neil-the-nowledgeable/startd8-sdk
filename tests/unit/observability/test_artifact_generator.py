@@ -978,6 +978,20 @@ class TestStaleSdkGuard:
             {"provenance": {"sdk_capabilities": []}}, {"secondary-red-families"}, strict=False)
         assert missing == ["secondary-red-families"]
 
+    def test_unregistered_key_is_caller_error_not_stale(self):
+        # lacuna-audit footgun: requiring an UNREGISTERED capability must NOT masquerade as a stale
+        # SDK (which would lie about the thing the guard exists to detect). It's a ValueError.
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError, OBSERVABILITY_CAPABILITIES,
+        )
+        current = {"provenance": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}}
+        import pytest as _pytest
+        with _pytest.raises(ValueError) as ei:
+            require_observability_capabilities(current, {"alert-depth"})  # real feature, unregistered key
+        assert "not registered" in str(ei.value)
+        # and it is NOT the stale-SDK error
+        assert not isinstance(ei.value, StaleSdkError)
+
 
 class TestEvaluatorExpectedSetUnion:
     """product-gap_0_metric_coverage_evaluator_union — Step 1 FR-1..FR-5."""
