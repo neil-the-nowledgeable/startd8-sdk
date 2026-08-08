@@ -28,6 +28,7 @@ from .bind_and_verify import bind_and_verify
 from .contrast import build_contrast, render_markdown
 from .fidelity_scorecard import build_fidelity_scorecard
 from .metric_descriptor import match_profiles, profile_signatures
+from .onboarding_validate import render_report, validate_onboarding_metadata
 from .prometheus_query import Auth, list_metric_names
 from .validate_promql import redact, run_validation
 
@@ -39,6 +40,26 @@ observability_app = typer.Typer(
 @observability_app.callback()
 def _observability_callback() -> None:
     """Presence of a callback keeps this a command *group*."""
+
+
+@observability_app.command("validate-onboarding")
+def validate_onboarding(
+    onboarding_metadata: Path = typer.Option(
+        ..., "--onboarding-metadata", "-m", help="Path to onboarding-metadata.json to lint.",
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON."),
+) -> None:
+    """$0 read-only preflight: lint onboarding-metadata against the SDK consumer contract BEFORE a
+    generation pass — reports present-vs-defaulted fields, did-you-mean typos, and malformed values.
+
+    Exit 0 = clean; exit 1 = errors/warnings an author should act on (nothing is generated either way).
+    """
+    report = validate_onboarding_metadata(onboarding_metadata)
+    if json_out:
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+    else:
+        typer.echo(render_report(report))
+    raise typer.Exit(code=0 if report.ok else 1)
 
 
 @observability_app.command("validate-promql")
