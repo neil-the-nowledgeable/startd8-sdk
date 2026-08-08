@@ -925,6 +925,59 @@ class TestEmitTimeSdkSha:
             assert len(prov["sdk_sha"]) >= 7
             assert prov["sdk_module_path"].endswith("startd8/__init__.py") or "startd8" in prov["sdk_module_path"]
 
+    def test_stamp_carries_capabilities(self):
+        # the provenance stamp now self-describes what this generator can do.
+        from startd8.observability.artifact_generator import (
+            _emit_time_sdk_sha, OBSERVABILITY_CAPABILITIES,
+        )
+        prov = _emit_time_sdk_sha()
+        assert set(prov["sdk_capabilities"]) == set(OBSERVABILITY_CAPABILITIES)
+        assert "secondary-red-families" in prov["sdk_capabilities"]
+
+
+class TestStaleSdkGuard:
+    """The stale-SDK-import poka-yoke: a durable pass declares the features it expects; if the
+    quality was scored by an OLDER startd8 (the import-shadow that no-op'd sdk#411/#429), the
+    guard fails LOUD instead of the run silently reading a depressed coverage number."""
+
+    def _current_quality(self):
+        from startd8.observability.artifact_generator import OBSERVABILITY_CAPABILITIES
+        return {"provenance": {"sdk_sha": "abc1234", "sdk_module_path": "/cur/startd8",
+                               "sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}}
+
+    def test_current_sdk_passes(self):
+        from startd8.observability.artifact_generator import require_observability_capabilities
+        missing = require_observability_capabilities(
+            self._current_quality(), {"gauge-freshness-installed", "secondary-red-families"})
+        assert missing == []
+
+    def test_stale_sdk_fails_loud(self):
+        # a quality scored by a pre-sdk#429 startd8 lacks 'secondary-red-families' → must RAISE.
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError,
+        )
+        stale = {"provenance": {"sdk_sha": "0ldsha1", "sdk_module_path": "/tmp/stale/startd8",
+                                "sdk_capabilities": ["gauge-absence-alerts", "summary-latency-slo"]}}
+        with pytest.raises(StaleSdkError) as ei:
+            require_observability_capabilities(stale, {"secondary-red-families", "gauge-freshness-installed"})
+        msg = str(ei.value)
+        assert "secondary-red-families" in msg and "gauge-freshness-installed" in msg
+        assert "0ldsha1" in msg and "/tmp/stale/startd8" in msg  # names the offending SDK
+
+    def test_pre_capability_stamp_sdk_fails_loud(self):
+        # an OLD quality.json with NO sdk_capabilities key at all (pre-stamp SDK) → still bites.
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError,
+        )
+        with pytest.raises(StaleSdkError):
+            require_observability_capabilities({"aggregate": {}}, {"secondary-red-families"})
+
+    def test_non_strict_returns_missing(self):
+        from startd8.observability.artifact_generator import require_observability_capabilities
+        missing = require_observability_capabilities(
+            {"provenance": {"sdk_capabilities": []}}, {"secondary-red-families"}, strict=False)
+        assert missing == ["secondary-red-families"]
+
 
 class TestEvaluatorExpectedSetUnion:
     """product-gap_0_metric_coverage_evaluator_union — Step 1 FR-1..FR-5."""
