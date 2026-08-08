@@ -1,7 +1,7 @@
 # Declared-Series Latency Threshold Unit-Scaling — Requirements
 
 **Project:** startd8 observability generator   **Criticality:** medium
-**Version:** 0.4 (IMPLEMENTED)   **Date:** 2026-08-08
+**Version:** 0.5 (IMPLEMENTED + OQ-2 resolved + liveness context)   **Date:** 2026-08-08
 **Pairs with:** the embedded Plan (§Plan) below
 **Origin:** F1 of the [Istio generality survivorship-audit](./GENERALITY_SURVIVORSHIP_AUDIT_ISTIO.md).
 
@@ -89,8 +89,8 @@ plausible. This spec makes the declared path scale like the convention path.
 - **Availability / throughput declared-base targets** — not unit-sensitive the way latency is (99% /
   rps); out of scope (they also use `_resolve_threshold`, but no unit ambiguity).
 - **The functional path** (`generate_declared_functional_slos`) — already honors `fr.target`.
-- **The producer side** — ContextCore stamping units on emitted series is a separate ask.
-- **A general "author-supplied target on a declared-base series"** feature (OQ-2) unless folded in.
+- **The producer side** — ContextCore stamping `unit` (contextcore#404) / `activation` (#406) on emitted series is a separate, filed ask.
+- **A general "author-supplied target on a declared-base series"** feature (OQ-2 → deferred, low-priority).
 
 ## Open questions
 
@@ -98,9 +98,28 @@ plausible. This spec makes the declared path scale like the convention path.
   `harbor_task_queue_latency` (covers latency, no unit suffix). Implemented as seconds (the OTel/
   `histogram` base unit) → numeric `0.5`. The ContextCore `unit` stamp (contextcore#404) will make this
   explicit rather than assumed.
-- **OQ-2 — Honor `s.target` on the declared-base path?** Today it's ignored. Folding it in makes the fix
-  "correct latency threshold" not just "scale the default." Small, but scope-expanding — decide before
-  implementing.
+- **OQ-2 → RESOLVED (deferred, low-priority)** — decided 2026-08-08 in discussion:
+  - **(a) Do NOT make base-RED defer-when-no-target like the functional path.** The base/functional split
+    is *principled*, not accidental: base-RED has meaningful universal defaults (500ms p99 / 99%
+    availability); functional signals (saturation, queue_depth) have none, so they defer. The
+    load-registration lens (§Liveness) reinforces it — base-RED series register under generic warm-up;
+    functional/`state:` series often don't. Making base-RED defer would drop every current Harbor latency
+    SLO.
+  - **(b) Honoring an author `s.target` on the declared-base path** (closing the silent-ignore footgun) is
+    a clean but **low-priority** follow-up: no producer populates `s.target` today, and the liveness lens
+    makes it triply-latent (no setter · SLI needs load to matter · base-RED already has a working default).
+    Fold into the contextcore#404 (`unit`) / #406 (`activation`) survey seam if/when built.
+
+## Liveness context — this is a generation-layer fix (added v0.5)
+
+F1 is a **static generation** correctness fix: the target must be a number in the SLI's native unit, true
+regardless of load. It is **orthogonal to liveness** — the declared-latency SLI queries
+`histogram_quantile` over a `*_bucket` series that is **lazily registered: it has no data until traffic
+flows** (the compare-live warm-up exists for exactly this). Consequence for pilot scoring: a unit/target
+defect counts as a real `sdk_code` finding **only once the pilot workload has been driven and the SLI is
+*still* wrong** — otherwise an unbound SLI is a `workload` (load) gap, not a code gap. That attribution
+rule is **contextcore#406** (thread per-metric `activation` into owner-attribution); together with
+**#404** (`unit`) it is the producer-side survey seam this fix pairs with.
 
 ## Risks
 
