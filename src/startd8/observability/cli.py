@@ -424,6 +424,46 @@ def scorecard_cmd(
         typer.echo(md)
 
 
+@observability_app.command("assert-capabilities")
+def assert_capabilities_cmd(
+    quality_path: Path = typer.Argument(
+        ...,
+        help="observability-quality.json OR a scorecard sidecar (.json) — either shape works.",
+    ),
+    require: str = typer.Option(
+        ...,
+        "--require",
+        help="Comma-separated capability keys the GENERATE must carry, e.g. "
+        "gauge-freshness-installed,secondary-red-families,summary-latency-slo",
+    ),
+) -> None:
+    """Fail LOUD if the o11y quality/scorecard was produced by a startd8 MISSING required
+    capabilities — the stale-SDK-import guard (sdk#432) as a one-command preflight for a durable
+    pass. Reads a raw observability-quality.json OR the scorecard sidecar (the run-dir the raw file
+    lives in is torn down; the sidecar survives and embeds the generate's stamp under `quality`).
+
+    Exit 0 = the generate carries all required capabilities. Exit 2 = StaleSdkError (names the
+    missing features + the offending sdk_sha/path) OR an unregistered-key caller error.
+    """
+    from .artifact_generator import require_observability_capabilities, StaleSdkError
+
+    try:
+        data = json.loads(Path(quality_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        typer.echo(f"error: cannot read {quality_path}: {exc}", err=True)
+        raise typer.Exit(2)
+    required = [c.strip() for c in require.split(",") if c.strip()]
+    try:
+        require_observability_capabilities(data, required)
+    except StaleSdkError as exc:
+        typer.echo(f"STALE SDK — {exc}", err=True)
+        raise typer.Exit(2)
+    except ValueError as exc:  # unregistered capability key (caller error, not stale)
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2)
+    typer.echo(f"OK — the generate carries all required capabilities: {sorted(required)}")
+
+
 @observability_app.command("compare")
 def compare_cmd(
     manifest: Path = typer.Option(

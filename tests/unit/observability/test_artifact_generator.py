@@ -3079,3 +3079,50 @@ def test_coverage_bind_panel_expr_default_is_backward_compatible():
     hist = _coverage_bind_panel_expr(fam)
     assert "histogram_quantile" in hist and f"{fam}_bucket" in hist
     assert hist == _coverage_bind_panel_expr(fam, is_summary=False)
+
+
+class TestStaleSdkGuardSidecarShape:
+    """Guard-readability (S6): the durable pass reads the scorecard SIDECAR (the run-dir quality.json
+    is torn down). The sidecar embeds the generate's stamp under a `quality` sub-block, so the guard
+    must find it there too — not just at top level."""
+
+    def test_reads_sidecar_quality_aggregate(self):
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, StaleSdkError, OBSERVABILITY_CAPABILITIES,
+        )
+        # a scorecard sidecar with the generate's stamp nested under quality.aggregate (where sdk#432
+        # also writes it) — a CURRENT generate → guard passes.
+        sidecar = {"tooling": {"startd8": "auditsha"},
+                   "quality": {"aggregate": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES),
+                                             "sdk_sha": "gensha1"}}}
+        assert require_observability_capabilities(sidecar, {"secondary-red-families"}, strict=False) == []
+        # a STALE generate → the nested aggregate has no capabilities → fires (correct verdict).
+        stale_sidecar = {"quality": {"aggregate": {"avg_metric_coverage_score": 0.3}}}
+        with pytest.raises(StaleSdkError):
+            require_observability_capabilities(stale_sidecar, {"secondary-red-families"})
+
+    def test_sidecar_provenance_also_searched(self):
+        from startd8.observability.artifact_generator import (
+            require_observability_capabilities, OBSERVABILITY_CAPABILITIES,
+        )
+        sidecar = {"quality": {"provenance": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}}}
+        assert require_observability_capabilities(sidecar, {"gauge-freshness-installed"}, strict=False) == []
+
+
+class TestAssertCapabilitiesCLI:
+    def _run(self, tmp_path, payload, require):
+        import json
+        from typer.testing import CliRunner
+        from startd8.observability.cli import observability_app
+        p = tmp_path / "q.json"; p.write_text(json.dumps(payload))
+        return CliRunner().invoke(observability_app, ["assert-capabilities", str(p), "--require", require])
+
+    def test_cli_ok_on_current(self, tmp_path):
+        from startd8.observability.artifact_generator import OBSERVABILITY_CAPABILITIES
+        r = self._run(tmp_path, {"provenance": {"sdk_capabilities": sorted(OBSERVABILITY_CAPABILITIES)}},
+                      "secondary-red-families,gauge-freshness-installed")
+        assert r.exit_code == 0 and "OK" in r.output
+
+    def test_cli_fails_loud_on_stale_sidecar(self, tmp_path):
+        r = self._run(tmp_path, {"quality": {"aggregate": {}}}, "secondary-red-families")
+        assert r.exit_code == 2 and "STALE SDK" in r.output
