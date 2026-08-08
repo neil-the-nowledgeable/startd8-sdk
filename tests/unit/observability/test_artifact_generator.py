@@ -220,6 +220,31 @@ class TestLoadBusinessContext:
         assert ctx.availability is None
         assert ctx.slo_window == "30d"
 
+    def test_deployment_mode_env_override(self, manifest_yaml, monkeypatch):
+        # STARTD8_DEPLOYMENT_MODE (set by `capdevpipe run --deployment-mode`, sdk#417)
+        # is the durable-pass override — the .contextcore.yaml is run-derived and often
+        # declares no deployment.mode, so the env is how the durable pass sets it. Without
+        # this consumer, sdk#417 was inert. The manifest fixture declares no mode.
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "installed")
+        ctx = load_business_context(manifest_yaml, {})
+        assert ctx.deployment_mode == "installed"
+
+    def test_deployment_mode_env_wins_over_manifest(self, tmp_path, monkeypatch):
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text("spec:\n  deployment:\n    mode: deployed\n")
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "installed")
+        ctx = load_business_context(p, {})
+        assert ctx.deployment_mode == "installed"  # explicit operator override wins
+
+    def test_deployment_mode_absent_env_byte_identical(self, tmp_path, monkeypatch):
+        # Empty/unset env ⇒ falls through to the manifest ⇒ unchanged (the guard).
+        monkeypatch.delenv("STARTD8_DEPLOYMENT_MODE", raising=False)
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text("spec:\n  deployment:\n    mode: deployed\n")
+        assert load_business_context(p, {}).deployment_mode == "deployed"
+        # and no manifest mode + no env ⇒ None (criticality-only)
+        assert load_business_context(None, {}).deployment_mode is None
+
 
 # ---------------------------------------------------------------------------
 # Helper tests
