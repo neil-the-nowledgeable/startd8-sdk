@@ -123,19 +123,27 @@ def status(
 @wloop_app.command("run-next")
 def run_next(
     job_id: Optional[str] = typer.Option(None, "--job-id"),
+    surface: Optional[str] = typer.Option(
+        None, "--surface", help="Owner surface id (REQ-24 FR-6): gates the acquire + consume."
+    ),
     root: Path = typer.Option(DEFAULT_QUEUE_RELATIVE, "--root", help=_ROOT_HELP),
 ) -> None:
-    """Emit a VASI hand-off, or consume its drain-result write-back."""
-    _print_json(_run(lambda: _queue(root).run_next(job_id)))
+    """Emit a VASI hand-off, or consume its drain-result write-back.
+
+    With ``--surface`` the acquire is owner-stamped and the consume rejects a non-owner (FR-6). On a
+    lost claim ``run_next`` returns ``null`` (the job is held by another surface — retry).
+    """
+    _print_json(_run(lambda: _queue(root).run_next(job_id, surface=surface)))
 
 
 @wloop_app.command("drain")
 def drain(
     job_id: Optional[str] = typer.Option(None, "--job-id"),
+    surface: Optional[str] = typer.Option(None, "--surface", help="Owner surface id (FR-6)."),
     root: Path = typer.Option(DEFAULT_QUEUE_RELATIVE, "--root", help=_ROOT_HELP),
 ) -> None:
     """Alias for ``run-next``."""
-    _print_json(_run(lambda: _queue(root).run_next(job_id)))
+    _print_json(_run(lambda: _queue(root).run_next(job_id, surface=surface)))
 
 
 @wloop_app.command("render")
