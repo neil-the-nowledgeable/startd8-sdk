@@ -2208,6 +2208,57 @@ def generate_functional_slos(
     )
 
 
+def _openslo_doc(
+    name: str,
+    labels: Dict[str, str],
+    description: str,
+    target: Any,
+    window: str,
+    severity: str,
+    indicator_spec: Dict[str, Any],
+    sli_name: Optional[str] = None,
+    alert_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One OpenSLO v1 SLO doc — the invariant scaffold every SLO block in
+    ``generate_slo_definitions`` shares (availability, latency-p99, latency-avg, gauge/secondary
+    freshness). All variation (name/labels/description/target/indicator, plus the sli/alert-name
+    override for the pre-existing ``latency-p99`` naming quirk where the SLI is ``-latency-sli`` not
+    ``-latency-p99-sli``) is passed in VERBATIM, so the emitted dict — and thus the ``yaml.dump``
+    bytes — is identical to the prior inline literals. sli/alert default to ``{name}-sli``/``-alert``.
+    """
+    return {
+        "apiVersion": "openslo/v1",
+        "kind": "SLO",
+        "metadata": {"name": name, "labels": labels},
+        "spec": {
+            "description": description,
+            "target": target,
+            "timeWindow": {"duration": window, "isRolling": True},
+            "budgetPolicy": "occurrences",
+            "indicator": {
+                "metadata": {"name": sli_name or f"{name}-sli"},
+                "spec": indicator_spec,
+            },
+            "alerting": {
+                "name": alert_name or f"{name}-alert",
+                "labels": {"severity": severity},
+            },
+        },
+    }
+
+
+def _threshold_indicator(query: str, threshold: Any, operator: str) -> Dict[str, Any]:
+    """The ``thresholdMetric`` indicator spec — a single Prometheus query compared to a threshold
+    (shared by latency-p99, latency-avg, and both freshness SLOs)."""
+    return {
+        "thresholdMetric": {
+            "metricSource": {"type": "prometheus", "spec": {"query": query}},
+            "threshold": threshold,
+            "operator": operator,
+        },
+    }
+
+
 def generate_slo_definitions(
     service: ServiceHints,
     business: BusinessContext,
@@ -2293,59 +2344,34 @@ def generate_slo_definitions(
             prom = _prom_name(counter_metric.name)
         avail_target = float(avail_raw)
 
-        slo = {
-            "apiVersion": "openslo/v1",
-            "kind": "SLO",
-            "metadata": {
-                "name": f"{service.service_id}-availability",
-                "labels": {
-                    "service": service.service_id,
-                    "protocol": service.transport,
-                    "generated_by": "startd8",
-                },
+        slo = _openslo_doc(
+            name=f"{service.service_id}-availability",
+            labels={
+                "service": service.service_id,
+                "protocol": service.transport,
+                "generated_by": "startd8",
             },
-            "spec": {
-                "description": f"Availability SLO for {service.service_id}",
-                "target": avail_target,
-                "timeWindow": {"duration": window, "isRolling": True},
-                "budgetPolicy": "occurrences",
-                "indicator": {
-                    "metadata": {
-                        "name": f"{service.service_id}-availability-sli",
+            description=f"Availability SLO for {service.service_id}",
+            target=avail_target,
+            window=window,
+            severity=severity,
+            indicator_spec={
+                "ratioMetric": {
+                    "counter": {
+                        "metricSource": {
+                            "type": "prometheus",
+                            "spec": {"query": f"rate({prom}{total_selector}[5m])"},
+                        },
                     },
-                    "spec": {
-                        "ratioMetric": {
-                            "counter": {
-                                "metricSource": {
-                                    "type": "prometheus",
-                                    "spec": {
-                                        "query": (
-                                            f'rate({prom}'
-                                            f'{total_selector}[5m])'
-                                        ),
-                                    },
-                                },
-                            },
-                            "good": {
-                                "metricSource": {
-                                    "type": "prometheus",
-                                    "spec": {
-                                        "query": (
-                                            f'rate({prom}'
-                                            f'{error_selector}[5m])'
-                                        ),
-                                    },
-                                },
-                            },
+                    "good": {
+                        "metricSource": {
+                            "type": "prometheus",
+                            "spec": {"query": f"rate({prom}{error_selector}[5m])"},
                         },
                     },
                 },
-                "alerting": {
-                    "name": f"{service.service_id}-availability-alert",
-                    "labels": {"severity": severity},
-                },
             },
-        }
+        )
         documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
     elif avail_raw and not counter_metric:
         logger.warning(
@@ -2367,49 +2393,26 @@ def generate_slo_definitions(
             _parse_duration_to_seconds(latency_raw)
         )
 
-        slo = {
-            "apiVersion": "openslo/v1",
-            "kind": "SLO",
-            "metadata": {
-                "name": f"{service.service_id}-latency-p99",
-                "labels": {
-                    "service": service.service_id,
-                    "protocol": service.transport,
-                    "generated_by": "startd8",
-                },
+        slo = _openslo_doc(
+            name=f"{service.service_id}-latency-p99",
+            labels={
+                "service": service.service_id,
+                "protocol": service.transport,
+                "generated_by": "startd8",
             },
-            "spec": {
-                "description": f"P99 latency SLO for {service.service_id}",
-                "target": round(float(avail_raw), 2) if avail_raw else 99.0,
-                "timeWindow": {"duration": window, "isRolling": True},
-                "budgetPolicy": "occurrences",
-                "indicator": {
-                    "metadata": {
-                        "name": f"{service.service_id}-latency-sli",
-                    },
-                    "spec": {
-                        "thresholdMetric": {
-                            "metricSource": {
-                                "type": "prometheus",
-                                "spec": {
-                                    "query": (
-                                        f"histogram_quantile(0.99, "
-                                        f"rate({prom}_bucket"
-                                        f'{total_selector}[5m]))'
-                                    ),
-                                },
-                            },
-                            "threshold": threshold,
-                            "operator": "lte",
-                        },
-                    },
-                },
-                "alerting": {
-                    "name": f"{service.service_id}-latency-alert",
-                    "labels": {"severity": severity},
-                },
-            },
-        }
+            description=f"P99 latency SLO for {service.service_id}",
+            target=round(float(avail_raw), 2) if avail_raw else 99.0,
+            window=window,
+            severity=severity,
+            indicator_spec=_threshold_indicator(
+                f"histogram_quantile(0.99, rate({prom}_bucket{total_selector}[5m]))",
+                threshold,
+                "lte",
+            ),
+            # pre-existing quirk: the p99 SLO's SLI/alert are named `-latency-*`, not `-latency-p99-*`.
+            sli_name=f"{service.service_id}-latency-sli",
+            alert_name=f"{service.service_id}-latency-alert",
+        )
         documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
 
     # SCORE-3 (system axis) — latency SLO for a SUMMARY duration family. A Prometheus
@@ -2427,49 +2430,27 @@ def generate_slo_definitions(
         threshold = descriptor.scale_threshold_seconds(
             _parse_duration_to_seconds(latency_raw)
         )
-        slo = {
-            "apiVersion": "openslo/v1",
-            "kind": "SLO",
-            "metadata": {
-                "name": f"{service.service_id}-latency-avg",
-                "labels": {
-                    "service": service.service_id,
-                    "protocol": service.transport,
-                    "generated_by": "startd8",
-                },
+        slo = _openslo_doc(
+            name=f"{service.service_id}-latency-avg",
+            labels={
+                "service": service.service_id,
+                "protocol": service.transport,
+                "generated_by": "startd8",
             },
-            "spec": {
-                "description": (
-                    f"Average latency SLO for {service.service_id} "
-                    f"(summary family — avg via _sum/_count, not a dead histogram quantile)"
-                ),
-                "target": round(float(avail_raw), 2) if avail_raw else 99.0,
-                "timeWindow": {"duration": window, "isRolling": True},
-                "budgetPolicy": "occurrences",
-                "indicator": {
-                    "metadata": {"name": f"{service.service_id}-latency-avg-sli"},
-                    "spec": {
-                        "thresholdMetric": {
-                            "metricSource": {
-                                "type": "prometheus",
-                                "spec": {
-                                    "query": (
-                                        f"sum(rate({prom}_sum{total_selector}[5m])) "
-                                        f"/ sum(rate({prom}_count{total_selector}[5m]))"
-                                    ),
-                                },
-                            },
-                            "threshold": threshold,
-                            "operator": "lte",
-                        },
-                    },
-                },
-                "alerting": {
-                    "name": f"{service.service_id}-latency-avg-alert",
-                    "labels": {"severity": severity},
-                },
-            },
-        }
+            description=(
+                f"Average latency SLO for {service.service_id} "
+                f"(summary family — avg via _sum/_count, not a dead histogram quantile)"
+            ),
+            target=round(float(avail_raw), 2) if avail_raw else 99.0,
+            window=window,
+            severity=severity,
+            indicator_spec=_threshold_indicator(
+                f"sum(rate({prom}_sum{total_selector}[5m])) "
+                f"/ sum(rate({prom}_count{total_selector}[5m]))",
+                threshold,
+                "lte",
+            ),
+        )
         documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
 
     # SCORE-3 "best of both worlds" (gauge system axis) — a data-availability
@@ -2495,51 +2476,28 @@ def generate_slo_definitions(
             if _m.type != "gauge":
                 continue
             _gp = _prom_name(_m.name)
-            slo = {
-                "apiVersion": "openslo/v1",
-                "kind": "SLO",
-                "metadata": {
-                    "name": f"{service.service_id}-{_gp}-freshness",
-                    "labels": {
-                        "service": service.service_id,
-                        "protocol": service.transport,
-                        "generated_by": "startd8",
-                    },
+            slo = _openslo_doc(
+                name=f"{service.service_id}-{_gp}-freshness",
+                labels={
+                    "service": service.service_id,
+                    "protocol": service.transport,
+                    "generated_by": "startd8",
                 },
-                "spec": {
-                    "description": (
-                        f"Data-availability (freshness) SLO for {_gp} — the gauge is being "
-                        f"scraped as expected. Installed/local-mode forgiving default; no "
-                        f"fabricated magnitude threshold (FR-26)."
-                    ),
-                    "target": _avail_target,
-                    "timeWindow": {"duration": window, "isRolling": True},
-                    "budgetPolicy": "occurrences",
-                    "indicator": {
-                        "metadata": {"name": f"{service.service_id}-{_gp}-freshness-sli"},
-                        "spec": {
-                            "thresholdMetric": {
-                                "metricSource": {
-                                    "type": "prometheus",
-                                    "spec": {
-                                        # fraction of expected scrapes present in the last hour
-                                        "query": (
-                                            f"count_over_time({_gp}{total_selector}[1h]) "
-                                            f"/ {_samples_per_hour}"
-                                        ),
-                                    },
-                                },
-                                "threshold": round(_avail_target / 100.0, 4),
-                                "operator": "gte",
-                            },
-                        },
-                    },
-                    "alerting": {
-                        "name": f"{service.service_id}-{_gp}-freshness-alert",
-                        "labels": {"severity": severity},
-                    },
-                },
-            }
+                description=(
+                    f"Data-availability (freshness) SLO for {_gp} — the gauge is being "
+                    f"scraped as expected. Installed/local-mode forgiving default; no "
+                    f"fabricated magnitude threshold (FR-26)."
+                ),
+                target=_avail_target,
+                window=window,
+                severity=severity,
+                indicator_spec=_threshold_indicator(
+                    # fraction of expected scrapes present in the last hour
+                    f"count_over_time({_gp}{total_selector}[1h]) / {_samples_per_hour}",
+                    round(_avail_target / 100.0, 4),
+                    "gte",
+                ),
+            )
             documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
 
     # S7 (system axis) — data-availability for SECONDARY RED families the primary SLOs don't cover.
@@ -2565,51 +2523,28 @@ def generate_slo_definitions(
             # a summary has no bare series — its always-present _count is the scrape signal;
             # a counter's bare series works directly.
             _series = f"{_sp}_count" if _m.type == "summary" else _sp
-            slo = {
-                "apiVersion": "openslo/v1",
-                "kind": "SLO",
-                "metadata": {
-                    "name": f"{service.service_id}-{_sp}-freshness",
-                    "labels": {
-                        "service": service.service_id,
-                        "protocol": service.transport,
-                        "generated_by": "startd8",
-                        "red_leg": "secondary",
-                    },
+            slo = _openslo_doc(
+                name=f"{service.service_id}-{_sp}-freshness",
+                labels={
+                    "service": service.service_id,
+                    "protocol": service.transport,
+                    "generated_by": "startd8",
+                    "red_leg": "secondary",
                 },
-                "spec": {
-                    "description": (
-                        f"Data-availability (freshness) SLO for the secondary {_m.type} family "
-                        f"{_sp} — being scraped as expected. Installed/local-mode forgiving default; "
-                        f"no fabricated magnitude threshold (FR-26)."
-                    ),
-                    "target": _st_avail,
-                    "timeWindow": {"duration": window, "isRolling": True},
-                    "budgetPolicy": "occurrences",
-                    "indicator": {
-                        "metadata": {"name": f"{service.service_id}-{_sp}-freshness-sli"},
-                        "spec": {
-                            "thresholdMetric": {
-                                "metricSource": {
-                                    "type": "prometheus",
-                                    "spec": {
-                                        "query": (
-                                            f"count_over_time({_series}{total_selector}[1h]) "
-                                            f"/ {_st_sph}"
-                                        ),
-                                    },
-                                },
-                                "threshold": round(_st_avail / 100.0, 4),
-                                "operator": "gte",
-                            },
-                        },
-                    },
-                    "alerting": {
-                        "name": f"{service.service_id}-{_sp}-freshness-alert",
-                        "labels": {"severity": severity},
-                    },
-                },
-            }
+                description=(
+                    f"Data-availability (freshness) SLO for the secondary {_m.type} family "
+                    f"{_sp} — being scraped as expected. Installed/local-mode forgiving default; "
+                    f"no fabricated magnitude threshold (FR-26)."
+                ),
+                target=_st_avail,
+                window=window,
+                severity=severity,
+                indicator_spec=_threshold_indicator(
+                    f"count_over_time({_series}{total_selector}[1h]) / {_st_sph}",
+                    round(_st_avail / 100.0, 4),
+                    "gte",
+                ),
+            )
             documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
 
     if not documents:
