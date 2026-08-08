@@ -55,6 +55,15 @@ class LoopQueueBlockedError(LoopQueueError):
     """Retryable blocked condition, e.g. artifact vanished (CLI exit code 3)."""
 
 
+class LoopClaimHeld(LoopQueueError):
+    """REQ-24 FR-1/FR-2: the atomic claim was lost — the job is held by another surface.
+
+    Retryable (CLI exit code 3). Deliberately a sibling of :class:`LoopQueueError`, **not** a
+    :class:`LoopQueueValidationError`, so the drain paths' ``except LoopQueueValidationError`` handlers
+    do not mark a race-loser's job FAILED — a lost race leaves the job untouched (PENDING) for retry.
+    """
+
+
 class LoopJobStatus(str, Enum):
     """Durable on-disk job status (FR-1 / FR-3)."""
 
@@ -344,6 +353,10 @@ class WorkflowLoopJob(BaseModel):
     artifacts: Dict[str, str] = Field(default_factory=dict)
     #: OQ-5: UTC ISO expiry while ``status=processing``; cleared on leave.
     lease_expires_at: Optional[str] = None
+    #: REQ-24 FR-5: the owner (surface id) of the current claim, stamped on acquire and cleared on
+    #: release/reclaim. The per-job ``CLAIM.lock`` sentinel is the atomic gate (FR-1); this field is the
+    #: durable record of *who* won — enabling single-holder (FR-2) and owner-checked release (FR-4).
+    lease_owner: Optional[str] = None
     #: REQ-02 FR-1: the propagating dry-run flag. When True this is a trace/probe job — the wloop persist
     #: chokepoint (``LoopQueueStorage.save_job``) describes the would-be enqueue/claim/complete WITHOUT
     #: writing job-state. Additive, default-False → ZERO effect on live jobs (NR-4). The AUTHORITATIVE schema
