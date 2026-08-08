@@ -62,3 +62,20 @@ def test_ratio_unit_maps_to_grafana_percentunit():
     node = render_infra_dashboards(SLI_RULES)["node"]
     cpu = next(p for p in node["panels"] if p["targets"][0]["expr"] == "node_cpu_saturation")
     assert cpu["fieldConfig"]["defaults"]["unit"] == "percentunit"
+
+
+def test_job_level_renders_the_cron_batch_substrate_dashboard():
+    # container-o11y × cron/batch frontier: the `job` level is the infra/USE substrate for
+    # PORTLESS scheduled workloads (a CronJob run creates a Job). A job-level rule renders its
+    # own cross-linked dashboard, so a cron that stops firing is observable without app metrics.
+    rules = SLI_RULES + [
+        {"record": "job_run_freshness_seconds", "expr": "...",
+         "labels": {"level": "job", "unit": "seconds", "framing": "availability"}},
+    ]
+    dashboards = render_infra_dashboards(rules)
+    assert "job" in dashboards
+    assert dashboards["job"]["uid"] == "cc-infra-job"
+    # cross-linked into the hierarchy both directions (FR-8)
+    job_links = {l["url"] for l in dashboards["job"]["links"]}
+    assert "/d/cc-infra-cluster" in job_links
+    assert "/d/cc-infra-job" in {l["url"] for l in dashboards["cluster"]["links"]}

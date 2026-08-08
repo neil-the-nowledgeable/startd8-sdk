@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 # top-down ↔ bottom-up ordering for the FR-8 drill-down/roll-up links
-_LEVEL_ORDER = ["cluster", "node", "pod", "container", "control_plane"]
+_LEVEL_ORDER = ["cluster", "node", "pod", "container", "control_plane", "job"]
 _SCHEMA_VERSION = 39
 
 
