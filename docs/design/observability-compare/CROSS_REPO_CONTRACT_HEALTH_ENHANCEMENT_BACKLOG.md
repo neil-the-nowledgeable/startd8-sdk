@@ -37,7 +37,7 @@ The one guard against `REQUEST_KINDS`/`UNGROUNDED_KINDS`/`_TRIPLET_SIGNAL_KINDS`
 
 ### 🚀 Enhanced capabilities
 
-**CH-2 — Regen-and-diff CI lane: the golden captured FROM the real producer, drift-gated.** `M` · `new-capability` · **X1** (CROSS s1-S1 + s3-R5 + s1-S3; seeders 1+3). **Flagship.**
+**CH-2 — Regen-and-diff CI lane: the golden captured FROM the real producer, drift-gated.** `M` · `new-capability` · **X1** (CROSS s1-S1 + s3-R5 + s1-S3; seeders 1+3). **Flagship.** **→ PARTIAL (this branch): homebrewed as a LOCAL runner — `scripts/check_contextcore_parity.sh` points at a ContextCore checkout and fires the CH-1 vocab-parity + snapshot-freshness guards that `importorskip`-skip in SDK CI (no GitHub Actions lane). The full producer-regen-and-diff of the golden fixture + a real CI lane remain the `new-capability` half.**
 Today's golden (`test_onboarding_metadata_golden_roundtrip.py`, #352/#356) is **hand-authored-to-contract** — a fresh belief that ages the moment it's committed. A cross-repo CI lane (mirroring `observability-compare-live-gate.yml`) that installs both repos, regenerates the golden via ContextCore's `build_onboarding_metadata()` (`onboarding.py:654,1176`), and **fails on capture-vs-committed drift** converts the golden from a periodically-stale snapshot into a live gate. Neither a one-shot capture nor a static both-repos test catches producer drift *after* commit — the fusion does.
 
 **CH-3 — Single-sourced consumed-key manifest → bidirectional coverage guards.** `M` · `wire-existing` · **X2** (CROSS s1-S4 + s2-single-source + s2-provenance; seeders 1+2).
