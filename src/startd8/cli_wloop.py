@@ -156,6 +156,32 @@ def render(
     _print_json({"job_id": job_id, "bundle_path": str(bundle)})
 
 
+@wloop_app.command("rundown")
+def rundown(
+    manifest: Path = typer.Option(
+        ..., "--manifest", help="Path to a dev-os LoopManifest YAML (the loop spine to trace)."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Write the dry_run_trace JSON here; default prints it to stdout (pipeable)."
+    ),
+    root: Path = typer.Option(DEFAULT_QUEUE_RELATIVE, "--root", help=_ROOT_HELP),
+) -> None:
+    """REQ-03 Loop Rundown: emit a dry-run spine-walk of a LoopManifest as a ``dry_run_trace`` — one
+    verdict per piece/gate, ZERO side effects. Render it with the contextcore navigator:
+    ``contextcore navigator build --source traceroute --trace <file> --renderer tree``."""
+    try:
+        job = _queue(root).dry_run_spine(manifest)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Rundown failed: {e}", file=sys.stderr)
+        raise typer.Exit(2)
+    trace = job.dry_run_trace
+    if out is not None:
+        out.write_text(json.dumps(trace, indent=2), encoding="utf-8")
+        _print_json({"manifest": str(manifest), "trace_path": str(out), "stages": len(trace)})
+    else:
+        _print_json(trace)
+
+
 @wloop_app.command("claim")
 def claim(
     job_id: str = typer.Option(..., "--job-id"),

@@ -153,6 +153,38 @@ class WorkflowLoopQueue:
             raise LoopQueueValidationError(f"invalid WLQ job envelope: {e}") from e
         return self.enqueue(job)
 
+    def dry_run_spine(
+        self,
+        manifest_ref: Union[str, Path],
+        *,
+        job_id: str = "rundown",
+        surface: str = "rundown",
+    ) -> WorkflowLoopJob:
+        """Emit a **Rundown** (dev-os REQ-03): a dry-run spine-walk of a LoopManifest as ``dry_run_trace``
+        verdicts — one per ``pieces ∪ gates`` node — with **zero side effects**.
+
+        The job is built in-memory and **never enqueued or persisted** (no recipe validation, no job-state
+        write) — the Rundown is describe-only. Its ``dry_run_trace`` carries the spine verdicts in the
+        contextcore ``DryRunVerdict.to_dict()`` shape (parity-guarded, no contextcore import), so the
+        contextcore navigator ``traceroute`` source + the dev-os VLD render it unchanged. The ``manifest_ref``
+        is recorded on the returned job's ``config`` for provenance.
+
+        This is the ``dry_run=True`` half of the loop's live twin (REQ-03 FR-2): the same spine-walk is what a
+        real run would traverse. Raises ``FileNotFoundError``/``ValueError`` on a bad manifest (fail-loud).
+        """
+        from .dry_run_spine import spine_verdicts_from_path
+
+        job = WorkflowLoopJob(
+            job_id=job_id,
+            loop_id="rundown",
+            executor=LoopExecutor.AGENT_SURFACE,
+            surface_id=surface,
+            dry_run=True,
+            config={"manifest_ref": str(manifest_ref)},
+        )
+        job.dry_run_trace.extend(spine_verdicts_from_path(manifest_ref))
+        return job
+
     def get(self, job_id: str) -> WorkflowLoopJob:
         return self.storage.load_job(job_id)
 
