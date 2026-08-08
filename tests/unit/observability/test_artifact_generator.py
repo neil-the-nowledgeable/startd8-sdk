@@ -245,6 +245,28 @@ class TestLoadBusinessContext:
         # and no manifest mode + no env ⇒ None (criticality-only)
         assert load_business_context(None, {}).deployment_mode is None
 
+    def test_deployment_mode_env_case_normalized(self, manifest_yaml, monkeypatch):
+        # A mis-cased env value is normalized (not silently dropped to deployed behavior).
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "Installed")
+        assert load_business_context(manifest_yaml, {}).deployment_mode == "installed"
+
+    def test_deployment_mode_env_invalid_ignored_with_warning(self, tmp_path, monkeypatch, caplog):
+        # A typo/bad value must NOT silently produce deployed behavior — it's ignored (falls back to
+        # the manifest) and warned, so the operator sees why the mode didn't take.
+        import logging
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "install")  # typo for 'installed'
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text("spec:\n  deployment:\n    mode: deployed\n")
+        with caplog.at_level(logging.WARNING):
+            ctx = load_business_context(p, {})
+        assert ctx.deployment_mode == "deployed"  # fell back to manifest, did NOT become 'install'
+        assert any("STARTD8_DEPLOYMENT_MODE" in r.message for r in caplog.records)
+
+    def test_deployment_mode_env_invalid_no_manifest_falls_to_none(self, monkeypatch):
+        # Bad env + no manifest mode ⇒ None (not the bogus value) — no silent bad mode.
+        monkeypatch.setenv("STARTD8_DEPLOYMENT_MODE", "prod")
+        assert load_business_context(None, {}).deployment_mode is None
+
 
 # ---------------------------------------------------------------------------
 # Helper tests
