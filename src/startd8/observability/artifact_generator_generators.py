@@ -516,10 +516,37 @@ def generate_alert_rules(
     # their first event (``*_total`` has no series until first increment), so an
     # ``absent()`` alert on a counter would false-fire — the counter-only path stays
     # ``skipped`` (FR-12a preserved). Histograms are already covered by RED.
-    for metric in service.convention_metrics:
-        if metric.type != "gauge":
+    #
+    # sdk#439 sibling (bridge lane): a prometheus_exporter-style service emits its gauges
+    # (e.g. harbor_statistics_*) into declared_emitted_series, NOT convention_metrics, so a
+    # convention-only loop emitted ZERO absence alerts for it — live bridge coverage stuck at
+    # 3/22 while the freshness SLO path (post-#439) already bound 19/22. Draw gauges from BOTH
+    # sources — the same union sdk#439 applied to the freshness loop (:2520) — deduped by
+    # prom-name (convention wins).
+    #
+    # INSTALLED-mode only, faithful to sdk#439: declared_emitted_series is the REAL emitted
+    # surface, a local/installed grounding signal. In deployed/default mode a merely-OBSERVED
+    # series orients to the HUMAN (dashboard OBSERVE) axis, not the bridge — this preserves the
+    # orientation contract (test_emitted_series_raises_human_coverage_orientation: bridge==0 in
+    # default mode) exactly as #439 preserved its system==0 sibling. Convention gauges keep
+    # alerting in ALL modes (unchanged); only the declared-series addition is installed-gated,
+    # so the whole default-mode golden corpus stays byte-identical.
+    _gauge_seen: set = set()
+    _gauge_sources = list(service.convention_metrics or [])
+    if (getattr(business, "deployment_mode", None) or "") == "installed":
+        _gauge_sources += list(
+            getattr(service, "declared_emitted_series", None) or []
+        )
+    for metric in _gauge_sources:
+        if getattr(metric, "type", "") != "gauge":
             continue
-        prom = _prom_name(metric.name)
+        _gname = getattr(metric, "name", "")
+        if not _gname:
+            continue
+        prom = _prom_name(_gname)
+        if prom in _gauge_seen:
+            continue
+        _gauge_seen.add(prom)
         suffix = "".join(p[:1].upper() + p[1:] for p in prom.split("_") if p)
         rules.append(
             {
@@ -550,13 +577,30 @@ def generate_alert_rules(
     # counters), but an error counter increasing IS a real, warranted condition.
     # ``increase(...[15m]) > 0`` = "errors occurred recently" — non-tautological,
     # references the metric (lifts bridge). Sibling of the gauge absence alert.
-    for metric in service.convention_metrics:
-        if metric.type != "counter":
+    #
+    # sdk#439 sibling (bridge lane): same union as the gauge-absence loop above — an exporter's
+    # error/failure counters can live in declared_emitted_series. INSTALLED-mode only (same
+    # rationale + byte-identity guard as the gauge loop); convention counters keep alerting in
+    # all modes. Deduped by prom-name (convention wins).
+    _err_seen: set = set()
+    _err_sources = list(service.convention_metrics or [])
+    if (getattr(business, "deployment_mode", None) or "") == "installed":
+        _err_sources += list(
+            getattr(service, "declared_emitted_series", None) or []
+        )
+    for metric in _err_sources:
+        if getattr(metric, "type", "") != "counter":
             continue
-        prom = _prom_name(metric.name)
+        _cname = getattr(metric, "name", "")
+        if not _cname:
+            continue
+        prom = _prom_name(_cname)
         low = prom.lower()
         if "error" not in low and "fail" not in low:
             continue
+        if prom in _err_seen:
+            continue
+        _err_seen.add(prom)
         suffix = "".join(p[:1].upper() + p[1:] for p in prom.split("_") if p)
         rules.append(
             {
