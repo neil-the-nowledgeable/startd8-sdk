@@ -197,6 +197,10 @@ _COMPOSITE_COVERAGE_WEIGHT = 0.3
 #: for the import-shadow that no-op'd sdk#411/#429 in the durable generate (bitten twice; also the
 #: sdk#419 verification shadow). **When a new SCORE feature lands, add its key here** — this is the
 #: single authority for "what this generator can do", keyed on the real capability, not a version.
+#: SCOPE: the metric_cov SCORE levers a durable pass ASSERTS — NOT an exhaustive list of every gen
+#: capability (older/unasserted features like alert-depth #396 are deliberately absent; add a key
+#: only when a consumer needs to require it). `require_observability_capabilities` rejects an
+#: unregistered required-key as a caller error, so this set staying scoped can't false-flag "stale".
 OBSERVABILITY_CAPABILITIES: FrozenSet[str] = frozenset({
     "gauge-absence-alerts",          # sdk#395 — bridge axis
     "error-counter-alerts",          # sdk#399
@@ -231,7 +235,21 @@ def require_observability_capabilities(
     shadowed/stale editable install, a different import path), the stamp lacks them and this raises —
     naming the missing features AND the offending sha/path — instead of the run silently reading a
     depressed coverage number. Returns the missing list (empty = OK) when ``strict=False``.
+
+    A ``required`` key that is not a REGISTERED capability (not in ``OBSERVABILITY_CAPABILITIES``) is
+    a caller error (a typo, or an unregistered feature) — it raises ``ValueError``, NOT
+    ``StaleSdkError``. Otherwise every current SDK would false-report as "stale" for a capability no
+    SDK stamps (the lacuna-audit footgun: the guard must not lie about staleness).
     """
+    required = list(required)
+    unregistered = [c for c in required if c not in OBSERVABILITY_CAPABILITIES]
+    if unregistered:
+        raise ValueError(
+            f"unknown observability capability key(s) {sorted(unregistered)} — not registered in "
+            f"OBSERVABILITY_CAPABILITIES {sorted(OBSERVABILITY_CAPABILITIES)}. This is a caller "
+            "error (typo, or a feature that isn't capability-stamped), NOT a stale SDK — fix the "
+            "required set or register the capability."
+        )
     prov = quality.get("provenance") or {}
     agg = quality.get("aggregate") or {}
     stamped = set(prov.get("sdk_capabilities") or agg.get("sdk_capabilities") or [])
