@@ -8,6 +8,7 @@ Extracted verbatim from ``artifact_generator.py`` (Tier-2 refactor, step 2).
 
 import json  # noqa: F401
 import logging
+import os
 import re  # noqa: F401
 from datetime import datetime, timezone  # noqa: F401
 from pathlib import Path  # noqa: F401
@@ -641,7 +642,13 @@ def load_business_context(
     ctx.criticality = business.get("criticality", "medium")
     # Deployment mode (Increment 2): drives importance-scaled defaults toward extreme forgiveness for
     # locally-installed apps. From spec.deployment.mode; absent ⇒ None ⇒ criticality-only.
-    ctx.deployment_mode = (spec.get("deployment") or {}).get("mode")
+    # STARTD8_DEPLOYMENT_MODE env OVERRIDES the manifest (durable-pass operator override, the twin of
+    # the affordance-map env + sdk#417's `capdevpipe run --deployment-mode`): the `.contextcore.yaml`
+    # is run-DERIVED from a plan that often declares no deployment.mode, so the env is how the durable
+    # pass sets it without editing the derived manifest. Empty/unset env ⇒ falls through to the
+    # manifest ⇒ byte-identical when the override is absent (empty-default IS the guard).
+    _mode_override = (os.environ.get("STARTD8_DEPLOYMENT_MODE") or "").strip()
+    ctx.deployment_mode = _mode_override or (spec.get("deployment") or {}).get("mode")
     # spec.deployment.runtime (compose|kubernetes|unknown) — gates the runtime-correct artifact set
     # (an explicit 'unknown' suppresses the k8s ServiceMonitor; FP-3 fail-closed).
     ctx.deployment_runtime = (spec.get("deployment") or {}).get("runtime")
