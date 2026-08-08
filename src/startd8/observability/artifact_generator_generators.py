@@ -360,6 +360,33 @@ def _derivation_comment(derivations: List[DerivationTrace]) -> str:
     return "\n".join(lines)
 
 
+def _installed_metric_sources(
+    service: ServiceHints, business: BusinessContext
+) -> List[Any]:
+    """The metric objects an INSTALLED-gated emit loop should enumerate: ``convention_metrics``
+    always, plus ``declared_emitted_series`` (the REAL emitted surface — #286/REQ-CCL-107) when
+    ``deployment_mode == "installed"``. Convention-first, so a downstream prom-name dedup keeps the
+    convention entry (convention wins).
+
+    The single enumeration authority behind sdk#439 (freshness SLO) and sdk#440 (the two alert
+    loops) — the Class-A fix-once from PROPOSAL_generation_invariant_classes.md
+    (enumeration-incompleteness). It replaces the inline ``convention ∪ declared_emitted_series``
+    union byte-for-byte at each call site, so a future edit can't silently drop
+    ``declared_emitted_series`` from one loop again.
+
+    Deliberately NOT the authority for two adjacent sites:
+      * ``_select_functional_metric`` — UNGATED and also unions ``declared_metrics`` (a binding
+        lane, not an emit lane); routing it here would regress its deployed-mode binding.
+      * the secondary-RED freshness loop — convention-only by decision (the Harbor FDE deferred
+        adding ``declared_emitted_series`` there: the target families don't exist for Harbor;
+        predictive gap only, revisit per-subject).
+    """
+    sources: List[Any] = list(service.convention_metrics or [])
+    if (getattr(business, "deployment_mode", None) or "") == "installed":
+        sources += list(getattr(service, "declared_emitted_series", None) or [])
+    return sources
+
+
 def generate_alert_rules(
     service: ServiceHints,
     business: BusinessContext,
@@ -532,11 +559,7 @@ def generate_alert_rules(
     # alerting in ALL modes (unchanged); only the declared-series addition is installed-gated,
     # so the whole default-mode golden corpus stays byte-identical.
     _gauge_seen: set = set()
-    _gauge_sources = list(service.convention_metrics or [])
-    if (getattr(business, "deployment_mode", None) or "") == "installed":
-        _gauge_sources += list(
-            getattr(service, "declared_emitted_series", None) or []
-        )
+    _gauge_sources = _installed_metric_sources(service, business)
     for metric in _gauge_sources:
         if getattr(metric, "type", "") != "gauge":
             continue
@@ -583,11 +606,7 @@ def generate_alert_rules(
     # rationale + byte-identity guard as the gauge loop); convention counters keep alerting in
     # all modes. Deduped by prom-name (convention wins).
     _err_seen: set = set()
-    _err_sources = list(service.convention_metrics or [])
-    if (getattr(business, "deployment_mode", None) or "") == "installed":
-        _err_sources += list(
-            getattr(service, "declared_emitted_series", None) or []
-        )
+    _err_sources = _installed_metric_sources(service, business)
     for metric in _err_sources:
         if getattr(metric, "type", "") != "counter":
             continue
@@ -2562,9 +2581,8 @@ def generate_slo_definitions(
         # by prom-name (convention wins). Byte-identical for services whose declared_emitted_series
         # carries no gauge, and in deployed/default mode (this whole block is installed-only).
         _fresh_seen: set = set()
-        _fresh_gauges = list(service.convention_metrics or []) + list(
-            getattr(service, "declared_emitted_series", None) or []
-        )
+        # installed context (enclosing block) → the helper returns convention ∪ declared_emitted_series.
+        _fresh_gauges = _installed_metric_sources(service, business)
         for _m in _fresh_gauges:
             if getattr(_m, "type", "") != "gauge":
                 continue
@@ -2615,6 +2633,10 @@ def generate_slo_definitions(
         )
         _st_sph = max(1, int(3600 / _st_int)) if _st_int else 120
         _covered = {m.name for m in (counter_metric, summary_metric, histogram_metric) if m}
+        # NOTE (Class A, deliberate): this loop is convention-only and does NOT use
+        # _installed_metric_sources — the Harbor FDE deferred unioning declared_emitted_series here
+        # (the secondary-RED target families don't exist for Harbor; predictive gap for Istio/etc,
+        # revisit per-subject). Left convention-only on purpose; not an oversight for a sweep to "fix".
         for _m in service.convention_metrics:
             if _m.type not in ("counter", "summary") or _m.name in _covered:
                 continue
