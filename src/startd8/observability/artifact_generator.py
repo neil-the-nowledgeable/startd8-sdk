@@ -334,6 +334,38 @@ def _emit_time_sdk_sha() -> Dict[str, str]:
     }
 
 
+def _manifest_provenance(
+    onboarding_metadata_path: Optional[Path], business: Any
+) -> Dict[str, str]:
+    """Stamp the MANIFEST substrate into quality provenance (metabolize: substrate-blind
+    measurement).
+
+    The report already stamps the SDK substrate (``sdk_sha``). It was BLIND to the manifest
+    substrate — so two runs on DIFFERENT manifests (e.g. a ``covers``-bound manual export vs a
+    ``covers``-empty full-clone) with the SAME SDK produced BYTE-IDENTICAL provenance, and their
+    ``metric_coverage_*`` numbers got compared as commensurable when they were not (the class the
+    audit-then-metabolize pass converged on: the export-durable→spine-newest coverage whiplash).
+    ``manifest_sha`` makes the substrate visible so a consumer/CI can refuse a cross-substrate
+    comparison; ``deployment_mode`` is the other substrate axis (it gates the installed-only
+    freshness/secondary SLO lanes — same field the FDE asked to see in provenance). Fail-soft:
+    an unreadable/absent path stamps empty strings (never raises)."""
+    import hashlib
+
+    prov = {"manifest_sha": "", "manifest_path": "", "deployment_mode": ""}
+    try:
+        prov["deployment_mode"] = str(getattr(business, "deployment_mode", None) or "")
+    except Exception:  # pragma: no cover - defensive
+        pass
+    try:
+        if onboarding_metadata_path:
+            p = Path(onboarding_metadata_path)
+            prov["manifest_path"] = str(p)
+            prov["manifest_sha"] = hashlib.sha256(p.read_bytes()).hexdigest()
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return prov
+
+
 def _utc_now_iso() -> str:
     """UTC timestamp for `generated_at` fields, honoring deterministic runs.
 
@@ -2078,6 +2110,7 @@ def generate_observability_artifacts(
                 if getattr(s, "metrics_surface", "") in NON_SCRAPEABLE_SURFACES
             },
             emit_field_states=emit_field_states,
+            manifest_provenance=_manifest_provenance(onboarding_metadata_path, business),
         )
 
     return report
@@ -2779,6 +2812,7 @@ def _write_quality_report(
     export_disposition: str = "",
     nonscrapeable_service_ids: Optional[Set[str]] = None,
     emit_field_states: bool = False,
+    manifest_provenance: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write standalone observability-quality.json (REQ-KZ-OBS-730b).
 
@@ -3124,6 +3158,9 @@ def _write_quality_report(
             "sdk_sha_source": emit_prov.get("sdk_sha_source", "absent"),
             "sdk_module_path": emit_prov.get("sdk_module_path", ""),
             "sdk_capabilities": emit_prov.get("sdk_capabilities", []),
+            # Manifest substrate (metabolize: substrate-blind measurement). Absent (None) ⇒ keys
+            # omitted ⇒ byte-identical for callers that don't thread it (FR-11 presence-gated).
+            **(manifest_provenance or {}),
         },
     }
 
