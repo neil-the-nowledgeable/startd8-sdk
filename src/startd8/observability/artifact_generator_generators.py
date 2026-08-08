@@ -2510,10 +2510,27 @@ def generate_slo_definitions(
             getattr(business, "metrics_interval", None) or "30s"
         )
         _samples_per_hour = max(1, int(3600 / _interval_s)) if _interval_s else 120
-        for _m in service.convention_metrics:
-            if _m.type != "gauge":
+        # sdk#411 follow-up (S6 root cause): a prometheus_exporter-style service emits its
+        # gauges (e.g. harbor_statistics_*) into declared_emitted_series, NOT convention_metrics,
+        # so a convention-only loop emitted ZERO freshness SLOs for it (live system coverage stuck
+        # at 7/22=0.3182). Draw gauges from BOTH sources — mirrors _append_declared_series_gauge_panels
+        # (the dashboard OBSERVE lane, which already iterates declared_emitted_series gauges) — deduped
+        # by prom-name (convention wins). Byte-identical for services whose declared_emitted_series
+        # carries no gauge, and in deployed/default mode (this whole block is installed-only).
+        _fresh_seen: set = set()
+        _fresh_gauges = list(service.convention_metrics or []) + list(
+            getattr(service, "declared_emitted_series", None) or []
+        )
+        for _m in _fresh_gauges:
+            if getattr(_m, "type", "") != "gauge":
                 continue
-            _gp = _prom_name(_m.name)
+            _mname = getattr(_m, "name", "")
+            if not _mname:
+                continue
+            _gp = _prom_name(_mname)
+            if _gp in _fresh_seen:
+                continue
+            _fresh_seen.add(_gp)
             slo = _openslo_doc(
                 name=f"{service.service_id}-{_gp}-freshness",
                 labels={
