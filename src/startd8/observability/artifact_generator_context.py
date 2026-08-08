@@ -183,6 +183,43 @@ def classify_route_states(services: List[ServiceHints]) -> List[Dict[str, Any]]:
     return rows
 
 
+#: The onboarding-metadata contract MAJOR this consumer understands. The producer (ContextCore /
+#: cap-dev-pipe) MAY stamp a top-level ``schema_version`` (``"MAJOR.MINOR"``, mirroring the SDK's own
+#: output convention at artifact_generator.py). A MINOR bump is additive and safe to ignore; a MAJOR
+#: bump means fields this consumer reads may have moved/renamed. Bump this when the consumer is taught
+#: a new MAJOR. (#226 contract-health CH-6.)
+SUPPORTED_ONBOARDING_SCHEMA_MAJOR = 1
+
+
+def _warn_on_unrecognized_schema_version(data: Dict[str, Any], path: Path) -> None:
+    """Warn — never fail — when the onboarding-metadata declares a schema MAJOR this consumer does not
+    understand (CH-6 version handshake). Absent ``schema_version`` ⇒ silent (back-compat: today's
+    producers stamp none, so this is a no-op until one opts in). A malformed value warns too. Degrade-
+    safe: a schema drift surfaces as a legible 'consumer supports vX' log line instead of vanishing into
+    the structural ``.get()`` defaults downstream (the silent-fallback the CEP CH-6 finding named)."""
+    if not isinstance(data, dict):
+        return
+    raw = data.get("schema_version")
+    if raw is None:
+        return
+    try:
+        major = int(str(raw).split(".", 1)[0])
+    except (ValueError, TypeError):
+        logger.warning(
+            "Onboarding metadata at %s declares an unparseable schema_version %r; "
+            "proceeding best-effort (consumer supports MAJOR %d).",
+            path, raw, SUPPORTED_ONBOARDING_SCHEMA_MAJOR,
+        )
+        return
+    if major != SUPPORTED_ONBOARDING_SCHEMA_MAJOR:
+        logger.warning(
+            "Onboarding metadata at %s declares schema_version %r (MAJOR %d) but this consumer "
+            "supports MAJOR %d — proceeding best-effort; some fields may be unrecognized or "
+            "mis-read. Reconcile the producer/consumer contract.",
+            path, raw, major, SUPPORTED_ONBOARDING_SCHEMA_MAJOR,
+        )
+
+
 def load_onboarding_metadata(path: Path) -> Dict[str, Any]:
     """Load onboarding-metadata.json and return raw dict.
 
@@ -200,6 +237,9 @@ def load_onboarding_metadata(path: Path) -> Dict[str, Any]:
                 f"Onboarding metadata at {path} is not valid JSON "
                 f"(line {e.lineno}, column {e.colno}): {e.msg}"
             ) from e
+    # CH-6: a producer-declared schema MAJOR we don't understand warns (never fails) — a legible
+    # cross-repo drift signal instead of silent .get() degradation.
+    _warn_on_unrecognized_schema_version(data, path)
     logger.info("Loaded onboarding metadata from %s (%d top-level keys)", path, len(data))
     return data
 
