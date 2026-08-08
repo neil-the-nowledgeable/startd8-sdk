@@ -1372,10 +1372,21 @@ def _select_functional_metric(candidates: Tuple[str, ...], service: ServiceHints
     ``candidates[0]`` is the common path — which is why the primary must be the series with
     real evidence of existing, not an aspirational one. Names compare dot/underscore-
     insensitively (OTel dotted ``kafka.consumer.records.lag.max`` vs PromQL underscored).
+
+    sdk#439/#440 sibling (binding lane): ``declared_emitted_series`` is the SDK's REAL-emitted-
+    series collection (#286/REQ-CCL-107) — definitionally the strongest "real evidence of
+    existing" — yet a prometheus_exporter/worker puts its series THERE, not in convention/declared
+    metrics. Omitting it made this selector fall back to the aspirational ``candidates[0]`` even
+    when the real series was declared as emitted. Include it. Byte-identical when the collection is
+    empty or none of its names match a functional candidate already unmatched by convention/declared.
     """
     emitted = {
         m.name.replace(".", "_")
-        for m in (list(service.convention_metrics or []) + list(service.declared_metrics or []))
+        for m in (
+            list(service.convention_metrics or [])
+            + list(service.declared_metrics or [])
+            + list(getattr(service, "declared_emitted_series", None) or [])
+        )
     }
     for cand in candidates:
         if cand.replace(".", "_") in emitted:
