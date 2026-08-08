@@ -473,3 +473,62 @@ class TestScore3SecondaryRedFamilies:
         c = generate_slo_definitions(svc, self._biz("installed")).content
         assert "red_leg" not in c
         assert "-freshness" not in c
+
+
+class TestOpenSloHelperParity:
+    """Mirror test for the distilled `_openslo_doc` scaffold: it must reproduce EXACTLY the dict the
+    5 hand-written SLO blocks used to build (key order included — yaml.dump(sort_keys=False) is
+    order-sensitive), so the consolidation can't silently drift the byte output. Covers both
+    indicator shapes (threshold + ratio) and the latency-p99 sli/alert-name override."""
+
+    def test_threshold_scaffold_matches_reference(self):
+        from startd8.observability.artifact_generator_generators import (
+            _openslo_doc, _threshold_indicator,
+        )
+        got = _openslo_doc(
+            name="svc-latency-avg",
+            labels={"service": "svc", "protocol": "http", "generated_by": "startd8"},
+            description="Average latency SLO for svc",
+            target=99.9,
+            window="30d",
+            severity="critical",
+            indicator_spec=_threshold_indicator("sum(rate(x_sum[5m]))/sum(rate(x_count[5m]))", 0.5, "lte"),
+        )
+        expected = {
+            "apiVersion": "openslo/v1", "kind": "SLO",
+            "metadata": {"name": "svc-latency-avg",
+                         "labels": {"service": "svc", "protocol": "http", "generated_by": "startd8"}},
+            "spec": {
+                "description": "Average latency SLO for svc", "target": 99.9,
+                "timeWindow": {"duration": "30d", "isRolling": True}, "budgetPolicy": "occurrences",
+                "indicator": {"metadata": {"name": "svc-latency-avg-sli"},
+                              "spec": {"thresholdMetric": {
+                                  "metricSource": {"type": "prometheus",
+                                                   "spec": {"query": "sum(rate(x_sum[5m]))/sum(rate(x_count[5m]))"}},
+                                  "threshold": 0.5, "operator": "lte"}}},
+                "alerting": {"name": "svc-latency-avg-alert", "labels": {"severity": "critical"}},
+            },
+        }
+        assert got == expected
+        # key ORDER parity (yaml.dump is order-sensitive) — the whole point of the mirror test
+        assert list(got["spec"].keys()) == list(expected["spec"].keys())
+
+    def test_ratio_scaffold_and_sli_override(self):
+        from startd8.observability.artifact_generator_generators import _openslo_doc
+        ind = {"ratioMetric": {"counter": {"metricSource": {"type": "prometheus", "spec": {"query": "rate(t[5m])"}}},
+                               "good": {"metricSource": {"type": "prometheus", "spec": {"query": "rate(g[5m])"}}}}}
+        got = _openslo_doc(name="svc-latency-p99", labels={"service": "svc"}, description="d",
+                           target=99.0, window="30d", severity="warning", indicator_spec=ind,
+                           sli_name="svc-latency-sli", alert_name="svc-latency-alert")
+        # the p99 quirk: sli/alert are the OVERRIDES, not {name}-sli
+        assert got["spec"]["indicator"]["metadata"]["name"] == "svc-latency-sli"
+        assert got["spec"]["alerting"]["name"] == "svc-latency-alert"
+        assert got["spec"]["indicator"]["spec"] == ind  # ratio shape passed through verbatim
+
+    def test_sli_alert_default_naming(self):
+        from startd8.observability.artifact_generator_generators import _openslo_doc, _threshold_indicator
+        got = _openslo_doc(name="svc-x-freshness", labels={}, description="d", target=97.0,
+                           window="30d", severity="warning",
+                           indicator_spec=_threshold_indicator("count_over_time(x[1h])/120", 0.97, "gte"))
+        assert got["spec"]["indicator"]["metadata"]["name"] == "svc-x-freshness-sli"
+        assert got["spec"]["alerting"]["name"] == "svc-x-freshness-alert"
