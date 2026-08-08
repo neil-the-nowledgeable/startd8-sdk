@@ -93,14 +93,19 @@ series match a selector that omits `reporter` — an authoring pitfall worth a p
 
 | # | Finding | Status | Action |
 |---|---|---|---|
-| F1 | declared-latency unit-blind | **verified defect** (corpus-masked) | scale by inferred unit — needs its own reqs/review (changes seconds targets) |
+| F1 | declared-latency unit-blind | **RESOLVED** — spec'd (#422) + fixed (#424) | scaled via `_metric_unit` (now ms-aware) + shared `scale_seconds_to_unit`; live-verified on Harbor (`500ms` string → `0.5` numeric). Liveness-attribution follow-on = contextcore#406. |
 | F2 | convention idiom HTTP-bound | known, mitigated | ensure the Istio plan **declares** `istio_*` series (authoring) |
 | F3 | error taxonomy | armored | — (Envoy `response_flags` → `custom` path) |
 | F4 | sidecar/reporter labels | mitigated | plan note: pin `reporter` in the declared selector |
 
+> **Update (2026-08-08):** F1 is **resolved** — spec `REQ-declared-latency-unit-scaling.md` (#422) →
+> fix #424 (`_metric_unit` learns ms; declared path scales via the single-sourced `scale_seconds_to_unit`;
+> live-verified that real Harbor no longer ships the `500ms` string). A generation-layer finding whose
+> *liveness* attribution (is an unbound SLI a code gap or a load gap?) is the contextcore#406 follow-on.
+
 **Bottom line:** the generator is far more Istio-ready than a naive audit would guess — units are scaled
 on the convention/span paths, the Istio error idiom is already recognized, and the declared-series path
-is metric-name/label agnostic. The **one genuine, verified defect** is F1 (declared-latency unit
-blindness), which — because the whole corpus is seconds — has been silently producing too-loose SLOs and
+is metric-name/label agnostic. The **one genuine, verified defect** was F1 (declared-latency unit
+blindness), which — because the whole corpus is seconds — had been silently producing too-loose SLOs and
 would only *look* correct once Istio's milliseconds arrive. That is exactly the failure class this audit
 exists to catch: a mechanism that survived every input because every input shared its hidden assumption.
