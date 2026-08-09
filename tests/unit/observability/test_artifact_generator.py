@@ -2952,3 +2952,100 @@ def test_coverage_bind_panel_expr_default_is_backward_compatible():
     hist = _coverage_bind_panel_expr(fam)
     assert "histogram_quantile" in hist and f"{fam}_bucket" in hist
     assert hist == _coverage_bind_panel_expr(fam, is_summary=False)
+
+
+# --- EC-SUMMARY-TYPE: declared-base / RED latency lane (generate_dashboard_spec /
+# generate_alert_rules), the sibling of the coverage-bind lane fix above ----------
+
+
+def test_summary_avg_expr_window_variants():
+    """The single-source summary-average helper: default window is the Grafana
+    ``$__rate_interval`` macro (dashboard panels); alert rules are ruler-evaluated
+    and pass a literal window (``5m``). No label selector, ever (the summary family
+    name is already service-scoped; a possibly-absent label would re-break bind)."""
+    from startd8.observability.affordance_map_consume import _summary_avg_expr
+
+    fam = "harbor_core_http_request_duration_seconds"
+    dash = _summary_avg_expr(fam)
+    assert dash == (
+        f"sum(rate({fam}_sum[$__rate_interval])) "
+        f"/ sum(rate({fam}_count[$__rate_interval]))"
+    )
+    alert = _summary_avg_expr(fam, window="5m")
+    assert alert == f"sum(rate({fam}_sum[5m])) / sum(rate({fam}_count[5m]))"
+    assert "histogram_quantile" not in dash and "_bucket" not in dash
+
+
+def _summary_latency_service(is_summary: bool):
+    """An http service whose latency family (``http_server_duration``, the default
+    http descriptor's ``latency_bucket_metric`` base) is declared a Prometheus
+    SUMMARY via ``declared_emitted_series`` — the Harbor core shape."""
+    from startd8.observability.artifact_generator import ConventionMetric, ServiceHints
+    from startd8.observability.artifact_generator_models import DeclaredEmittedSeries
+
+    des = (
+        [DeclaredEmittedSeries(name="http_server_duration", type="summary")]
+        if is_summary
+        else []
+    )
+    return ServiceHints(
+        service_id="core",
+        transport="http",
+        language="go",
+        convention_metrics=[
+            ConventionMetric("http.server.duration", "histogram", "otel_semconv:http")
+        ],
+        declared_emitted_series=des,
+    )
+
+
+def _summary_biz():
+    from startd8.observability.artifact_generator import BusinessContext
+
+    return BusinessContext(
+        criticality="high",
+        availability="99.9",
+        latency_p99="500ms",
+        throughput="100rps",
+        project_id="harbor-pilot",
+        slo_window="30d",
+    )
+
+
+def test_declared_base_latency_summary_dashboard_avoids_dead_bucket():
+    """EC-SUMMARY-TYPE (declared-base lane): a latency family declared ``histogram``
+    by convention but EMITTED as a summary has no ``_bucket`` → the 3 declared-base
+    latency panels (p99+p50+p95) bind DEAD (Harbor core 0/3). The gate must replace
+    the p99 with the guaranteed-live average and drop the p50/p95 ``_bucket`` panels."""
+    from startd8.observability.artifact_generator import generate_dashboard_spec
+
+    content = generate_dashboard_spec(_summary_latency_service(True), _summary_biz()).content
+    assert "http_server_duration_bucket" not in content  # no dead histogram legs
+    assert "sum(rate(http_server_duration_sum[$__rate_interval]))" in content
+    assert "sum(rate(http_server_duration_count[$__rate_interval]))" in content
+    assert "(p50)" not in content and "(p95)" not in content  # bucket quantiles dropped
+
+
+def test_declared_base_latency_summary_alert_uses_average():
+    """The LatencyP99High alert for a summary family binds the ruler-evaluated average
+    (literal ``5m`` window), never ``histogram_quantile(rate(_bucket))``."""
+    from startd8.observability.artifact_generator import generate_alert_rules
+
+    content = generate_alert_rules(_summary_latency_service(True), _summary_biz()).content
+    assert "sum(rate(http_server_duration_sum[5m]))" in content
+    assert "sum(rate(http_server_duration_count[5m]))" in content
+    assert "http_server_duration_bucket" not in content
+
+
+def test_declared_base_latency_histogram_unchanged():
+    """Back-compat: a true-histogram latency family (no summary declaration) keeps the
+    exact histogram_quantile(rate(_bucket)) shape in both lanes — the gate is additive."""
+    from startd8.observability.artifact_generator import (
+        generate_alert_rules,
+        generate_dashboard_spec,
+    )
+
+    dash = generate_dashboard_spec(_summary_latency_service(False), _summary_biz()).content
+    alert = generate_alert_rules(_summary_latency_service(False), _summary_biz()).content
+    assert "histogram_quantile" in dash and "http_server_duration_bucket" in dash
+    assert "histogram_quantile" in alert and "http_server_duration_bucket" in alert
