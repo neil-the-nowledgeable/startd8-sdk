@@ -162,9 +162,12 @@ def build_portal_spec(
     # Dashboard links to each service's generated dashboard
     links = _build_dashboard_links_list(services)
 
+    # EC-PORTAL-2 fix: prefer the persona's declared value.title as the board label (else the render id).
+    _pv = getattr(profile, "value", None) or {}
+    _persona_label = _pv.get("title") or persona.title()
     return {
         "title": f"{project_id} — Onboarding Portal"
-                 + (f" ({persona.title()})" if persona != "operator" else ""),
+                 + (f" ({_persona_label})" if persona != "operator" else ""),
         "uid": f"cc-portal-{uid_project}{uid_suffix}",
         "description": (
             f"Auto-generated onboarding portal for {project_id}. "
