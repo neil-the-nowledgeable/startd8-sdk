@@ -413,8 +413,9 @@ def generate_alert_rules(
 
     # EC-SUMMARY-TYPE (declared-base/RED latency lane, mirrors generate_dashboard_spec):
     # a latency family emitted as a Prometheus summary has no _bucket → the
-    # histogram_quantile alert binds dead. Bind the guaranteed-live average instead.
-    from .affordance_map_consume import _summary_avg_expr
+    # histogram_quantile alert binds dead. LatencyP99High is a p99 CLAIM, so bind the
+    # summary's native {quantile="0.99"} child (shape-follows-the-claim), not the mean.
+    from .affordance_map_consume import _summary_p99_expr
 
     _latency_base = (
         latency_bucket[: -len("_bucket")]
@@ -449,10 +450,12 @@ def generate_alert_rules(
             threshold = descriptor.scale_threshold_seconds(
                 _parse_duration_to_seconds(latency_raw)
             )
-            # EC-SUMMARY-TYPE: summary latency family → guaranteed-live average
-            # (ruler-evaluated, literal 5m window); histogram families unchanged.
+            # EC-SUMMARY-TYPE (shape-follows-the-claim, GATE-2p): LatencyP99High is a real
+            # p99 CLAIM, so a summary binds its native {quantile="0.99"} child — NOT the mean
+            # (avg under a p99 name is a fake-bind). Dead if the summary omits the 0.99
+            # objective = honest substrate gap. histogram families unchanged.
             if _latency_base in _summary_families:
-                _latency_expr = f"{_summary_avg_expr(_latency_base, window='5m')} > {threshold}"
+                _latency_expr = f"{_summary_p99_expr(_latency_base, total_selector)} > {threshold}"
             else:
                 _latency_expr = (
                     f"histogram_quantile(0.99,\n"
@@ -768,11 +771,12 @@ def generate_dashboard_spec(
     # ``histogram`` by convention but EMITTED as a Prometheus **summary** (per the
     # service's declared_emitted_series type) exposes no ``_bucket`` series — so the
     # histogram_quantile(rate(_bucket)) p99/p50/p95 panels below bind DEAD (Harbor
-    # core: harbor_core_http_request_duration_seconds is a summary → 0/3). Mirror the
-    # coverage-bind lane's type-gate (fix/coverage-bind-summary-dead-sli): bind the
-    # guaranteed-live average sum(rate(_sum))/sum(rate(_count)) instead. Unknown/true
-    # histogram families keep the exact prior behaviour (summary branch is additive).
-    from .affordance_map_consume import _summary_avg_expr
+    # core: harbor_core_http_request_duration_seconds is a summary → 0/3). A p99 latency
+    # panel is a p99 CLAIM (shape-follows-the-claim, GATE-2p), so bind the summary's native
+    # {quantile="0.99"} child — not the mean (avg under a p99 title is a fake-bind). Dead
+    # if the 0.99 objective is unpublished = honest substrate gap. Unknown/true histogram
+    # families keep the exact prior behaviour (summary branch is additive).
+    from .affordance_map_consume import _summary_p99_expr
 
     summary_families = {
         s.name
@@ -806,11 +810,12 @@ def generate_dashboard_spec(
             continue
 
         query = query_tpl.format(metric=metric_base, selector=selector)
-        # EC-SUMMARY-TYPE: the latency family is emitted as a summary (no _bucket) →
-        # replace the dead histogram_quantile p99 with the guaranteed-live average.
+        # EC-SUMMARY-TYPE (shape-follows-the-claim): a p99 latency panel is a p99 CLAIM → the
+        # summary's native {quantile="0.99"} child, not the mean. p50/p95 below stay dropped
+        # for a summary (an absent panel makes no false claim — honest, unlike a mean).
         is_summary_latency = is_latency and metric_base in summary_families
         if is_summary_latency:
-            query = _summary_avg_expr(metric_base)
+            query = _summary_p99_expr(metric_base, selector)
         # FR-4a: latency panels carry the descriptor's native unit (s vs ms);
         # non-latency panels keep name-inferred units. For the semconv default
         # descriptor.latency_unit == "s", matching _metric_unit("*.duration").

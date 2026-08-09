@@ -568,6 +568,26 @@ def _summary_avg_expr(fam: str, window: str = "$__rate_interval") -> str:
     )
 
 
+def _summary_p99_expr(fam: str, selector: str = "") -> str:
+    """PromQL for a Prometheus Summary's native client-computed p99 child series
+    ``{quantile="0.99"}`` — the HONEST binding for a p99 CLAIM (a ``LatencyP99High``
+    alert or a p99 dashboard panel).
+
+    Shape follows the CLAIM (Harbor FDE, GATE-2p): a p99-*named* SLI must query the real
+    p99, not ``_summary_avg_expr``'s mean — binding the average under a p99 name is a
+    fake-bind. A summary configured without the 0.99 objective yields an empty series: an
+    honest SUBSTRATE gap (honest deflation), NOT a value to paper over with the mean. The
+    sibling ``_summary_avg_expr`` stays the right shape for a *liveness reference* (coverage
+    /orientation bind) that makes no quantile claim. Merges the quantile matcher INTO
+    ``selector`` so we never emit two adjacent brace groups (mirrors the ``summary_quantile``
+    shape in ``_functional_sli_query``)."""
+    if selector.startswith("{") and selector.endswith("}") and len(selector) > 2:
+        merged = '{quantile="0.99",' + selector[1:]
+    else:
+        merged = '{quantile="0.99"}'
+    return f"{fam}{merged}"
+
+
 # ---- Load (FR-B1) ------------------------------------------------------------
 
 

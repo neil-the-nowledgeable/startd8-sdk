@@ -3240,6 +3240,21 @@ def test_summary_avg_expr_window_variants():
     assert "histogram_quantile" not in dash and "_bucket" not in dash
 
 
+def test_summary_p99_expr_shape_follows_the_claim():
+    """The p99-CLAIM helper binds the summary's native ``{quantile="0.99"}`` child, merging
+    the matcher into an existing selector (never two adjacent brace groups). Distinct from
+    ``_summary_avg_expr`` (a liveness reference, no quantile claim) — shape follows the claim."""
+    from startd8.observability.affordance_map_consume import _summary_p99_expr
+
+    fam = "harbor_core_http_request_duration_seconds"
+    assert _summary_p99_expr(fam) == f'{fam}{{quantile="0.99"}}'
+    # merges into an existing selector, one brace group
+    merged = _summary_p99_expr(fam, '{service="core"}')
+    assert merged == f'{fam}{{quantile="0.99",service="core"}}'
+    assert '"}{' not in merged  # never two adjacent brace groups
+    assert "histogram_quantile" not in merged and "_sum" not in merged  # p99, not mean
+
+
 def _summary_latency_service(is_summary: bool):
     """An http service whose latency family (``http_server_duration``, the default
     http descriptor's ``latency_bucket_metric`` base) is declared a Prometheus
@@ -3276,28 +3291,29 @@ def _summary_biz():
     )
 
 
-def test_declared_base_latency_summary_dashboard_avoids_dead_bucket():
-    """EC-SUMMARY-TYPE (declared-base lane): a latency family declared ``histogram``
-    by convention but EMITTED as a summary has no ``_bucket`` → the 3 declared-base
-    latency panels (p99+p50+p95) bind DEAD (Harbor core 0/3). The gate must replace
-    the p99 with the guaranteed-live average and drop the p50/p95 ``_bucket`` panels."""
+def test_declared_base_latency_summary_dashboard_binds_native_p99():
+    """EC-SUMMARY-TYPE / shape-follows-the-claim (GATE-2p): a latency family declared
+    ``histogram`` by convention but EMITTED as a summary has no ``_bucket`` → the p99
+    panel must bind the summary's native ``{quantile="0.99"}`` child (a p99 panel is a
+    p99 CLAIM — the mean would be a fake-bind), never a dead ``histogram_quantile(_bucket)``.
+    p50/p95 ``_bucket`` panels stay dropped (an absent panel makes no false claim)."""
     from startd8.observability.artifact_generator import generate_dashboard_spec
 
     content = generate_dashboard_spec(_summary_latency_service(True), _summary_biz()).content
     assert "http_server_duration_bucket" not in content  # no dead histogram legs
-    assert "sum(rate(http_server_duration_sum[$__rate_interval]))" in content
-    assert "sum(rate(http_server_duration_count[$__rate_interval]))" in content
+    assert 'http_server_duration{quantile="0.99"' in content  # native p99 child
+    assert "sum(rate(http_server_duration_sum" not in content  # NOT the mean (no fake-bind)
     assert "(p50)" not in content and "(p95)" not in content  # bucket quantiles dropped
 
 
-def test_declared_base_latency_summary_alert_uses_average():
-    """The LatencyP99High alert for a summary family binds the ruler-evaluated average
-    (literal ``5m`` window), never ``histogram_quantile(rate(_bucket))``."""
+def test_declared_base_latency_summary_alert_binds_native_p99():
+    """LatencyP99High is a p99 CLAIM → a summary binds its native ``{quantile="0.99"}``
+    child, never ``histogram_quantile(rate(_bucket))`` and never the mean (fake-bind)."""
     from startd8.observability.artifact_generator import generate_alert_rules
 
     content = generate_alert_rules(_summary_latency_service(True), _summary_biz()).content
-    assert "sum(rate(http_server_duration_sum[5m]))" in content
-    assert "sum(rate(http_server_duration_count[5m]))" in content
+    assert 'http_server_duration{quantile="0.99"' in content
+    assert "sum(rate(http_server_duration_sum" not in content  # NOT the mean
     assert "http_server_duration_bucket" not in content
 
 
