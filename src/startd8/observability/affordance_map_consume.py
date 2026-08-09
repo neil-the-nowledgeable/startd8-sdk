@@ -543,6 +543,31 @@ def _duration_panel_expr(dur: str) -> str:
     )
 
 
+def _summary_avg_expr(fam: str, window: str = "$__rate_interval") -> str:
+    """PromQL average-latency for a Prometheus **Summary** family (EC-SUMMARY-TYPE).
+
+    A Summary shares the ``…_duration_seconds`` basename shape of a histogram but
+    exposes **no** ``_bucket`` series — so ``histogram_quantile(rate(…_bucket))``
+    binds DEAD. A summary's ``_sum``/``_count`` children always exist, so the
+    guaranteed-live average ``sum(rate(_sum)) / sum(rate(_count))`` is the
+    bindable latency SLI (p99 would need configured quantile objectives a summary
+    may omit). Single source for the summary branch of both the AffordanceMap
+    coverage-bind lane (``_coverage_bind_panel_expr``) and the declared-base RED
+    latency lane (``generate_dashboard_spec`` / ``generate_alert_rules``).
+
+    ``window`` defaults to ``$__rate_interval`` (dashboard panels); alert rules
+    are ruler-evaluated and pass a literal window (``5m``) — the ruler does not
+    understand the Grafana ``$__rate_interval`` macro. No label selector is added:
+    a summary latency family's real name is already service-scoped (Harbor:
+    ``harbor_core_http_request_duration_seconds``), and appending a possibly-absent
+    label would re-break the live bind (the FDE-proven expr carried no selector).
+    """
+    return (
+        f"sum(rate({fam}_sum[{window}])) "
+        f"/ sum(rate({fam}_count[{window}]))"
+    )
+
+
 # ---- Load (FR-B1) ------------------------------------------------------------
 
 
