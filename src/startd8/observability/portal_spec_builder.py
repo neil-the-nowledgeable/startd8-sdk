@@ -165,10 +165,17 @@ def build_portal_spec(
     # EC-PORTAL-2 fix: prefer the persona's declared value.title as the board label (else the render id).
     _pv = getattr(profile, "value", None) or {}
     _persona_label = _pv.get("title") or persona.title()
+    # EC-PORTAL-6 fix: Grafana caps dashboard uid at 40 chars; a long persona render id
+    # (e.g. cc-portal-harbor-security-compliance-officer = 44) fails provisioning. Cap to 40 while
+    # staying deterministic + unique (readable prefix + short hash of the full slug).
+    uid = f"cc-portal-{uid_project}{uid_suffix}"
+    if len(uid) > 40:
+        import hashlib
+        uid = uid[:33] + "-" + hashlib.sha1(uid.encode()).hexdigest()[:6]  # 33 + 1 + 6 = 40
     return {
         "title": f"{project_id} — Onboarding Portal"
                  + (f" ({_persona_label})" if persona != "operator" else ""),
-        "uid": f"cc-portal-{uid_project}{uid_suffix}",
+        "uid": uid,
         "description": (
             f"Auto-generated onboarding portal for {project_id}. "
             f"Persona: {persona}. "
