@@ -3118,6 +3118,59 @@ def test_coverage_bind_panel_expr_default_is_backward_compatible():
     assert hist == _coverage_bind_panel_expr(fam, is_summary=False)
 
 
+# --- EC-SUMMARY-TYPE: coverage-bind ORIENTATION SLO + alert lane (the SLO/alert
+# sibling of the panel gate — the lane the FDE's GATE-2 caught still dead) --------
+
+
+def test_declared_summary_helper():
+    """_declared_summary is the sibling short-circuit _declared_hist references."""
+    from startd8.observability.artifact_generator import _declared_summary, _declared_hist
+
+    assert _declared_summary("summary") is True
+    assert _declared_summary("histogram") is False
+    assert _declared_summary("gauge") is False
+    assert _declared_summary(None) is False
+    # A summary is NOT a histogram (both gates agree it must not histogram_quantile).
+    assert _declared_hist("summary") is False
+
+
+def test_orientation_slo_and_alert_summary_bind_average():
+    """EC-SUMMARY-TYPE: the AffordanceMap orientation SLO + alert for a declared
+    SUMMARY latency family must bind the guaranteed-live _sum/_count average — NOT a
+    dead histogram_quantile(_bucket) AND not a dead bare max({fam}{}) (a summary has
+    neither). This is the lane GATE-2 caught still dead after the panel/alert fix."""
+    from startd8.observability.artifact_generator import (
+        _orientation_slo_doc,
+        _orientation_alert_rule,
+    )
+
+    fam = "harbor_core_http_request_duration_seconds"
+    slo = _orientation_slo_doc("core", fam, is_histogram=False, is_summary=True)
+    query = slo["spec"]["indicator"]["spec"]["thresholdMetric"]["metricSource"]["spec"]["query"]
+    assert "histogram_quantile" not in query and "_bucket" not in query
+    assert f"max({fam}" not in query
+    assert f"rate({fam}_sum[$__rate_interval])" in query
+    assert f"rate({fam}_count[$__rate_interval])" in query
+
+    alert = _orientation_alert_rule("core", fam, is_histogram=False, is_summary=True)
+    assert "histogram_quantile" not in alert["expr"] and "_bucket" not in alert["expr"]
+    assert f"rate({fam}_sum[$__rate_interval])" in alert["expr"]
+
+
+def test_orientation_slo_histogram_and_gauge_unchanged():
+    """Back-compat: a true histogram keeps histogram_quantile, a declared gauge keeps
+    max() — the summary branch is additive to the existing L1c is_histogram gate."""
+    from startd8.observability.artifact_generator import _orientation_slo_doc
+
+    fam = "svc_http_request_duration_seconds"
+    hist_q = _orientation_slo_doc("svc", fam, is_histogram=True)["spec"]["indicator"]["spec"][
+        "thresholdMetric"]["metricSource"]["spec"]["query"]
+    assert "histogram_quantile" in hist_q and f"{fam}_bucket" in hist_q
+    gauge_q = _orientation_slo_doc("svc", "svc_queue_latency", is_histogram=False)["spec"][
+        "indicator"]["spec"]["thresholdMetric"]["metricSource"]["spec"]["query"]
+    assert gauge_q.startswith("max(") and "histogram_quantile" not in gauge_q
+
+
 class TestStaleSdkGuardSidecarShape:
     """Guard-readability (S6): the durable pass reads the scorecard SIDECAR (the run-dir quality.json
     is torn down). The sidecar embeds the generate's stamp under a `quality` sub-block, so the guard

@@ -857,6 +857,15 @@ def _declared_hist(declared_type: Optional[str]) -> Optional[bool]:
     return declared_type == "histogram"
 
 
+def _declared_summary(declared_type: Optional[str]) -> bool:
+    """Authoritative summary? from a declared metric type — the sibling short-circuit
+    ``_declared_hist``'s docstring references. ``True`` for a Prometheus ``summary``
+    (EC-SUMMARY-TYPE): no ``_bucket`` (so histogram_quantile is dead) AND no bare
+    series (so ``max({fam}{})`` is dead too) — it must bind the ``_sum``/``_count``
+    average. Checked upstream of ``is_histogram`` in the coverage-bind expr builder."""
+    return (declared_type or "") == "summary"
+
+
 def _coverage_bind_panel_expr(
     fam: str, *, is_summary: bool = False, is_histogram: Optional[bool] = None
 ) -> str:
@@ -1073,7 +1082,7 @@ def _coverage_bind_preserve_header(content: str, body_yaml: str) -> str:
 
 
 def _orientation_slo_doc(
-    svc_id: str, fam: str, *, is_histogram: Optional[bool] = None
+    svc_id: str, fam: str, *, is_histogram: Optional[bool] = None, is_summary: bool = False
 ) -> Dict[str, Any]:
     """One OpenSLO doc whose active ``query`` references ``fam`` (system axis).
 
@@ -1082,10 +1091,12 @@ def _orientation_slo_doc(
     phantom service ``{svc}-coverage-bind`` (PATHFIX_QF residual @ 1d951b03).
 
     ``is_histogram`` — the L1c declared-type gate (a declared gauge named
-    ``*_latency`` gets ``max()``, not a dead ``histogram_quantile``).
+    ``*_latency`` gets ``max()``, not a dead ``histogram_quantile``). ``is_summary``
+    (EC-SUMMARY-TYPE) short-circuits to the ``_sum``/``_count`` average — a declared
+    summary latency family (Harbor core) has neither ``_bucket`` nor a bare series.
     """
     safe = fam.replace("_", "-")[:48]
-    expr = _coverage_bind_panel_expr(fam, is_histogram=is_histogram)
+    expr = _coverage_bind_panel_expr(fam, is_histogram=is_histogram, is_summary=is_summary)
     return {
         "apiVersion": "openslo/v1",
         "kind": "SLO",
@@ -1121,15 +1132,16 @@ def _orientation_slo_doc(
 
 
 def _orientation_alert_rule(
-    svc_id: str, fam: str, *, is_histogram: Optional[bool] = None
+    svc_id: str, fam: str, *, is_histogram: Optional[bool] = None, is_summary: bool = False
 ) -> Dict[str, Any]:
     """One Prometheus alert rule whose ``expr`` references ``fam`` (bridge axis).
 
     ``is_histogram`` — the L1c declared-type gate (a declared gauge named
-    ``*_latency`` gets ``max()``, not a dead ``histogram_quantile``).
+    ``*_latency`` gets ``max()``, not a dead ``histogram_quantile``). ``is_summary``
+    (EC-SUMMARY-TYPE) short-circuits to the ``_sum``/``_count`` average.
     """
     safe = "".join(p[:1].upper() + p[1:] for p in fam.replace("-", "_").split("_") if p)
-    expr = _coverage_bind_panel_expr(fam, is_histogram=is_histogram)
+    expr = _coverage_bind_panel_expr(fam, is_histogram=is_histogram, is_summary=is_summary)
     return {
         "alert": f"{svc_id.replace('-', '').title()}Orientation{safe}"[:200],
         "expr": f"{expr} >= 0",
@@ -1230,7 +1242,9 @@ def _apply_affordance_coverage_bind_orientation(
         if to_add_slo:
             docs = [
                 _orientation_slo_doc(
-                    svc_id, f, is_histogram=_declared_hist(_declared_types.get(f))
+                    svc_id, f,
+                    is_histogram=_declared_hist(_declared_types.get(f)),
+                    is_summary=_declared_summary(_declared_types.get(f)),
                 )
                 for f in to_add_slo
             ]
@@ -1305,7 +1319,9 @@ def _apply_affordance_coverage_bind_orientation(
         if to_add_alert:
             new_rules = [
                 _orientation_alert_rule(
-                    svc_id, f, is_histogram=_declared_hist(_declared_types.get(f))
+                    svc_id, f,
+                    is_histogram=_declared_hist(_declared_types.get(f)),
+                    is_summary=_declared_summary(_declared_types.get(f)),
                 )
                 for f in to_add_alert
             ]
