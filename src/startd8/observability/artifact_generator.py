@@ -735,13 +735,14 @@ def _coverage_bind_panel_expr(fam: str, *, is_summary: bool = False) -> str:
     The caller passes ``is_summary`` from the service's ``declared_emitted_series``
     type; unknown/histogram families keep the existing behaviour (no regression).
     """
-    from .affordance_map_consume import _duration_panel_expr, _is_native_hist_basename
+    from .affordance_map_consume import (
+        _duration_panel_expr,
+        _is_native_hist_basename,
+        _summary_avg_expr,
+    )
 
     if is_summary:
-        return (
-            f"sum(rate({fam}_sum[$__rate_interval])) "
-            f"/ sum(rate({fam}_count[$__rate_interval]))"
-        )
+        return _summary_avg_expr(fam)
     if _is_native_hist_basename(fam):
         return _duration_panel_expr(fam)
     return f"max({fam}{{}})"
