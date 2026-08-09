@@ -3240,6 +3240,23 @@ def test_summary_avg_expr_window_variants():
     assert "histogram_quantile" not in dash and "_bucket" not in dash
 
 
+def test_summary_quantile_expr_binds_native_child():
+    """The native-quantile helper (p99-claiming SLIs): binds ``{fam}{quantile="0.99"}``
+    — the summary's client-computed child, NOT the mean. Merges into an existing
+    selector's braces (never two brace groups); honestly empty if unconfigured."""
+    from startd8.observability.affordance_map_consume import _summary_quantile_expr
+
+    fam = "harbor_core_http_request_duration_seconds"
+    assert _summary_quantile_expr(fam) == f'{fam}{{quantile="0.99"}}'
+    assert _summary_quantile_expr(fam, "0.5") == f'{fam}{{quantile="0.5"}}'
+    # selector merges INTO the same braces, no adjacent groups
+    assert _summary_quantile_expr(fam, "0.99", '{service="core"}') == (
+        f'{fam}{{quantile="0.99",service="core"}}'
+    )
+    expr = _summary_quantile_expr(fam)
+    assert "histogram_quantile" not in expr and "_bucket" not in expr and "_sum" not in expr
+
+
 def _summary_latency_service(is_summary: bool):
     """An http service whose latency family (``http_server_duration``, the default
     http descriptor's ``latency_bucket_metric`` base) is declared a Prometheus
@@ -3279,26 +3296,27 @@ def _summary_biz():
 def test_declared_base_latency_summary_dashboard_avoids_dead_bucket():
     """EC-SUMMARY-TYPE (declared-base lane): a latency family declared ``histogram``
     by convention but EMITTED as a summary has no ``_bucket`` → the 3 declared-base
-    latency panels (p99+p50+p95) bind DEAD (Harbor core 0/3). The gate must replace
-    the p99 with the guaranteed-live average and drop the p50/p95 ``_bucket`` panels."""
+    latency panels (p99+p50+p95) bind DEAD. Because the panels make a percentile
+    CLAIM, the gate binds the summary's native ``{quantile="…"}`` child — NOT the mean
+    (mean != p99 = fake-bind, FDE call 2026-08-09). Honestly empty if unconfigured."""
     from startd8.observability.artifact_generator import generate_dashboard_spec
 
     content = generate_dashboard_spec(_summary_latency_service(True), _summary_biz()).content
     assert "http_server_duration_bucket" not in content  # no dead histogram legs
-    assert "sum(rate(http_server_duration_sum[$__rate_interval]))" in content
-    assert "sum(rate(http_server_duration_count[$__rate_interval]))" in content
-    assert "(p50)" not in content and "(p95)" not in content  # bucket quantiles dropped
+    assert "http_server_duration_sum" not in content     # NOT the mean (fake p99)
+    assert 'http_server_duration{quantile="0.99"' in content  # native p99 child
+    assert 'quantile="0.5"' in content and 'quantile="0.95"' in content  # native p50/p95
 
 
-def test_declared_base_latency_summary_alert_uses_average():
-    """The LatencyP99High alert for a summary family binds the ruler-evaluated average
-    (literal ``5m`` window), never ``histogram_quantile(rate(_bucket))``."""
+def test_declared_base_latency_summary_alert_uses_native_quantile():
+    """The LatencyP99High alert for a summary family binds the native p99 child
+    ``{quantile="0.99"}`` — a real p99 claim, never the mean or a dead _bucket."""
     from startd8.observability.artifact_generator import generate_alert_rules
 
     content = generate_alert_rules(_summary_latency_service(True), _summary_biz()).content
-    assert "sum(rate(http_server_duration_sum[5m]))" in content
-    assert "sum(rate(http_server_duration_count[5m]))" in content
-    assert "http_server_duration_bucket" not in content
+    assert 'http_server_duration{quantile="0.99"' in content
+    assert "http_server_duration_sum" not in content      # not the mean
+    assert "http_server_duration_bucket" not in content   # not a dead histogram
 
 
 def test_declared_base_latency_histogram_unchanged():

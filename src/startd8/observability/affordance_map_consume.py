@@ -568,6 +568,28 @@ def _summary_avg_expr(fam: str, window: str = "$__rate_interval") -> str:
     )
 
 
+def _summary_quantile_expr(fam: str, quantile: str = "0.99", selector: str = "") -> str:
+    """PromQL for a Prometheus **Summary**'s native client-computed quantile child
+    series (EC-SUMMARY-TYPE, "shape follows the claim").
+
+    A p99-CLAIMING SLI on a summary must NOT bind the mean (``_sum``/``_count``
+    average) — a mean ≠ p99 is a *fake-bind* (FDE call 2026-08-09). A Summary
+    publishes its quantiles as native ``{quantile="0.99"}`` child series, so a real
+    p99 claim binds ``{fam}{quantile="0.99"}``. If the summary is configured with no
+    objective for that quantile the series is absent → the SLI binds **honestly
+    empty** (partial), which is correct: an honest gap beats a fake statistic. Merge
+    the quantile matcher INTO an existing selector's braces (never two brace groups),
+    mirroring ``_functional_sli_query``'s ``summary_quantile`` shape. Use for
+    p99-labeled SLIs; use ``_summary_avg_expr`` only for liveness/coverage refs that
+    make NO percentile claim.
+    """
+    if selector.startswith("{") and selector.endswith("}") and len(selector) > 2:
+        merged = f'{{quantile="{quantile}",' + selector[1:]
+    else:
+        merged = f'{{quantile="{quantile}"}}'
+    return f"{fam}{merged}"
+
+
 # ---- Load (FR-B1) ------------------------------------------------------------
 
 

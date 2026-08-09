@@ -413,8 +413,11 @@ def generate_alert_rules(
 
     # EC-SUMMARY-TYPE (declared-base/RED latency lane, mirrors generate_dashboard_spec):
     # a latency family emitted as a Prometheus summary has no _bucket → the
-    # histogram_quantile alert binds dead. Bind the guaranteed-live average instead.
-    from .affordance_map_consume import _summary_avg_expr
+    # histogram_quantile alert binds dead. A LatencyP99High alert makes a real p99
+    # CLAIM, so it binds the summary's native {quantile="0.99"} child (NOT the mean —
+    # mean != p99 = fake-bind, FDE call 2026-08-09); honestly empty if the objective
+    # isn't configured. "Shape follows the claim."
+    from .affordance_map_consume import _summary_quantile_expr
 
     _latency_base = (
         latency_bucket[: -len("_bucket")]
@@ -449,10 +452,10 @@ def generate_alert_rules(
             threshold = descriptor.scale_threshold_seconds(
                 _parse_duration_to_seconds(latency_raw)
             )
-            # EC-SUMMARY-TYPE: summary latency family → guaranteed-live average
-            # (ruler-evaluated, literal 5m window); histogram families unchanged.
+            # EC-SUMMARY-TYPE: summary latency family → native p99 quantile child
+            # (the honest p99 shape; not the mean); histogram families unchanged.
             if _latency_base in _summary_families:
-                _latency_expr = f"{_summary_avg_expr(_latency_base, window='5m')} > {threshold}"
+                _latency_expr = f"{_summary_quantile_expr(_latency_base, '0.99', total_selector)} > {threshold}"
             else:
                 _latency_expr = (
                     f"histogram_quantile(0.99,\n"
@@ -768,11 +771,12 @@ def generate_dashboard_spec(
     # ``histogram`` by convention but EMITTED as a Prometheus **summary** (per the
     # service's declared_emitted_series type) exposes no ``_bucket`` series — so the
     # histogram_quantile(rate(_bucket)) p99/p50/p95 panels below bind DEAD (Harbor
-    # core: harbor_core_http_request_duration_seconds is a summary → 0/3). Mirror the
-    # coverage-bind lane's type-gate (fix/coverage-bind-summary-dead-sli): bind the
-    # guaranteed-live average sum(rate(_sum))/sum(rate(_count)) instead. Unknown/true
+    # core: harbor_core_http_request_duration_seconds is a summary → 0/3). These panels
+    # make a real percentile CLAIM, so bind the summary's native {quantile="…"} child
+    # series (NOT the mean — mean != p99 = fake-bind, FDE call 2026-08-09); honestly
+    # empty if the objective isn't configured. "Shape follows the claim." Unknown/true
     # histogram families keep the exact prior behaviour (summary branch is additive).
-    from .affordance_map_consume import _summary_avg_expr
+    from .affordance_map_consume import _summary_quantile_expr
 
     summary_families = {
         s.name
@@ -807,10 +811,11 @@ def generate_dashboard_spec(
 
         query = query_tpl.format(metric=metric_base, selector=selector)
         # EC-SUMMARY-TYPE: the latency family is emitted as a summary (no _bucket) →
-        # replace the dead histogram_quantile p99 with the guaranteed-live average.
+        # replace the dead histogram_quantile p99 with the native {quantile="0.99"}
+        # child (the honest p99 shape, not the mean).
         is_summary_latency = is_latency and metric_base in summary_families
         if is_summary_latency:
-            query = _summary_avg_expr(metric_base)
+            query = _summary_quantile_expr(metric_base, "0.99", selector)
         # FR-4a: latency panels carry the descriptor's native unit (s vs ms);
         # non-latency panels keep name-inferred units. For the semconv default
         # descriptor.latency_unit == "s", matching _metric_unit("*.duration").
@@ -844,14 +849,18 @@ def generate_dashboard_spec(
 
         # Add p50 and p95 quantile panels for duration histograms
         # (p99 is the primary panel above; p50/p95 support incident response).
-        # EC-SUMMARY-TYPE: a summary has no _bucket, so skip the quantile panels —
-        # the average panel above is the single live latency SLI for a summary.
-        if "duration" in metric.name and metric.type == "histogram" and not is_summary_latency:
+        # EC-SUMMARY-TYPE: a summary has no _bucket — but p50/p95 panels make their own
+        # percentile CLAIM, so bind the summary's native {quantile="0.5"/"0.95"} child
+        # (shape follows the claim), honestly empty if that objective isn't configured.
+        if "duration" in metric.name and metric.type == "histogram":
             for quantile, label in [(0.50, "p50"), (0.95, "p95")]:
-                q_query = (
-                    f"histogram_quantile({quantile}, "
-                    f"rate({metric_base}_bucket{selector}[$__rate_interval]))"
-                )
+                if is_summary_latency:
+                    q_query = _summary_quantile_expr(metric_base, str(quantile), selector)
+                else:
+                    q_query = (
+                        f"histogram_quantile({quantile}, "
+                        f"rate({metric_base}_bucket{selector}[$__rate_interval]))"
+                    )
                 panels.append({
                     "type": "timeseries",
                     "title": f"{_panel_title(metric.name)} ({label})",
