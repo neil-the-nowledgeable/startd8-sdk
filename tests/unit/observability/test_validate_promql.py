@@ -304,6 +304,47 @@ def test_alert_threshold_not_a_fidelity_fail(tmp_path):
     assert report.verdicts[0].replayed_expr  # recorded, since it differed
 
 
+def test_absent_sli_present_metric_scores_pass(tmp_path):
+    """Proposal B (FR-XC): an absent()-shaped presence-SLI whose guarded metric IS live scores
+    ``pass`` — the dead-man's switch is correctly NOT firing (present result is empty). The instant
+    row count alone would invert this (empty → bind-fail); the fix scores on the metric's presence."""
+    metric = "harbor_statistics_total_projects"
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "exporter", {"StatsAbsent": f"absent({metric}{{}})"})
+    onboarding = _semconv_onboarding(tmp_path, service="exporter")
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=1.0,
+        auth=Auth(),
+        query_fn=lambda base, expr, **k: 0,  # absent(<present metric>) = empty result (count 0)
+        list_names_fn=lambda base, **k: [metric],  # ...but the metric IS present (idle-safe __name__ metadata)
+    )
+    assert report.verdicts[0].verdict == "pass", report.verdicts[0].verdict
+
+
+def test_absent_sli_missing_metric_scores_fail(tmp_path):
+    """The guarded metric genuinely absent → the switch fires → ``fail`` — NOT the inverted ``pass``
+    the instant row count would give (absent() returns 1 row when the metric is missing)."""
+    metric = "harbor_statistics_total_projects"
+    artifacts = tmp_path / "art"
+    _write_alerts(artifacts, "exporter", {"StatsAbsent": f"absent({metric}{{}})"})
+    onboarding = _semconv_onboarding(tmp_path, service="exporter")
+    report = run_validation(
+        artifacts_dir=artifacts,
+        onboarding_metadata=onboarding,
+        prometheus_url="http://localhost:9090",
+        min_coverage=0.0,
+        auth=Auth(),
+        query_fn=lambda base, expr, **k: 1,  # absent(<missing metric>) = 1 row (count 1)
+        list_names_fn=lambda base, **k: [],  # ...the metric is genuinely absent
+    )
+    v = report.verdicts[0]
+    assert v.verdict == "fail", v.verdict
+    assert "genuinely absent" in v.remediation
+
+
 def test_dashboard_template_var_is_skipped_not_failed(tmp_path):
     """A dashboard expr with an unresolvable $var is skipped (not counted), while
     its $__rate_interval sibling is macro-substituted and replayed."""
