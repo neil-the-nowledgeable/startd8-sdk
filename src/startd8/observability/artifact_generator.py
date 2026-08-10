@@ -3001,6 +3001,28 @@ def _write_quality_report(
             )
             # Shared denominator across orientations (CRP R1-S6).
             svc_data["expected_count"] = len(cov_human_r.expected)
+            # FR-GEN emitted-surface coverage (SDK-side expose; hand-off 2026-08-10 060657Z).
+            # Expose the per-service expected/covered metric NAMES so the loop grader can recompute
+            # coverage over the EMITTED surface: denominator = |expected ∩ live-emitted|, where the
+            # live-emitted (⇔ substrate-absent complement) set is the loop's convention-liveness
+            # classification (cc#432 / durable-pass step-4d). The SDK is static — it cannot know
+            # what emits live — so it emits the NAMES (already computed here) and the loop does the
+            # intersection. Names are the strict-normalized form compute_metric_coverage uses (so the
+            # loop intersects on the same normalization). `covered` = referenced by ANY artifact
+            # (union of the three orientation axes); `by_axis` keeps the per-axis split. Additive.
+            _cov_union = sorted(
+                set(cov_human_r.covered) | set(cov_system_r.covered) | set(cov_bridge_r.covered)
+            )
+            svc_data["coverage_breakdown"] = {
+                "expected": sorted(cov_human_r.expected),
+                "covered": _cov_union,
+                "uncovered": sorted(set(cov_human_r.expected) - set(_cov_union)),
+                "by_axis": {
+                    "human": sorted(cov_human_r.covered),
+                    "system": sorted(cov_system_r.covered),
+                    "bridge": sorted(cov_bridge_r.covered),
+                },
+            }
             if expected_sources and svc_id in expected_sources:
                 src = dict(expected_sources[svc_id])
                 src["expected_normalized"] = len(cov_human_r.expected)
