@@ -43,7 +43,7 @@ import urllib.error
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
@@ -252,6 +252,29 @@ def _family_window_absent_query(family: str, bind_window: str) -> str:
     """PromQL proving family absence over a covered window (not an instant snapshot)."""
     safe = re.escape(family)
     return f'count(count_over_time({{__name__=~"{safe}.*"}}[{bind_window}]))'
+
+
+#: An ``absent()``-shaped presence-SLI (a dead-man's switch): the whole expr is ``absent(<inner>)``.
+_ABSENT_SLI_RE = re.compile(r"^\s*absent(?:_over_time)?\s*\(.+\)\s*$", re.DOTALL)
+
+
+def _absent_presence_inner(expr: str) -> Optional[Set[str]]:
+    """If ``expr`` is an ``absent()``-shaped presence-SLI, return the bare metric names it guards; else None.
+
+    Such an SLI is *satisfied by a PRESENT metric*: ``absent(metric)`` yields an empty result when the
+    metric exists (the switch correctly NOT firing = healthy/covered) and one row when it's missing (the
+    switch firing = the gap). So scored by the **instant row count** the verdict is INVERTED — a present
+    metric reads as a bind-fail (empty) and an absent one as a pass (one row). This lets the caller score
+    such SLIs on the guarded metric's **presence** (the idle-safe ``__name__`` metadata) instead. ``None``
+    (not absent-shaped, or no bare metric inside) leaves the normal count-based path byte-identical for
+    every other SLI. (``absent`` itself is a function name, never a live metric, so it is inert if extracted.)
+    """
+    if not expr or not _ABSENT_SLI_RE.match(expr):
+        return None
+    from .observability_fidelity_static import bare_metrics_from_expr
+
+    names = bare_metrics_from_expr(expr)
+    return names or None
 
 
 _BIND_WINDOW_RE = re.compile(r"^\d+[smhdwy]$", re.IGNORECASE)
@@ -1179,7 +1202,22 @@ def run_validation(
         exclusion_reason = ""
         axis_detail: List[Dict[str, Any]] = []
 
-        if count > 0:
+        # FR-XC / Proposal B — presence-aware verdict for absent()-shaped presence-SLIs (dead-man's
+        # switches). absent(metric) is SATISFIED by a PRESENT metric, so the instant row count inverts
+        # the verdict (present → empty → looks bind-fail; absent → 1 row → looks pass). Resolve the
+        # guarded metric's presence from the idle-safe __name__ metadata (not the count): present → pass
+        # (the switch is correctly not firing = live/covered), absent → fail (the gap the switch guards).
+        _absent_guarded = _absent_presence_inner(replay_expr)
+        if _absent_guarded is not None:
+            _live = set(_live_names())
+            _present = any(m in _live for m in _absent_guarded)
+            verdict = "pass" if _present else "fail"
+            if not _present:
+                remediation = (
+                    f"dead-man's-switch {replay_expr!r}: none of {sorted(_absent_guarded)} present in "
+                    "live series (idle-safe __name__ metadata) — the guarded metric is genuinely absent"
+                )
+        elif count > 0:
             verdict = "pass"
             if descriptor is not None:
                 expected_metric = descriptor.throughput_metric
