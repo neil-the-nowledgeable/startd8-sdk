@@ -9,6 +9,15 @@ build-gated; registered on the shared ``deterministic_providers`` entry-point gr
 from __future__ import annotations
 
 from .drift import is_owned_scaffold_file, scaffold_in_sync
+from .instrumentation_gen import (
+    GoOtelRenderer,
+    InstrumentationContract,
+    InstrumentationGap,
+    Patch,
+    RendererRegistry,
+    close_gap,
+    default_registry,
+)
 from .manifest import AppManifest, parse_app_manifest
 from .provider import ScaffoldFileProvider
 from .renderers import (
@@ -42,4 +51,12 @@ __all__ = [
     "scaffold_in_sync",
     "is_owned_scaffold_file",
     "ScaffoldFileProvider",
+    # Instrumentation-generation framework (REQ FR-XC — the Extra-Credit capability)
+    "InstrumentationGap",
+    "InstrumentationContract",
+    "Patch",
+    "RendererRegistry",
+    "GoOtelRenderer",
+    "close_gap",
+    "default_registry",
 ]
