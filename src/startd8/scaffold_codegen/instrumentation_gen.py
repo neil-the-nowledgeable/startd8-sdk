@@ -200,7 +200,11 @@ class GoOtelRenderer:
     language = "go"
 
     def supports(self, contract: InstrumentationContract) -> bool:
-        return contract.via.startswith("otel-meter-provider")
+        # Only the http-instrumentation contract has a grounded Go template here. A generic
+        # otel-meter-provider (db/messaging/custom) has NO Go template → return False so close_gap
+        # fails LOUD (→ LLM-fill / a future renderer) instead of mis-emitting the http.server patch
+        # for a non-http mechanism (render() is otelhttp-specific regardless of `via`).
+        return contract.via == "otel-meter-provider-on-existing-http-instrumentation"
 
     def resolve_tier(self, contract: InstrumentationContract) -> str:
         ev = contract.source_evidence
@@ -332,12 +336,22 @@ def close_gap(
 ) -> Patch:
     """Language-agnostic entry point: gap → contract → renderer[language] → Patch. Verification is separate.
 
-    Raises ``NotImplementedError`` for an unregistered language (with the "register one renderer" guidance) or a
-    contract the renderer does not support — never a silent wrong patch. A runtime-composed gap (Envoy) produces a
-    contract with ``source_instrumentable=False``; the caller must check that and route to live-scrape, not here.
+    Raises ``NotImplementedError`` for a **non-source-instrumentable** gap (Envoy/runtime-composed — the framework's
+    honest boundary, enforced HERE so it can't silently fall through to a misleading "register a renderer" error),
+    an unregistered language, or a contract the renderer does not support — never a silent wrong patch.
     """
     registry = registry or default_registry()
     contract = InstrumentationContract.from_gap(gap)
+    # Enforce the framework's honest boundary at the entry point: a runtime-composed surface (Envoy/sidecar
+    # data-plane) has NO source to instrument — it is closeable only by live-scrape, never by generation.
+    # (Computed by from_gap; enforced here so the field is not merely set-and-ignored.)
+    if not contract.source_instrumentable:
+        raise NotImplementedError(
+            f"gap for {gap.subject}/{gap.service} (language={gap.language!r}, mechanism={gap.mechanism!r}) is NOT "
+            f"source-instrumentable (via={contract.via!r}): its metrics are runtime-composed (Envoy/sidecar "
+            "data-plane) — close it by LIVE-SCRAPE + traffic, never by generation. The framework's honest boundary, "
+            "NOT a missing renderer."
+        )
     renderer = registry.get(gap.language)
     if renderer is None:
         raise NotImplementedError(

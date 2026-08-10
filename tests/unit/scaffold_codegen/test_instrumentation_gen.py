@@ -96,6 +96,39 @@ def test_runtime_composed_envoy_is_not_source_instrumentable():
     assert contract.via == "runtime-composed"
 
 
+def test_close_gap_enforces_source_instrumentable_boundary():
+    """The Envoy boundary is ENFORCED at the entry point, not just computed: close_gap refuses a
+    runtime-composed gap with the honest 'live-scrape, not a missing renderer' message — never the
+    misleading 'register one renderer' error (code-review hardening: source_instrumentable was
+    set-but-unread)."""
+    gap = InstrumentationGap(
+        subject="istio", service="proxy", language="cpp-envoy",
+        missing_families=["istio_requests_total"],
+        mechanism="runtime-composed envoy data-plane stats sink",
+    )
+    with pytest.raises(NotImplementedError) as ei:
+        close_gap(gap, {})
+    msg = str(ei.value).lower()
+    assert "source-instrumentable" in msg and "live-scrape" in msg
+    assert "register one renderer" not in msg  # NOT the misleading missing-renderer error
+
+
+def test_go_renderer_rejects_generic_via_instead_of_wrong_http_patch():
+    """A non-http Go gap resolves to the GENERIC contract, which GoOtelRenderer has no template for —
+    close_gap must fail LOUD, not emit the otelhttp http.server patch (render() is http-specific
+    regardless of via). Code-review hardening: supports() was over-permissive (startswith)."""
+    gap = InstrumentationGap(
+        subject="s", service="cache", language="go",
+        missing_families=["db.client.operation.duration"],  # not http.server → generic contract
+        mechanism="prometheus client present, no meter provider",
+        source_evidence={"trace_provider": "t"},
+    )
+    assert InstrumentationContract.from_gap(gap).via == "otel-meter-provider-generic"
+    with pytest.raises(NotImplementedError) as ei:
+        close_gap(gap, {})
+    assert "does not support" in str(ei.value)
+
+
 def test_default_registry_ships_go_only():
     """GoOtelRenderer is registered; the rest are PLANNED_RENDERERS TODOs (register one to add a language)."""
     assert default_registry().languages() == ["go"]
