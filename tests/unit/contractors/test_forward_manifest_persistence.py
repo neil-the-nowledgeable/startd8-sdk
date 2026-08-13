@@ -268,6 +268,44 @@ def test_persisted_file_evidence_skips_uncommitted_and_directory(
     assert [e["path"] for e in evidence] == ["src/ok.py"]
 
 
+def test_persisted_file_evidence_skips_path_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """file_specs keys that escape project_root must not produce evidence rows."""
+    _clear_kaizen_run_id(monkeypatch)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "ok.py").write_text("x=1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "src/ok.py"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ok"],
+        cwd=tmp_path,
+        check=True,
+    )
+    # Outside the repo root
+    outside = tmp_path.parent / f"escape-{tmp_path.name}.py"
+    outside.write_text("evil=1\n", encoding="utf-8")
+    try:
+        manifest = _make_manifest(
+            pipeline_run_id=None,
+            file_specs={
+                "src/ok.py": ForwardFileSpec(file="src/ok.py", elements=[]),
+                f"../{outside.name}": ForwardFileSpec(file=f"../{outside.name}", elements=[]),
+            },
+        )
+        pc = _contractor_with(manifest, tmp_path)
+        pc._write_forward_manifest()
+        data = json.loads((tmp_path / ".startd8" / "forward-manifest.json").read_text())
+        evidence = data["metadata"].get("persisted_file_evidence", [])
+        assert [e["path"] for e in evidence] == ["src/ok.py"]
+    finally:
+        outside.unlink(missing_ok=True)
+
+
 def test_null_specimen_is_unknown_provenance() -> None:
     manifest = ForwardManifest.model_validate_json(_NULL_SPECIMEN.read_text(encoding="utf-8"))
     assert provenance_completeness(manifest) == "unknown"

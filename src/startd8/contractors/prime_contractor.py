@@ -3,6 +3,7 @@ import enum
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -2357,6 +2358,22 @@ class PrimeContractorWorkflow:
             meta["persisted_file_evidence"] = evidence
             fm.metadata = meta
 
+        # Wire FR-5 helper into the write path (value-path): completeness is
+        # provenance-only, never delivery health.
+        try:
+            from startd8.forward_manifest import provenance_completeness
+
+            logger.info(
+                "ForwardManifest provenance fuelled: completeness=%s "
+                "run_id=%s checksum=%s evidence_rows=%d",
+                provenance_completeness(fm),
+                bool(fm.pipeline_run_id and str(fm.pipeline_run_id).strip()),
+                bool(fm.source_checksum and str(fm.source_checksum).strip()),
+                len(evidence),
+            )
+        except Exception:  # pragma: no cover - never fail the persist
+            pass
+
     def _collect_persisted_file_evidence(self) -> list[dict[str, str]]:
         """Build ``metadata.persisted_file_evidence`` for committed file_specs paths.
 
@@ -2368,7 +2385,7 @@ class PrimeContractorWorkflow:
         if fm is None or not fm.file_specs:
             return []
 
-        root = Path(self.project_root)
+        root = Path(self.project_root).resolve()
         try:
             head = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
@@ -2380,7 +2397,8 @@ class PrimeContractorWorkflow:
             ).stdout.strip()
         except (subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired):
             return []
-        if not head or len(head) != 40:
+        # Full object name from rev-parse HEAD (40 hex today; tolerate longer).
+        if not head or not re.fullmatch(r"[0-9a-f]{40,}", head):
             return []
 
         rows: list[dict[str, str]] = []
@@ -2390,15 +2408,25 @@ class PrimeContractorWorkflow:
             # Directory-keyed specs (wild specimen: ``app/templates/``) — skip.
             if rel.endswith("/") or rel.endswith(os.sep):
                 continue
-            abs_path = root / rel
+            # Refuse path escape (``../``) — evidence must stay under project_root.
+            try:
+                abs_path = (root / rel).resolve()
+                abs_path.relative_to(root)
+            except (OSError, ValueError):
+                continue
             try:
                 if not abs_path.is_file():
                     continue
             except OSError:
                 continue
+            # Prefer the repo-relative POSIX path for the locator.
+            try:
+                loc_path = abs_path.relative_to(root).as_posix()
+            except ValueError:
+                continue
             try:
                 blob = subprocess.run(
-                    ["git", "cat-file", "blob", f"{head}:{rel}"],
+                    ["git", "cat-file", "blob", f"{head}:{loc_path}"],
                     cwd=root,
                     capture_output=True,
                     check=True,
@@ -2409,8 +2437,8 @@ class PrimeContractorWorkflow:
                 continue
             rows.append(
                 {
-                    "path": rel,
-                    "locator": f"git:{head}:{rel}",
+                    "path": loc_path,
+                    "locator": f"git:{head}:{loc_path}",
                     "sha256": hashlib.sha256(blob).hexdigest(),
                     "provenance": "prime-contractor-persist",
                 }
