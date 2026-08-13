@@ -2371,8 +2371,8 @@ class PrimeContractorWorkflow:
                 bool(fm.source_checksum and str(fm.source_checksum).strip()),
                 len(evidence),
             )
-        except Exception:  # pragma: no cover - never fail the persist
-            pass
+        except Exception as exc:  # pragma: no cover - never fail the persist
+            logger.debug("provenance completeness log skipped: %s", exc, exc_info=True)
 
     def _collect_persisted_file_evidence(self) -> list[dict[str, str]]:
         """Build ``metadata.persisted_file_evidence`` for committed file_specs paths.
