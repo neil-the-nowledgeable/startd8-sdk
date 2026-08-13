@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "pipeline_run_id": null,
+  "generated_at": null,
+  "source_checksum": null,
+  "contracts": [],
+  "file_specs": {
+    "app/templates/": {
+      "file": "app/templates/",
+      "elements": [],
+      "imports": [],
+      "dependencies": null,
+      "language": "unknown",
+      "convention_provenance": null
+    }
+  },
+  "stages_completed": [
+    "SOURCE_RECONCILE"
+  ],
+  "metadata": {}
+}

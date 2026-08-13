@@ -261,6 +261,15 @@ class ForwardDependencies(BaseModel):
 
 Top-level container. Holds all contracts and file specs plus pipeline stage tracking.
 
+> **Persist fuel (REQ-FM-PROVENANCE-FUEL):** Optional trio fields are often null at
+> extract construction; `PrimeContractorWorkflow._write_forward_manifest` fuels
+> `generated_at` / `pipeline_run_id` (from `KAIZEN_RUN_ID` when set) / `source_checksum`
+> (copied from seed when present) before writing `{project_root}/.startd8/forward-manifest.json`,
+> and may attach optional `metadata.persisted_file_evidence` for committed `file_specs`
+> paths using the intent-language locator shape (cite Delivery Evidence Contract — do not
+> fork a second ledger). Null remaining fields mean **unknown provenance**, not delivery
+> health. Spec: [`REQ-FM-PROVENANCE-FUEL.md`](./REQ-FM-PROVENANCE-FUEL.md).
+
 ```python
 class ForwardManifest(BaseModel):
     """Top-level forward-looking code manifest."""
@@ -626,6 +635,30 @@ startd8 manifest validate-forward .startd8/forward-manifest.json --source-path s
 ```
 
 Runs the forward manifest validator against an existing code manifest, printing violations as a table with severity, contract ID, expected/actual values, and file paths.
+
+### 8.5 Evidence-Time Element Verification (cross-system reuse)
+
+`startd8.forward_manifest_evidence.verify_forward_manifest_elements()` is the
+health-neutral reuse boundary for a foreign evidence consumer. Given a persisted
+`ForwardManifest`, a repo-relative path, and the immutable bytes resolved from a
+`git:<sha>:<path>` locator, it checks only that file's prescribed
+`ForwardFileSpec.elements`.
+
+The result is explicit:
+
+- `verified` — the parser ran and every prescribed element was found;
+- `violated` — one or more prescribed elements were absent (with parser-tier
+  severity retained);
+- `not-applicable` — there is no matching file spec or no element inventory;
+- `verification-unavailable` — the spec match is ambiguous, the language/parser
+  is unsupported or degraded, the source does not parse, or the blob is not UTF-8.
+
+This boundary deliberately excludes imports, dependencies, and project-wide
+`InterfaceContract` entries: one immutable file blob cannot prove cross-file or
+project-wide claims. It also does **not** derive delivery health. Draft-time
+contract compliance is not evidence that a change was merged or deployed; an
+evidence consumer must first verify commit identity and digest, then present this
+element result as a separate validation rung.
 
 ---
 

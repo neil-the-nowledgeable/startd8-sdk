@@ -2284,11 +2284,17 @@ class PrimeContractorWorkflow:
         prime-postmortem-report.json (the dir the post-mortem and the SCR both
         read) makes the contract reachable to every consumer.
 
+        Before dump, fuels Optional provenance fields when known (REQ-FM-PROVENANCE-FUEL)
+        and may attach optional ``metadata.persisted_file_evidence`` for committed
+        ``file_specs`` paths (intent-language locator shape — cite only).
+
         No-op when the seed carried no forward manifest. I/O errors are logged
         but never fail the run (consistent with ``_write_generation_manifest``).
         """
         if self._forward_manifest is None:
             return
+
+        self._fuel_forward_manifest_provenance()
 
         path = self._forward_manifest_path()
         try:
@@ -2303,6 +2309,113 @@ class PrimeContractorWorkflow:
                 "Failed to write forward manifest to %s: %s",
                 path, exc,
             )
+
+    def _seed_source_checksum(self) -> Optional[str]:
+        """Return top-level ``source_checksum`` from the run seed, if available."""
+        seed_path = getattr(self, "_seed_path", None)
+        if not seed_path:
+            return None
+        try:
+            data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        checksum = data.get("source_checksum")
+        if isinstance(checksum, str) and checksum.strip():
+            return checksum.strip()
+        return None
+
+    def _fuel_forward_manifest_provenance(self) -> None:
+        """Fuel Optional provenance trio + optional file evidence at persist.
+
+        REQ-FM-PROVENANCE-FUEL FR-1…FR-4. Does not invent run ids or checksums
+        when upstream is absent (FR-3). Does not map fields into delivery health.
+        """
+        fm = self._forward_manifest
+        if fm is None:
+            return
+
+        if not (fm.generated_at and str(fm.generated_at).strip()):
+            fm.generated_at = datetime.now(timezone.utc).isoformat()
+
+        if not (fm.pipeline_run_id and str(fm.pipeline_run_id).strip()):
+            run_id = os.environ.get("KAIZEN_RUN_ID")
+            # Do not invent run-{time} identities — leave null when env absent (FR-3).
+            if run_id and str(run_id).strip():
+                fm.pipeline_run_id = str(run_id).strip()
+
+        if not (fm.source_checksum and str(fm.source_checksum).strip()):
+            checksum = self._seed_source_checksum()
+            if checksum:
+                fm.source_checksum = checksum
+
+        evidence = self._collect_persisted_file_evidence()
+        # Omit-if-empty: avoid noisy metadata when nothing is committed (OQ-CRP-5).
+        if evidence:
+            meta = dict(fm.metadata) if fm.metadata else {}
+            meta["persisted_file_evidence"] = evidence
+            fm.metadata = meta
+
+    def _collect_persisted_file_evidence(self) -> list[dict[str, str]]:
+        """Build ``metadata.persisted_file_evidence`` for committed file_specs paths.
+
+        Locator shape cites the intent-language Delivery Evidence Contract
+        (``git:<40-hex>:<path>`` + sha256 + provenance) — not a second ledger.
+        Skips directory-keyed / missing / uncommitted paths (FR-4).
+        """
+        fm = self._forward_manifest
+        if fm is None or not fm.file_specs:
+            return []
+
+        root = Path(self.project_root)
+        try:
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired):
+            return []
+        if not head or len(head) != 40:
+            return []
+
+        rows: list[dict[str, str]] = []
+        for rel in fm.file_specs:
+            if not isinstance(rel, str) or not rel.strip():
+                continue
+            # Directory-keyed specs (wild specimen: ``app/templates/``) — skip.
+            if rel.endswith("/") or rel.endswith(os.sep):
+                continue
+            abs_path = root / rel
+            try:
+                if not abs_path.is_file():
+                    continue
+            except OSError:
+                continue
+            try:
+                blob = subprocess.run(
+                    ["git", "cat-file", "blob", f"{head}:{rel}"],
+                    cwd=root,
+                    capture_output=True,
+                    check=True,
+                    timeout=30,
+                ).stdout
+            except (subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired):
+                # Uncommitted or path not in HEAD — no partial fake digest.
+                continue
+            rows.append(
+                {
+                    "path": rel,
+                    "locator": f"git:{head}:{rel}",
+                    "sha256": hashlib.sha256(blob).hexdigest(),
+                    "provenance": "prime-contractor-persist",
+                }
+            )
+        return rows
 
     def check_git_status(self) -> Tuple[bool, List[str]]:
         """
@@ -3623,6 +3736,30 @@ class PrimeContractorWorkflow:
         is_retry = prior_error is not None
         label = 'RE-DEVELOPING' if is_retry else 'DEVELOPING'
         logger.info('%s FEATURE: %s', label, feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id, 'is_retry': is_retry})
+
+        # FR-1 belt: refuse directory-only targets before any LLM spend
+        from startd8.contractors.target_path_utils import (
+            any_directory_targets,
+            is_directory_target,
+        )
+
+        targets = list(feature.target_files or [])
+        if targets and all(is_directory_target(t) for t in targets):
+            msg = (
+                f"Directory-only target_files {targets} — provide concrete file paths; "
+                "refusing LLM spend (directory_target)"
+            )
+            logger.error(msg)
+            # Keep directory targets on the feature so postmortem → DIRECTORY_TARGET
+            self.queue.fail_feature(feature.id, "No files were integrated")
+            return False
+        if targets and any_directory_targets(targets):
+            feature.target_files = [t for t in targets if not is_directory_target(t)]
+            logger.warning(
+                "Dropped directory target(s) from %s; kept %s",
+                feature.id,
+                feature.target_files,
+            )
 
         # Phase 1: Preflight
         should_proceed, decomposition_info = self.pre_flight_validation(feature)
