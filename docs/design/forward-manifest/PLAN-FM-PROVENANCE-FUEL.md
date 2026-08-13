@@ -162,17 +162,40 @@ Optional manual: compare a re-run persist against the portal-v2 specimen shape �
 2. **OQ-CRP-2 — Run-id precedence?** Strict `KAIZEN_RUN_ID` only vs allow seed/`pipeline_run_id` already set by upstream to win (current plan: do not overwrite non-empty).
 3. **OQ-CRP-3 — Evidence candidate set?** All file-like `file_specs` keys vs only files written this run (integration_history / target_files intersection)?
 4. **OQ-CRP-4 — Cross-repo locators?** Harvest watch-item: `git:` is repo-relative; if Prime `project_root` ≠ evidence repo, skip vs `unresolvable` — confirm degrade rule.
-5. **OQ-CRP-5 — Omit vs empty list** for `persisted_file_evidence` when no committed files?
+5. **OQ-CRP-5 — Omit vs empty list** for `persisted_file_evidence` when no committed files? (**Resolved in impl:** omit-if-empty.)
 
 ## Risks → plan mitigations
 
-| Risk | Mitigation in iterations |
-|------|--------------------------|
-| Inventing run ids | Iter 1 explicitly forbids `run-{time}` for `pipeline_run_id` |
-| Second ledger | Iter 2 metadata-only; no WorkItem/satisfies |
-| Directory file_specs | Iter 2 skip non-files |
-| Silent success on null | Iter 3 unknown/partial/complete provenance helper (not health) |
+| Risk | Mitigation |
+|------|------------|
+| Inventing run ids | Forbids `run-{time}` for `pipeline_run_id` |
+| Second ledger | Metadata-only; no WorkItem/satisfies |
+| Directory / escape `file_specs` | Skip non-files; `relative_to(root)` gate (HTH) |
+| Silent success on null | `provenance_completeness` + persist info log |
+
+## HTH harvest (2026-08-13, post-harden)
+
+**Extracted standard:** *Optional schema fields that ship null in the wild are fueled at the persist seam from context the run already has; unknown stays null (detectable); optional content-addressed metadata cites an external evidence grammar without becoming a second ledger; completeness is logged as provenance, never mapped to delivery health.*
+
+**Dormant inventory (grep-grounded):**
+
+| Path | State |
+|---|---|
+| `persisted_file_evidence` metadata | written when committed files exist; **no** SCR/postmortem consumer yet |
+| `provenance_completeness` | wired to persist **info** log + unit tests; no operator CLI/`--as-json` surface |
+| Seed-embedded `forward_manifest` trio | still often null until extract-time fuel (O-4 / OQ-CRP-1) |
+
+**Enhancement backlog (CEP light — surface is shipped; rows only):**
+
+| # | Size | Row |
+|---|---|---|
+| B1 | S | Postmortem/SCR read `persisted_file_evidence` as advisory corroboration (not health) |
+| B2 | M | Extract-time fuel (O-4) so seed consumers see trio before Prime |
+| B3 | S | Restrict evidence candidates to this-run generated files (OQ-CRP-3) |
+| B4 | XS | Operator one-liner / docs recipe: `jq` completeness of `.startd8/forward-manifest.json` |
+
+**Bus:** `no bus peer` — `bus.sh` absent in cursor-loops queue template; Yokoten is the harvest §6 / Option 3–4 REQs already citing this pattern.
 
 ---
 
-*v0.3 — Plan stress-tested REQ; iterations acyclic; ready for implementation after optional CRP.*
+*v0.3 — Plan stress-tested REQ; iterations acyclic; implemented + HTH-hardened 2026-08-13.*
