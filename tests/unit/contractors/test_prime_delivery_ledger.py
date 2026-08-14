@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -247,64 +248,24 @@ Only humans enter: nothing.
 
 
 def test_reconciler_agree_when_lives_match_emitted_locators(tmp_path: Path):
-    """Iter-2 altitude 2: fueled Book A → at least one agree (FR-6)."""
+    """Iter-2 / CEP-B3: checked-in fueled REQ template → agree."""
     import sys
+
+    from startd8.contractors.prime_delivery_ledger import materialize_fueled_req
 
     root, sha = _git_project(tmp_path)
     ledger = tmp_path / "delivery-ledger.yaml"
-    result = emit_delivery_ledger(
+    emit_delivery_ledger(
         postmortem=FIXTURE / "prime-postmortem-report.json",
         traceability=FIXTURE / "ingestion-traceability.json",
         project_root=root,
         merge_sha=sha,
         output_path=ledger,
     )
-    by_path = {
-        e["locator"].split(":", 2)[-1]: e for e in result.ledger["delivery"]["evidence"]
-    }
-    done = by_path["app/templates/wizard/done.html"]
-    step = by_path["app/templates/wizard/step.html"]
-    wizard = by_path["app/wizard.py"]
+    fueled = materialize_fueled_req(sha, tmp_path / "REQ-dogfood-fueled.md")
+    assert "__MERGE_SHA__" not in fueled.read_text(encoding="utf-8")
+    assert sha in fueled.read_text(encoding="utf-8")
 
-    fueled = tmp_path / "REQ-fueled.md"
-    fueled.write_text(
-        f"""# Requirements: Fixture Fueled
-
-**Project:** fixture   **Criticality:** low
-**Version:** 0.1.0   **Date:** 2026-08-14
-**Format:** det-req/0.1
-**Backend:** spike-component
-
-## Overview
-Book A with Lives matching emitted evidence.
-
-## Objectives
-- O-1: Agree.
-
-## Risks
-| Type | Description | Mitigation | Priority |
-|---|---|---|---|
-| quality | none | n/a | low |
-
-## Profile
-Declared profile: **internal**
-
-## Functional requirements
-- **FR-11 — Wizard done.** Touches: X. Lives: code {done["locator"]}. Verify: y. Serves: O-1
-- **FR-6 — Wizard step.** Touches: X. Lives: code {step["locator"]}. Verify: y. Serves: O-1
-- **FR-8 — Wizard py.** Touches: X. Lives: code {wizard["locator"]}. Verify: y. Serves: O-1
-
-## Non-goals
-- Sync conductor.
-
-## Owned fields
-Only humans enter: Lives.
-
-## Contract projection
-- **Backend:** spike-component
-""",
-        encoding="utf-8",
-    )
     sys.path.insert(0, str(Path("/Users/neilyashinsky/Documents/dev/dev-os/scripts")))
     from reconcile_lives_evidence import reconcile
 
@@ -315,6 +276,40 @@ Only humans enter: Lives.
     assert statuses.get("FR-11") == "agree"
     assert statuses.get("FR-6") == "agree"
     assert statuses.get("FR-8") == "agree"
+
+
+def test_prime_delivery_check_forwards_to_reconciler(tmp_path: Path):
+    """CEP-B4: thin forwarder exits 0 and writes a reconcile report."""
+    from startd8.contractors.prime_delivery_check import main as check_main
+    from startd8.contractors.prime_delivery_ledger import materialize_fueled_req
+
+    root, sha = _git_project(tmp_path)
+    ledger = tmp_path / "delivery-ledger.yaml"
+    emit_delivery_ledger(
+        postmortem=FIXTURE / "prime-postmortem-report.json",
+        traceability=FIXTURE / "ingestion-traceability.json",
+        project_root=root,
+        merge_sha=sha,
+        output_path=ledger,
+    )
+    fueled = materialize_fueled_req(sha, tmp_path / "REQ.md")
+    out = tmp_path / "report.json"
+    rc = check_main(
+        [
+            "--req",
+            str(fueled),
+            "--dossier",
+            str(ledger),
+            "--repo",
+            str(root),
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert out.is_file()
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["schema"].startswith("dev-os.lives-evidence-reconcile/")
 
 
 def test_postmortem_hook_emits_when_merge_sha_supplied(tmp_path: Path):

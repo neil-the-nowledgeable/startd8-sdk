@@ -305,6 +305,38 @@ def default_output_path(project_root: Path) -> Path:
     return Path(project_root).resolve() / ".startd8" / "delivery-ledger.yaml"
 
 
+_FUELED_REQ_TEMPLATE = (
+    Path(__file__).resolve().parents[3]
+    / "tests"
+    / "fixtures"
+    / "prime_delivery_ledger"
+    / "REQ-dogfood-fueled.md.template"
+)
+
+
+def fueled_req_template_path() -> Path:
+    """Path to the checked-in Lives-fueled dogfood REQ template (CEP-B3)."""
+    # Installed packages may not ship tests/; resolve relative to repo when present.
+    if _FUELED_REQ_TEMPLATE.is_file():
+        return _FUELED_REQ_TEMPLATE
+    raise FileNotFoundError(
+        "REQ-dogfood-fueled.md.template not found beside the startd8 checkout "
+        f"(looked for {_FUELED_REQ_TEMPLATE})"
+    )
+
+
+def materialize_fueled_req(merge_sha: str, dest: Path) -> Path:
+    """Fill ``__MERGE_SHA__`` in the CEP-B3 template and write ``dest``."""
+    sha = (merge_sha or "").strip().lower()
+    if not _GIT_SHA.fullmatch(sha):
+        raise ValueError(f"merge_sha must be 40-hex to materialize Lives, got {merge_sha!r}")
+    text = fueled_req_template_path().read_text(encoding="utf-8")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(text.replace("__MERGE_SHA__", sha), encoding="utf-8")
+    return dest
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _main(argv)

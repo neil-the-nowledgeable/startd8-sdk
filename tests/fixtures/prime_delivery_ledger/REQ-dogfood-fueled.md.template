@@ -1,0 +1,43 @@
+# Requirements: Prime Delivery Ledger — Fueled Dogfood
+
+**Project:** prime-delivery-ledger-dogfood   **Criticality:** low
+**Version:** 0.1.0   **Date:** 2026-08-14
+**Format:** det-req/0.1
+**Backend:** spike-component
+
+## Overview
+
+Checked-in Book A for Option 4 CEP-B3. Placeholders `__MERGE_SHA__` are filled by
+`materialize_fueled_req` after a fixture emit (or the dogfood Check helper).
+
+## Objectives
+
+- O-1: Offline `agree` against the golden delivery-ledger fixture.
+
+## Risks
+
+| Type | Description | Mitigation | Priority |
+|---|---|---|---|
+| quality | Stale SHA placeholders | Always materialize from emit tip | high |
+
+## Profile
+
+Declared profile: **internal**
+
+## Functional requirements
+
+- **FR-11 — Wizard done.** Touches: templates. Lives: code git:__MERGE_SHA__:app/templates/wizard/done.html. Verify: reconciler agree. Serves: O-1
+- **FR-6 — Wizard step.** Touches: templates. Lives: code git:__MERGE_SHA__:app/templates/wizard/step.html. Verify: reconciler agree. Serves: O-1
+- **FR-8 — Wizard module.** Touches: wizard. Lives: code git:__MERGE_SHA__:app/wizard.py. Verify: reconciler agree. Serves: O-1
+
+## Non-goals
+
+- Auto-writing Lives from the ledger (Option 5).
+
+## Owned fields
+
+Only humans enter: whether to fuel additional FRs beyond this trio.
+
+## Contract projection
+
+- **Backend:** spike-component

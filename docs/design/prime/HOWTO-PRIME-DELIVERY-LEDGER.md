@@ -38,6 +38,18 @@ the postmortem write path.
 
 ## Check (no conductor)
 
+Thin forwarder (CEP-B4 — cite only):
+
+```bash
+python3 -m startd8.contractors.prime_delivery_check \
+  --req /path/to/REQ.md \
+  --dossier /path/to/generated-project/.startd8/delivery-ledger.yaml \
+  --repo /path/to/generated-project-git-root \
+  --out /tmp/prime-delivery-reconcile.json
+```
+
+Or call the reconciler directly:
+
 ```bash
 python3 /Users/neilyashinsky/Documents/dev/dev-os/scripts/reconcile_lives_evidence.py \
   --req /path/to/REQ.md \
@@ -51,9 +63,9 @@ Cross-repo: `--repo` is the **generated** git root; `--req` may live elsewhere.
 | Book A | Expected Check |
 |--------|----------------|
 | Stub REQ (FR ids, no Lives) | `fr-missing-lives` — proves Book B loads |
-| Fueled `Lives: code git:<sha>:<path>` matching ledger | `agree` for matching FRs |
+| Fueled template (`materialize_fueled_req`) | `agree` for FR-11 / FR-6 / FR-8 |
 
-Fuel Lives by hand (or a deliberate authoring pass). Do **not** auto-write Lives from
+Fuel Lives by hand (or materialize the checked-in template). Do **not** auto-write Lives from
 the ledger (harvest Option 5 — rejected).
 
 ## Non-goals
