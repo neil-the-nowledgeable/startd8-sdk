@@ -108,6 +108,11 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   #debug .dbg-opt{display:flex;align-items:flex-start;gap:6px;font-size:12.5px;color:var(--ink);
     cursor:pointer;padding:2px 0}
   #debug .dbg-opt input{margin-top:2px;flex:none}
+  #debug .dbg-prov{margin-top:8px;padding-top:7px;border-top:1px solid var(--line);font-size:11px;
+    font-family:var(--mono);line-height:1.4}
+  #debug .dbg-prov.dbg-clean{color:var(--planned)}
+  #debug .dbg-prov.dbg-cruft{color:var(--ochre-ink)}
+  #debug .dbg-prov b{font-weight:700}
   @media (max-width:920px){#debug{position:static;max-width:none;margin:14px 0 0;box-shadow:none}}
 
   /* ---------- sections (progressive disclosure) ---------- */
@@ -627,10 +632,19 @@ __PLAN_DATA__
   // combined (content AND the structural metadata together). Gated to a profile so the app path is
   // byte-identical (FR-8). Structure-only and Combined are mutually exclusive.
   if(payload.profile){
+    // Live provenance readout — "all content is cruft until proven otherwise": chrome that traces to
+    // a source is proven; an orphan (no source) is cruft. Green when clean, ochre when cruft remains.
+    var ch=payload.chrome, prov="";
+    if(ch){
+      var cruft=(ch.orphans||[]).length, cls=cruft?"dbg-cruft":"dbg-clean";
+      prov='<div class="dbg-prov '+cls+'">provenance '+ch.score+' · '+ch.present+'/'+ch.total+' proven'+
+        (cruft?' · <b>'+cruft+' cruft</b>: '+esc((ch.orphans||[]).join(", ")):' · no cruft ✓')+'</div>';
+    }
     document.getElementById("debug").innerHTML=
       '<div class="dbg-title">View mode</div>'+
       '<label class="dbg-opt"><input type="checkbox" id="structOnly"><span>Structure only</span></label>'+
-      '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>';
+      '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>'+
+      prov;
     var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
     function syncModes(){
       document.body.classList.toggle("structure-only", struct.checked);

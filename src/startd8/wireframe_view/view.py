@@ -69,6 +69,7 @@ def render_html(
     fluency: str = DEFAULT_HTML_FLUENCY,
     live_reload_secs: Optional[int] = None,
     profile: Optional[RenderProfile] = None,
+    chrome: Optional[dict] = None,
 ) -> str:
     """The standalone offline HTML preview for ``plan`` — deterministic, no external assets.
 
@@ -97,6 +98,10 @@ def render_html(
     # embed is clean at the source, which also keeps the cruft_lint / `tok in src` guard enforceable.
     if profile is not None:
         payload["profile"] = profile.to_dict()
+        # Chrome-provenance summary for the debug panel's live readout (score + orphan/cruft list).
+        # Profiled-only, so the app path payload is untouched (byte-identity).
+        if chrome is not None:
+            payload["chrome"] = chrome
     doc_title = profile.title if profile is not None else "Your app — a first look"
     html = (
         WIREFRAME_VIEW_TEMPLATE
@@ -129,17 +134,19 @@ def render_to_file(
     fluency: str = DEFAULT_HTML_FLUENCY,
     live_reload_secs: Optional[int] = None,
     profile: Optional[RenderProfile] = None,
+    chrome: Optional[dict] = None,
 ) -> Path:
     """Write the preview atomically (temp + rename); create the parent dir. Returns the path.
 
     ``live_reload_secs`` (EC-3 ``--watch``) injects the auto-refresh + LIVE banner; ``None`` writes the
-    static offline file."""
+    static offline file. ``chrome`` (chrome-provenance summary) is embedded for the debug panel's live
+    readout; ``None`` (app path) leaves the payload byte-identical."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
         render_html(plan, role=role, fluency=fluency,
-                    live_reload_secs=live_reload_secs, profile=profile),
+                    live_reload_secs=live_reload_secs, profile=profile, chrome=chrome),
         encoding="utf-8",
     )
     os.replace(tmp, path)

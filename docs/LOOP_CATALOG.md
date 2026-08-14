@@ -83,6 +83,27 @@ a script and/or runbook.
 - **State:** `docs/design/requirements-visualization/_pilot/ledger-origin*.json`.
 - **Status:** ACTIVE. All three sources score 1.0 (no orphan chrome).
 
+### 4. Cruft Sentinel  *(triggers /audit-then-metabolize)*
+
+- **What it does:** enforces the stance **all content is cruft until proven otherwise** on the
+  rendered navigator views. Every chrome element is presumed guilty; proof = a traceable origin
+  (Chrome Origin Audit). What can't prove its origin (an **orphan**) is cruft. When cruft is found the
+  loop does not patch it inline — it **triggers `/audit-then-metabolize`** on the offending corpus
+  (prints the exact invocation + writes a findings artifact), so cruft is diagnosed→cured as a class,
+  not swept under the render.
+- **Driver:** `scripts/navigator_cruft_loop.py`  ·  **Signals:** chrome orphans (deterministic) +
+  `cruft_lint` gaps (advisory; JS-template FPs flagged).
+- **Moving number:** cruft count (0 = clean, exit 0; >0 = exit 1 + the ATM trigger directive).
+- **Run it:**
+  ```bash
+  python3 scripts/navigator_cruft_loop.py --all           # sweep every view
+  # cruft found → "TRIGGER → /audit-then-metabolize (corpus: navigator views [...])"
+  ```
+- **State:** `docs/design/requirements-visualization/_pilot/ledger-cruft.json`.
+- **Live counterpart:** the debug panel's provenance readout (FR-13) shows the same score/cruft
+  in-view (green = clean, ochre = cruft).
+- **Status:** ACTIVE. All views clean (provenance 1.0) — armed, not currently triggering.
+
 ---
 
 ## Related established loops in the repo (cross-reference)

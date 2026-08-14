@@ -255,4 +255,14 @@ def render_nodes_html(
     kwargs: Dict[str, Any] = {"role": role, "fluency": fluency}
     if profile is not None:
         kwargs["profile"] = profile
+        # Live chrome-provenance readout for the debug panel: "all content is cruft until proven"
+        # — an element with no traceable origin is unproven (cruft). Embed the score + orphans.
+        from .provenance import chrome_provenance
+        rows = chrome_provenance(nodes, plan, profile)
+        present = sum(1 for r in rows if r["present"])
+        kwargs["chrome"] = {
+            "score": round(present / len(rows), 3) if rows else 0.0,
+            "present": present, "total": len(rows),
+            "orphans": [r["element"] for r in rows if not r["present"]],
+        }
     return render_to_file(plan, Path(out_path), **kwargs)

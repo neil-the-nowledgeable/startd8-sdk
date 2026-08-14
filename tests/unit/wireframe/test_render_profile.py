@@ -74,3 +74,15 @@ def test_debug_view_mode_panel_is_profiled_and_byte_safe():
     assert "if(payload.profile)" in profiled             # the panel is gated on a profile
     # Byte-safe: the app path is byte-identical with/without an explicit None (FR-8 preserved).
     assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_chrome_provenance_readout_embeds_and_is_byte_safe():
+    # FR-13: the debug panel's live provenance readout is fed by an embedded chrome summary; the app
+    # path (no chrome) stays byte-identical.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    ch = {"score": 0.9, "present": 9, "total": 10, "orphans": ["why"]}
+    withc = render_html(_keyed_plan(), profile=prof, chrome=ch)
+    assert '"orphans"' in withc and '"score"' in withc   # the summary is embedded for the readout
+    assert "dbg-prov" in withc                            # the readout element + its cruft styling
+    # No chrome ⇒ payload unchanged; app path byte-identical regardless of the new param.
+    assert render_html(_plan()) == render_html(_plan(), profile=None, chrome=None)
