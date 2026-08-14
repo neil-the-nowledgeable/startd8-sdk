@@ -922,6 +922,32 @@ def path_language_hints_from_forward_manifest(
     return path_language_hints_from_file_specs(manifest.file_specs)
 
 
+def provenance_completeness(
+    manifest: "ForwardManifest",
+) -> Literal["unknown", "partial", "complete"]:
+    """Classify how complete the Optional provenance trio is (REQ-FM-PROVENANCE-FUEL FR-5).
+
+    This is **not** delivery health — only whether ``pipeline_run_id``,
+    ``generated_at``, and ``source_checksum`` are present. Null trio ⇒
+    ``unknown`` (fail-honest); never treat absence as success.
+    """
+    def _present(value: Optional[str]) -> bool:
+        return bool(value and str(value).strip())
+
+    n = sum(
+        (
+            _present(manifest.pipeline_run_id),
+            _present(manifest.generated_at),
+            _present(manifest.source_checksum),
+        )
+    )
+    if n == 0:
+        return "unknown"
+    if n == 3:
+        return "complete"
+    return "partial"
+
+
 def forward_dependencies_from_deps(deps: Dependencies) -> ForwardDependencies:
     """Convert AST ``Dependencies`` to ``ForwardDependencies``.
 
@@ -956,4 +982,5 @@ __all__ = [
     "forward_dependencies_from_deps",
     "path_language_hints_from_file_specs",
     "path_language_hints_from_forward_manifest",
+    "provenance_completeness",
 ]
