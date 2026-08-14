@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-06-06T22:05:00+00:00",
+  "plan_title": "fixture-prime-delivery-ledger",
+  "route": "fixture",
+  "requirement_mappings": [
+    {
+      "requirement_id": "REQ-CDP-INT-001",
+      "feature_ids": [
+        "__pipeline_artifact:provenance"
+      ],
+      "task_ids": [],
+      "status": "auto-satisfied",
+      "mapping_rationale": [
+        "pipeline-innate: fixture keep for exclusion"
+      ]
+    },
+    {
+      "requirement_id": "FR-11",
+      "feature_ids": [
+        "F-304"
+      ],
+      "task_ids": [
+        "PI-001a",
+        "PI-001b",
+        "PI-001c"
+      ],
+      "status": "mapped",
+      "mapping_rationale": [
+        "fixture subset"
+      ]
+    },
+    {
+      "requirement_id": "FR-6",
+      "feature_ids": [
+        "F-304"
+      ],
+      "task_ids": [
+        "PI-001a",
+        "PI-001b",
+        "PI-001c"
+      ],
+      "status": "mapped",
+      "mapping_rationale": [
+        "fixture subset"
+      ]
+    },
+    {
+      "requirement_id": "FR-8",
+      "feature_ids": [
+        "F-304"
+      ],
+      "task_ids": [
+        "PI-001a",
+        "PI-001b",
+        "PI-001c"
+      ],
+      "status": "mapped",
+      "mapping_rationale": [
+        "fixture subset"
+      ]
+    }
+  ],
+  "_fixture_note": "Subset of real mappings; auto-satisfied kept for FR-2 exclusion."
+}
