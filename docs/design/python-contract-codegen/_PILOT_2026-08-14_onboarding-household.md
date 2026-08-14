@@ -89,3 +89,6 @@ curl -sS -D - -o /dev/null -X POST http://127.0.0.1:8000/ui/chore \
 | 2026-08-14 | Pilot dogfood; P0-1 datetime coerce; welcome TemplateResponse hotfix |
 | 2026-08-14 | This note + htmx create/update validation, base form CSS, structural hints/defaults, form_prose wired on regen |
 | 2026-08-14 | Restored `onboarding:` codegen (request-first TemplateResponse); household regen with `--form-prose`; smoke green |
+| 2026-08-14 | **Merged** [startd8-sdk PR #463](https://github.com/neil-the-nowledgeable/startd8-sdk/pull/463) → `origin/main` (`1379392`) — `onboarding:` archetype + form validation / FR-FH-11 |
+| 2026-08-14 | **§2 follow-ups on main** — humanized view labels (`nav_generator.py`); welcome ledger CSS (`onboarding_generator.py`); `nav_label` + `redirect_root_if_empty` (FR-2; closes P1-4) |
+| 2026-08-14 | **Consumer-side (household repo, no remote):** `household-o11y` `364d752` — regen with `onboarding:` + form ledger polish from startd8 main |
