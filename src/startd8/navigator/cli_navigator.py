@@ -20,6 +20,7 @@ from .sources_capability import (
     default_capability_index_path,
     nodes_from_capability_index,
 )
+from .sources_node_schema import NODE_SCHEMA_PROFILE, nodes_from_node_schema
 from .sources_requirements import REQUIREMENTS_PROFILE, nodes_from_requirements
 
 navigator_app = typer.Typer(
@@ -37,7 +38,7 @@ def build(
     source: str = typer.Option(
         ...,
         "--source",
-        help="Node source: capability-index | requirements",
+        help="Node source: capability-index | requirements | node-schema",
     ),
     fmt: str = typer.Option("json", "--format", help="Output format: json | html"),
     out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
@@ -65,10 +66,14 @@ def build(
             nodes = nodes_from_requirements(requirements)
             profile = REQUIREMENTS_PROFILE
             project_root = str(requirements.parent)
+        elif source == "node-schema":
+            nodes = nodes_from_node_schema()
+            profile = NODE_SCHEMA_PROFILE
+            project_root = "."
         else:
             console.print(
                 f"[red]error:[/red] unknown --source {source!r} "
-                "(expected capability-index|requirements)"
+                "(expected capability-index|requirements|node-schema)"
             )
             raise typer.Exit(_EXIT_ERR)
     except (FileNotFoundError, ValueError, OSError) as exc:
