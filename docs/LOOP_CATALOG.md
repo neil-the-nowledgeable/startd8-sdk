@@ -104,6 +104,28 @@ a script and/or runbook.
   in-view (green = clean, ochre = cruft).
 - **Status:** ACTIVE. All views clean (provenance 1.0) — armed, not currently triggering.
 
+### 5. Inspect Loop  *(the constructive inverse of the Cruft Sentinel)*
+
+- **What it does:** on the non-node-driven chrome that **survived** the cruft pass (masthead · summary
+  band · legend), it presumes a **legacy value** (not guilt) and hunts for the **derivative value or
+  updated context** that makes each element useful in the current sense. Output is a repurpose /
+  enhancement worklist, not a purge. Where the Cruft Sentinel asks "prove your origin or be purged,"
+  the inspect loop asks "you were built for a reason — what derivative value could you carry now?"
+- **Driver:** `scripts/navigator_inspect_loop.py`  ·  **Core:** `src/startd8/navigator/inspect.py`
+- **Moving number:** `inspect_score` = realized / total. Verdicts: **realized** (derivative value
+  already serving) · **candidate** (latent value to wire) · **uninspected** (chrome with no inspection).
+- **Trigger (opposite polarity to the Cruft Sentinel):** when **candidates** remain, it recommends
+  **/enhancement-backlog** (wire the derivative value / expose the plumbing that already exists) —
+  the generative counterpart to cruft → /audit-then-metabolize.
+- **Run it:**
+  ```bash
+  python3 scripts/navigator_inspect_loop.py --source requirements
+  # e.g. status_band ◆ CANDIDATE → grounding composition as an interactive filter
+  ```
+- **State:** `docs/design/requirements-visualization/_pilot/ledger-inspect.json`.
+- **Status:** ACTIVE. requirements: 7/9 realized; **candidates: status_band, shape_band** (their
+  count roll-ups have latent derivative value as debugging filters).
+
 ---
 
 ## Related established loops in the repo (cross-reference)

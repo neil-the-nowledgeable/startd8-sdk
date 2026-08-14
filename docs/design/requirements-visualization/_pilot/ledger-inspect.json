@@ -1,0 +1,31 @@
+[
+  {
+    "results": [
+      {
+        "candidates": [
+          "status_band",
+          "shape_band"
+        ],
+        "inspect_score": 0.778,
+        "source": "capability-index"
+      },
+      {
+        "candidates": [
+          "status_band",
+          "shape_band"
+        ],
+        "inspect_score": 0.778,
+        "source": "node-schema"
+      },
+      {
+        "candidates": [
+          "status_band",
+          "shape_band"
+        ],
+        "inspect_score": 0.778,
+        "source": "requirements"
+      }
+    ],
+    "when": "2026-08-14T22:02:06.021871+00:00"
+  }
+]

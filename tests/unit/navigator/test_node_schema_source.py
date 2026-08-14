@@ -75,3 +75,22 @@ def test_node_schema_items_carry_structure_only_metadata():
     metas = [it.meta for sec in plan.sections for it in sec.items]
     assert metas and all(m for m in metas)                       # every field-node has meta
     assert any("models.py" in m and "default" in m for m in metas)
+
+
+def test_inspect_loop_finds_derivative_value_in_non_node_chrome():
+    """The inspect loop presumes legacy value: every non-node-driven chrome element carries an
+    original intent + a derivative value, and the status/shape bands are flagged as candidates."""
+    from startd8.navigator.inspect import inspect_elements
+    from startd8.navigator.project import nodes_to_wireframe_plan
+    from startd8.navigator.sources_node_schema import NODE_SCHEMA_PROFILE
+
+    nodes = nodes_from_node_schema()
+    rows = inspect_elements(nodes, nodes_to_wireframe_plan(nodes), NODE_SCHEMA_PROFILE)
+    by = {r["element"]: r for r in rows}
+    # node-driven elements are out of scope (they come from the nodes themselves)
+    assert "sections" not in by and "node_keys" not in by
+    # every inspected element has an original intent + a verdict
+    assert all(r["original"] and r["verdict"] in {"realized", "candidate", "uninspected"} for r in rows)
+    # the status/shape bands carry latent derivative value (candidates for /enhancement-backlog)
+    assert by["status_band"]["verdict"] == "candidate"
+    assert by["status_band"]["derivative"]                       # a derivative value is proposed
