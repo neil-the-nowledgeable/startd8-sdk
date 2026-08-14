@@ -206,6 +206,8 @@ content (which IdP, password rules, retention durations) — that is operator/co
   `REFERENCE_AUTH_SEAM = True`) that gates (FR-DET-4) and `wireframe` check, so a deployed build whose
   reference seam was never replaced by operator policy is surfaced as a "reference auth seam
   unreplaced" advisory rather than silently shipping the stub principal resolver.
+  **Amended (Tier 1.1):** principal ingress is `Authorization: Bearer <JWT>` decode-only — see
+  [`../auth-seam-jwt/AUTH_SEAM_JWT_REQUIREMENTS.md`](../auth-seam-jwt/AUTH_SEAM_JWT_REQUIREMENTS.md).
 - **FR-IDN-3 (Policy is not generated).** The generated auth mechanism SHALL leave the **policy**
   (which IdP/OAuth provider, password rules, MFA) as configuration/extension seams (e.g. the existing
   project-owned `user_routers.py` seam), NOT hard-authored. (Bucket boundary — see §7.)

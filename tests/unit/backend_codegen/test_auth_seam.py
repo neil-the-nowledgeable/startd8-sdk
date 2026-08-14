@@ -1,18 +1,25 @@
-"""M2/A6 — the deployed-mode reference auth seam (app/auth.py, FR-IDN-2/3/4).
+"""M2/A6 — the deployed-mode reference auth seam (app/auth.py, FR-IDN-2/3/4 + AUTH_SEAM_JWT).
 
 Proves: deployed emits app/auth.py (installed does not); it carries the machine-detectable
 REFERENCE_AUTH_SEAM marker (R1-F4) + the get_principal/require_principal mechanism + the
-authenticated-but-not-tenant-isolated banner (FR-IDN-4); it is skip-hook drift-verifiable like any
-standard schema-only artifact; and the dormant FR-CFG-5 `deployed-auth-no-tenant` WARN now fires.
+authenticated-but-not-tenant-isolated banner (FR-IDN-4); Bearer/JWT decode-only ingress (no
+spoofable X-Principal-Id); it is skip-hook drift-verifiable like any standard schema-only
+artifact; and the dormant FR-CFG-5 `deployed-auth-no-tenant` WARN now fires.
 """
 
 from __future__ import annotations
+
+import ast
+import base64
+import json
+import time
 
 import pytest
 from typer.testing import CliRunner
 
 from startd8.backend_codegen import (
     is_reference_auth_seam,
+    is_verified_auth_seam,
     owned_file_in_sync,
     render_auth_seam,
     render_backend,
@@ -30,6 +37,16 @@ SCHEMA = "model Profile {\n  id   String @id\n  name String\n}\n"
 AUTH_PATH = "app/auth.py"
 
 
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _unsigned_jwt(claims: dict) -> str:
+    header = _b64url(json.dumps({"alg": "none", "typ": "JWT"}).encode())
+    payload = _b64url(json.dumps(claims).encode())
+    return f"{header}.{payload}.sig"
+
+
 def test_auth_seam_content_and_marker():
     text = render_auth_seam(SCHEMA)
     assert embedded_artifact_kind(text) == "python-auth-seam"
@@ -38,6 +55,7 @@ def test_auth_seam_content_and_marker():
     assert "def get_principal(" in text and "def require_principal(" in text
     assert "AUTHENTICATED BUT NOT TENANT-ISOLATED" in text  # FR-IDN-4 banner
     compile(text, AUTH_PATH, "exec")  # valid Python (imports not executed)
+    ast.parse(text)
 
 
 def test_is_reference_auth_seam_false_when_replaced():
@@ -91,3 +109,86 @@ def test_cli_deployed_build_emits_auth_and_warns(tmp_path):
     assert res.exit_code == 0, res.output  # WARN, not ERROR
     assert (tmp_path / AUTH_PATH).exists()
     assert "deployed-auth-no-tenant" in res.output
+    auth = (tmp_path / AUTH_PATH).read_text(encoding="utf-8")
+    assert "Authorization" in auth and "Bearer" in auth
+    assert 'alias="X-Principal-Id"' not in auth
+
+
+# --- AUTH_SEAM_JWT (Tier 1.1) additive -------------------------------------------------
+
+
+def test_jwt_bearer_ingress_no_spoofable_header():
+    text = render_auth_seam(SCHEMA)
+    assert 'alias="Authorization"' in text
+    assert "Bearer" in text
+    assert 'alias="X-Principal-Id"' not in text
+    assert "DECODE-ONLY" in text
+    assert "VERIFIED_UPSTREAM = False" in text
+    assert is_verified_auth_seam(text) is False
+
+def test_is_verified_auth_seam_true_when_hardened():
+    hardened = render_auth_seam(SCHEMA).replace(
+        "VERIFIED_UPSTREAM = False", "VERIFIED_UPSTREAM = True"
+    )
+    assert is_verified_auth_seam(hardened) is True
+
+
+def test_auth_seam_deterministic():
+    assert render_auth_seam(SCHEMA) == render_auth_seam(SCHEMA)
+
+
+def test_decode_jwt_claims_and_get_principal_runtime():
+    """Execute emitted helpers: sub→id, scopes, malformed→None, expired→None."""
+    ns: dict = {}
+    exec(compile(render_auth_seam(SCHEMA), AUTH_PATH, "exec"), ns)
+    decode = ns["_decode_jwt_claims"]
+    get_principal = ns["get_principal"]
+
+    good = _unsigned_jwt(
+        {
+            "sub": "user-1",
+            "iss": "https://idp.example",
+            "aud": "api",
+            "exp": int(time.time()) + 3600,
+            "scope": "read write",
+            "roles": ["admin"],
+        }
+    )
+    claims = decode(good)
+    assert claims["sub"] == "user-1"
+    assert decode("not-a-jwt") == {}
+    assert decode("a.b") == {}
+
+    principal = get_principal(authorization=f"Bearer {good}")
+    assert principal is not None
+    assert principal.id == "user-1"
+    assert principal.iss == "https://idp.example"
+    assert "read" in principal.scopes and "write" in principal.scopes
+    assert "admin" in principal.scopes
+
+    assert get_principal(authorization=None) is None
+    assert get_principal(authorization="Basic x") is None
+    assert get_principal(authorization="Bearer not-a-jwt") is None
+
+    expired = _unsigned_jwt({"sub": "user-1", "exp": int(time.time()) - 10})
+    assert get_principal(authorization=f"Bearer {expired}") is None
+
+    no_exp = _unsigned_jwt({"sub": "user-1"})
+    assert get_principal(authorization=f"Bearer {no_exp}") is None
+
+    no_sub = _unsigned_jwt({"exp": int(time.time()) + 60})
+    assert get_principal(authorization=f"Bearer {no_sub}") is None
+
+
+def test_require_principal_401_on_expired():
+    ns: dict = {}
+    exec(compile(render_auth_seam(SCHEMA), AUTH_PATH, "exec"), ns)
+    get_principal = ns["get_principal"]
+    require_principal = ns["require_principal"]
+    from fastapi import HTTPException
+
+    expired = _unsigned_jwt({"sub": "user-1", "exp": int(time.time()) - 5})
+    principal = get_principal(authorization=f"Bearer {expired}")
+    with pytest.raises(HTTPException) as ei:
+        require_principal(principal)
+    assert ei.value.status_code == 401
