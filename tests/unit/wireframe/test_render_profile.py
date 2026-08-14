@@ -73,6 +73,9 @@ def test_debug_view_mode_panel_is_profiled_and_byte_safe():
     assert 'class="node-meta"' in profiled or "node-meta" in profiled          # metadata line
     assert 'id="hideScaffold"' in profiled               # FR-14 multi-stage cruft-purge toggle
     assert "body.hide-scaffold .signoff" in profiled     # purge hides the app-scaffold sign-off subsystem
+    assert 'id="scaffold"' in profiled                   # FR-15 scaffold mode (template anatomy)
+    assert "body.scaffold [data-scaffold]" in profiled   # scaffold-mode region overlay CSS
+    assert "data-scaffold=" in profiled                  # regions carry their scaffold role
     assert "if(payload.profile)" in profiled             # the panel is gated on a profile
     # Byte-safe: the app path is byte-identical with/without an explicit None (FR-8 preserved).
     assert render_html(_plan()) == render_html(_plan(), profile=None)

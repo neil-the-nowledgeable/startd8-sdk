@@ -126,6 +126,14 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.hide-scaffold .allset,
   body.hide-scaffold #tg-role optgroup[label^="Delivery role"]{display:none !important}
 
+  /* Scaffold mode — the template's anatomy: outline every region carrying a data-scaffold role and
+     float its label + data source, so an adopter (legal · benchmark · dev-os) can read the template
+     itself from a debugging standpoint. Overlay only; no layout shift beyond the outline. */
+  body.scaffold [data-scaffold]{outline:1.5px dashed var(--accent2);outline-offset:2px;position:relative}
+  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:-8px;left:8px;
+    z-index:5;background:var(--accent);color:#fff;font-family:var(--mono);font-size:9.5px;font-weight:600;
+    letter-spacing:.02em;padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;opacity:.92}
+
   /* ---------- sections (progressive disclosure) ---------- */
   details.sec{background:var(--card);border:1px solid var(--line);border-radius:13px;margin:11px 0;
     overflow:hidden;transition:border-color .15s, box-shadow .15s}
@@ -291,16 +299,16 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
 <body>
 <div id="debug" role="group" aria-label="View mode"></div>
 <div class="wrap">
-  <header class="mast" id="mast"></header>
+  <header class="mast" id="mast" data-scaffold="masthead — profile chrome (eyebrow · headline · why/do)"></header>
   <div id="warn" role="status"></div>
-  <section class="glance" id="glance" aria-label="At a glance"></section>
+  <section class="glance" id="glance" aria-label="At a glance" data-scaffold="glance band — computed summary (status_counts · plan.shape)"></section>
   <div id="todos"></div>
-  <div class="toolbar" id="toolbar"></div>
-  <div class="legend" id="legend"></div>
+  <div class="toolbar" id="toolbar" data-scaffold="control layer — audience × fluency lenses"></div>
+  <div class="legend" id="legend" data-scaffold="status legend — profile.statuses[].meaning"></div>
   <div class="lens-banner" id="lens" hidden></div>
   <hr class="rule">
-  <p class="section-lead" id="seclead">What your app includes</p>
-  <main id="outline"></main>
+  <p class="section-lead" id="seclead" data-scaffold="section lead — profile.section_lead">What your app includes</p>
+  <main id="outline" data-scaffold="outline — node sections + cards (the node-driven layer)"></main>
   <div class="signbar" id="signbar"></div>
   <footer class="closing" id="closing" hidden></footer>
 </div>
@@ -434,7 +442,8 @@ __PLAN_DATA__
       h.innerHTML=
         '<div class="eyebrow">'+esc(eyebrow)+' <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
         '<h1 class="headline">'+esc(headline)+'</h1>'+ meta +
-        ((why||doo)?'<div class="whybox"><div><b>Why </b>'+esc(why)+'</div>'+
+        ((why||doo)?'<div class="whybox" data-scaffold="reading guidance — profile.why / profile.do">'+
+          '<div><b>Why </b>'+esc(why)+'</div>'+
           '<div><b>Do </b>'+esc(doo)+'</div></div>':'');
     }
     if(data.schema_version!==EXPECTED_SCHEMA){
@@ -484,14 +493,15 @@ __PLAN_DATA__
     // plain text with interactive chips — the status roll-up becomes a live grounding filter.
     if(!EU && payload.profile && s.status_counts && Object.keys(s.status_counts).length){
       g.innerHTML=rows.map(function(r){
-        if(r[0] !== "Status") return '<div class="cell"><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
+        var sc=(r[0]==="Shape")?' data-scaffold="shape — plan.shape (dialect-aware)"':(r[0]==="Content"||r[0]==="Cascade")?'':'';
+        if(r[0] !== "Status") return '<div class="cell"'+sc+'><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
         var chips = Object.keys(s.status_counts).map(function(key){
           var cnt=s.status_counts[key], p=profStatus(key), bg=p?p.color:"#888", lbl=p?p.label:key;
           return '<button class="status-chip" type="button" data-chip-key="'+esc(key)+'"'+
             ' style="background:'+esc(bg)+'" title="Filter to '+esc(lbl)+' items">'+
             esc(lbl)+' ('+esc(String(cnt))+')</button>';
         }).join("");
-        return '<div class="cell" id="glance-status-cell"><div class="k">'+esc(r[0])+'</div>'+
+        return '<div class="cell" id="glance-status-cell" data-scaffold="status roll-up — status_counts (+ PF-1 grounding filter)"><div class="k">'+esc(r[0])+'</div>'+
           '<div class="status-chips" id="status-chips">'+chips+'</div></div>';
       }).join("");
       g.querySelectorAll(".status-chip").forEach(function(btn){
@@ -722,9 +732,14 @@ __PLAN_DATA__
       // non-destructive so a downstream consumer opts in and elements can resurface later in a
       // different light. Default off (nothing hidden until selected).
       '<label class="dbg-opt"><input type="checkbox" id="hideScaffold"><span>Hide app-scaffold chrome</span></label>'+
+      // Scaffold mode: the meta-debugging view of the TEMPLATE itself. As this renderer becomes the
+      // de-facto multi-domain node visualizer (requirements first; legal · benchmark · dev-os next),
+      // an adopter needs to see the template's anatomy — each region labelled with its scaffold role +
+      // data source (data-scaffold). Orthogonal overlay, not a view mode.
+      '<label class="dbg-opt"><input type="checkbox" id="scaffold"><span>Scaffold mode (template anatomy)</span></label>'+
       prov;
     var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
-    var hide=document.getElementById("hideScaffold");
+    var hide=document.getElementById("hideScaffold"), scaf=document.getElementById("scaffold");
     function syncModes(){
       document.body.classList.toggle("structure-only", struct.checked);
       document.body.classList.toggle("combined", comb.checked);
@@ -732,6 +747,7 @@ __PLAN_DATA__
     struct.onchange=function(){ if(struct.checked) comb.checked=false; syncModes(); };
     comb.onchange=function(){ if(comb.checked) struct.checked=false; syncModes(); };
     hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
+    scaf.onchange=function(){ document.body.classList.toggle("scaffold", scaf.checked); };
   }
 
   renderAll();
