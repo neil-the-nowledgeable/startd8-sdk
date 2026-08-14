@@ -9,7 +9,8 @@
 **Inherits standards:** PC-13 (onboarding is content, not a modal) · EDITORS_ARCHETYPE promotion door ·
 det-req-kit `BACKEND_ROUTING` UX rows · attorney-portal ONB shape (**cite only**, not retrofit)
 
-**Status:** IMPLEMENTED (v0.1) — FR-1..6 codegen + tests; dogfood wireframe fixture + household-o11y
+**Status:** IMPLEMENTED (v0.1) on `origin/main` — [PR #463](https://github.com/neil-the-nowledgeable/startd8-sdk/pull/463)
+(`1379392`) · FR-1..6 codegen + tests; wireframe harness + household-o11y dogfood
 **Pilot:** [`_PILOT_2026-08-14_onboarding-household.md`](./_PILOT_2026-08-14_onboarding-household.md)
 
 ---
@@ -27,7 +28,9 @@ det-req-kit `BACKEND_ROUTING` UX rows · attorney-portal ONB shape (**cite only*
 
 Add a `views.yaml` **`onboarding:`** section that generates a first-run **welcome route** with
 dismissible **tips-as-content** (no modal/tour library) and an **empty-state checklist** driven by
-entity counts. Inert when absent. Dogfood: SDK wireframe fixture (harness) + household-o11y (lived).
+entity counts. Optional `nav_label` and `redirect_root_if_empty` wire welcome into nav chrome and
+root redirect when all checklist entities are empty (FR-2). Inert when absent. Dogfood: SDK wireframe
+fixture (harness) + household-o11y (lived).
 
 ## Objectives
 
@@ -94,3 +97,17 @@ Backend: startd8-python-cascade
 |------|------|-------|
 | page | welcome | Generated GET orientation |
 | entity | empty_states keys | Must exist on Prisma schema |
+
+## Shipped follow-ups (PR #463)
+
+Post-merge polish landed with the archetype — cite, do not re-spec:
+
+- **Humanized view labels** — `nav_generator.py` titleizes raw view keys (pilot P1-4); see
+  [`_PILOT_2026-08-14_onboarding-household.md`](./_PILOT_2026-08-14_onboarding-household.md) §P1-4.
+- **Welcome ledger CSS** — `onboarding_generator.py` `render_onboarding_welcome_template` embeds
+  clipboard-ledger tokens (FR-FH-11 fallbacks); see
+  [`FORM_FIELD_LAYOUT_FR-FH-11.md`](./FORM_FIELD_LAYOUT_FR-FH-11.md).
+- **`redirect_root_if_empty`** — `pages_generator.py` redirects GET `/` → `onboarding.route` when
+  flagged and every `empty_states` entity is still empty.
+- **`nav_label`** — `onboarding_manifest.py` + `nav_generator.py`; nav chrome uses
+  `nav_label or title` (wireframe + household declare both).

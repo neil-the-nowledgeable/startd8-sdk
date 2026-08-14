@@ -11,8 +11,11 @@ views:
 onboarding:
   route: /welcome
   title: Welcome
+  nav_label: Welcome
+  redirect_root_if_empty: true
   lead: Wireframe fixture orientation — skip anytime.
   continue_href: /ui/profile
+  help_href: /about
   tips:
     - Add a Profile first
     - Metrics hang off a Profile

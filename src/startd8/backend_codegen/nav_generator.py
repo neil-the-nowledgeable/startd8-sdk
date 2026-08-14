@@ -137,7 +137,7 @@ def nav_registry(
     # The generated home/index is itself a navigable surface (FR-28e), so it appears in the nav bar.
     # Its own ``group`` is "index", which the index page deliberately does not list (it lists only
     # page/entity/view) — so the sitemap never lists itself.
-    entries.append(NavEntry(key="index", label="Index", href=index_route(pages_text), group="index"))
+    entries.append(NavEntry(key="index", label="Sitemap", href=index_route(pages_text), group="index"))
 
     return tuple(entries)
 
