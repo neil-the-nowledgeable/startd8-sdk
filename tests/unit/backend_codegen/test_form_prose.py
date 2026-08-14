@@ -136,6 +136,13 @@ def test_help_placeholder_intro_and_aria():
     assert 'placeholder="42.00"' in form
     assert 'aria-describedby="help-amountCents"' in form
     assert '{% include "bill/_help_amountCents.html" %}' in form
+    # FR-FH-11: instruction sits above the control (include before the input).
+    help_i = form.index('{% include "bill/_help_amountCents.html" %}')
+    input_i = form.index('name="amountCents"')
+    assert help_i < input_i
+    label_i = form.index('<label for="f-amountCents">')
+    assert label_i < help_i
+    assert "Amount cents" in form or "amountCents" in form  # humanized or raw
     # checkbox carries aria-describedby but never a placeholder (meaningless there).
     paid_input = form.split('id="f-paid"')[1].split(">")[0]
     assert "aria-describedby=" in paid_input and "placeholder=" not in paid_input
@@ -153,8 +160,11 @@ def test_placeholder_only_field_has_no_help_fragment():
     rich = _ui("forms:\n  Bill:\n    fields:\n      memo: {placeholder: 'note'}\n")
     form = rich["app/templates/bill/form.html"]
     assert 'placeholder="note"' in form
-    assert "aria-describedby=" not in form  # no help → no aria, no fragment
     assert not any("_help_" in k for k in rich)
+    # placeholder-only memo: no help fragment and no aria on that control
+    memo_attrs = form.split('id="f-memo"')[1].split(">")[0]
+    assert "aria-describedby=" not in memo_attrs
+    assert '{% include "bill/_help_memo.html" %}' not in form
 
 
 def test_help_text_is_html_escaped():

@@ -85,6 +85,7 @@ _FORMS_KINDS: frozenset = frozenset(
         "fastapi-web-forms", "htmx-created",
         "fastapi-flow", "flow-shell", "flow-aggregator",          # flows (FR-ED-15)
         "fastapi-editor", "editor-form", "editor-aggregator",     # bulk child-field editors (FR-ED-10)
+        "fastapi-onboarding", "onboarding-welcome", "onboarding-aggregator",  # first-run (FR-ONB)
     }
 )
 
@@ -877,6 +878,11 @@ def _forms_renderers(tenant: Optional[str] = None, human_inputs_text: Optional[s
         render_named_editor_form,
         render_named_editor_router,
     )
+    from .onboarding_generator import (
+        render_onboarding_aggregator,
+        render_onboarding_welcome_router,
+        render_onboarding_welcome_template,
+    )
 
     return {
         "fastapi-web-forms": lambda s, f, sf, e: render_web(
@@ -891,6 +897,10 @@ def _forms_renderers(tenant: Optional[str] = None, human_inputs_text: Optional[s
         "fastapi-editor": lambda s, f, sf, e: render_named_editor_router(s, f, e),
         "editor-form": lambda s, f, sf, e: render_named_editor_form(s, f, e),
         "editor-aggregator": lambda s, f, sf, e: render_editor_aggregator(s, f),
+        # onboarding (FR-ONB): single welcome pack; entity slot is "welcome".
+        "fastapi-onboarding": lambda s, f, sf, e: render_onboarding_welcome_router(s, f),
+        "onboarding-welcome": lambda s, f, sf, e: render_onboarding_welcome_template(s, f),
+        "onboarding-aggregator": lambda s, f, sf, e: render_onboarding_aggregator(s, f),
     }
 
 

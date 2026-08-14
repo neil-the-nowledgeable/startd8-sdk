@@ -37,6 +37,8 @@ PK get list + create only (no by-id routes), mirroring the CRUD generator.
 from __future__ import annotations
 
 import html
+import re
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
@@ -159,20 +161,146 @@ def _confirm_field(schema: PrismaSchema, name: str) -> Optional[PrismaField]:
 # Minimal owned styling, inlined in base.html as a always-present *fallback*. `startd8 polish`
 # overrides it with a mounted /static/css/app.css (linked below, after this block, so the external
 # sheet wins the cascade). When polish hasn't run, the link 404s harmlessly and this fallback applies.
+# Aesthetic (pilot FR-FH-11 / frontend-design): "clipboard ledger" — cool paper, ink teal, caption labels.
 _BASE_STYLE = """\
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <style>
-    body { font-family: system-ui, sans-serif; margin: 0; color: #222; }
-    main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
-    nav { background: #f4f4f4; padding: .5rem 1rem; }
-    nav a { margin-right: .75rem; }
-    table { border-collapse: collapse; width: 100%; margin-top: .75rem; }
-    th, td { border: 1px solid #ddd; padding: .4rem .6rem; text-align: left; }
-    tr.new-row td { background: #eaf7ea; }
-    .flash { background: #eaf7ea; border: 1px solid #b7e0b7; padding: .5rem .75rem; }
-    .field { margin-bottom: .75rem; }
-    .field label { display: block; font-weight: 600; margin-bottom: .2rem; }
-    .field-error { color: #b00020; }
-    button { padding: .3rem .8rem; }
+    :root {
+      --ink: #0b3d4a;
+      --ink-soft: #3d5c66;
+      --paper: #f3f6f4;
+      --card: #fffcf7;
+      --line: #5a6f76;
+      --line-soft: #b7c5c9;
+      --teal: #0f7a6c;
+      --teal-deep: #0a5c52;
+      --danger: #9b1c1c;
+      --flash-bg: #e4f5ef;
+      --font-display: "Fraunces", "Iowan Old Style", Georgia, serif;
+      --font-ui: "Public Sans", "Segoe UI", sans-serif;
+    }
+    body {
+      font-family: var(--font-ui);
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #d9ebe6 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #e7eef1 0%, transparent 50%),
+        var(--paper);
+      background-attachment: fixed;
+    }
+    main { max-width: 60rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+    nav {
+      background: rgba(255, 252, 247, 0.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--line-soft);
+      padding: .65rem 1rem;
+    }
+    nav a { margin-right: .75rem; color: var(--ink); text-decoration: none; font-weight: 500; }
+    nav a:hover { color: var(--teal-deep); }
+    h1, h2, h3 { font-family: var(--font-display); color: var(--ink); letter-spacing: -0.02em; }
+    table { border-collapse: collapse; width: 100%; margin-top: .75rem; background: var(--card); }
+    th, td { border: 1px solid var(--line-soft); padding: .4rem .6rem; text-align: left; }
+    tr.new-row td { background: var(--flash-bg); }
+    .flash {
+      background: var(--flash-bg);
+      border: 1px solid #8fc9b8;
+      border-left: 4px solid var(--teal);
+      padding: .65rem .85rem;
+      border-radius: 2px 8px 8px 2px;
+    }
+    /* FR-FH-11 form surface */
+    form.entity-form, main form {
+      background: var(--card);
+      border: 1.5px solid var(--line);
+      border-left: 5px solid var(--teal);
+      border-radius: 2px 12px 12px 2px;
+      padding: 1.25rem 1.35rem 1.5rem;
+      max-width: 34rem;
+      box-shadow: 0 12px 28px rgba(11, 61, 74, 0.07);
+    }
+    .field {
+      margin-bottom: 1.15rem;
+      animation: field-in 0.45s ease both;
+    }
+    .field:nth-child(1) { animation-delay: 0.02s; }
+    .field:nth-child(2) { animation-delay: 0.05s; }
+    .field:nth-child(3) { animation-delay: 0.08s; }
+    .field:nth-child(4) { animation-delay: 0.11s; }
+    .field:nth-child(5) { animation-delay: 0.14s; }
+    .field:nth-child(6) { animation-delay: 0.17s; }
+    .field:nth-child(7) { animation-delay: 0.2s; }
+    .field:nth-child(8) { animation-delay: 0.23s; }
+    .field:nth-child(9) { animation-delay: 0.26s; }
+    .field:nth-child(n+10) { animation-delay: 0.29s; }
+    @keyframes field-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .field { animation: none; }
+    }
+    /* Label directly above the control it names (FR-FH-11). */
+    .field label {
+      display: block;
+      font-weight: 700;
+      font-size: 0.78rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink);
+      margin: 0 0 0.2rem;
+    }
+    .field-hint, .field-help {
+      display: block;
+      color: var(--ink-soft);
+      font-size: 0.9rem;
+      line-height: 1.35;
+      font-style: italic;
+      margin: 0 0 0.4rem;
+      max-width: 28rem;
+    }
+    .field input, .field select, .field textarea {
+      border: 1.5px solid var(--line);
+      border-radius: 6px;
+      padding: .55rem .65rem;
+      background: #fff;
+      color: var(--ink);
+      width: min(100%, 28rem);
+      box-sizing: border-box;
+      font: inherit;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    .field input:hover, .field select:hover, .field textarea:hover {
+      border-color: var(--teal);
+    }
+    .field input:focus, .field select:focus, .field textarea:focus {
+      outline: 2px solid var(--teal);
+      outline-offset: 1px;
+      border-color: var(--teal-deep);
+      box-shadow: 0 0 0 3px rgba(15, 122, 108, 0.18);
+    }
+    .field-error {
+      color: var(--danger);
+      display: block;
+      margin-top: .35rem;
+      min-height: 1.1em;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    button[type="submit"], button {
+      font-family: var(--font-ui);
+      font-weight: 700;
+      padding: .55rem 1.15rem;
+      background: var(--teal);
+      color: #fff;
+      border: 1px solid var(--teal-deep);
+      border-radius: 8px;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+    }
+    button[type="submit"]:hover, button:hover { background: var(--teal-deep); }
   </style>
 """
 
@@ -439,23 +567,73 @@ def render_detail_template(schema_text: str, source_file: str, entity: str, disp
     return head + "\n" + body
 
 
-def _field_extra_attrs(
-    name: str, kind: str, fp_field: Optional[FormFieldProse]
-) -> str:
-    """Form-Words widget attributes for one field: ``aria-describedby`` (when help exists, FR-FH-7) and
-    ``placeholder`` (a structural hint, FR-FH-1). Empty when no prose ⇒ byte-identical widget (FR-FH-4).
+def _human_label(name: str) -> str:
+    """Turn ``anchorDate`` / ``day_of_month`` into a caption-style label (FR-FH-11)."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name).replace("_", " ").strip()
+    parts = spaced.split()
+    if not parts:
+        return name
+    return " ".join([parts[0].capitalize()] + [p.lower() for p in parts[1:]])
 
-    ``aria-describedby`` names the help fragment's id, never the help *words*, so it is content-
-    independent and editing copy never drifts the owned template (FR-FH-3). A ``placeholder`` is a real
-    attribute on the owned input (only ``select``/``checkbox`` skip it — it is meaningless there)."""
-    if fp_field is None:
-        return ""
+
+def _field_extra_attrs(
+    name: str, kind: str, fp_field: Optional[FormFieldProse], described_by: Optional[str] = None
+) -> str:
+    """Form-Words widget attributes: ``aria-describedby`` + ``placeholder``.
+
+    *described_by* is the help/hint element id (instruction sits above the control — FR-FH-11).
+    """
     attrs = ""
-    if fp_field.placeholder is not None and kind not in ("select", "checkbox"):
+    if fp_field is not None and fp_field.placeholder is not None and kind not in ("select", "checkbox"):
         attrs += f' placeholder="{html.escape(fp_field.placeholder, quote=True)}"'
-    if fp_field.help is not None:
-        attrs += f' aria-describedby="help-{name}"'
+    desc = described_by
+    if desc is None and fp_field is not None and fp_field.help is not None:
+        desc = f"help-{name}"
+    if desc:
+        attrs += f' aria-describedby="{desc}"'
     return attrs
+
+
+def _structural_hint(field: PrismaField, kind: str) -> Optional[str]:
+    """Deterministic per-field instruction when form_prose help is absent (pilot P2-2)."""
+    n = field.name
+    if kind == "datetime":
+        return "Pick a date and time."
+    if n == "interval":
+        return "How often the cadence repeats — usually 1 (every period)."
+    if n == "turnIndex":
+        return "Rotation position among assignees; start at 0."
+    if n == "leadDays":
+        return "Days of notice before the due date."
+    if n == "refillLeadDays":
+        return "Days of notice before the forecasted run-out."
+    if n == "weekday":
+        return "For weekly cadences: 0 = Monday … 6 = Sunday (ISO)."
+    if n == "dayOfMonth":
+        return "For monthly cadences: day of month, 1–31."
+    if n.endswith("Id") and n != "id":
+        return "ID of the related record (copy from its detail page URL)."
+    if n == "amountCents":
+        return "Whole cents (e.g. 4200 = $42.00)."
+    if kind == "datetime" or n.endswith("At") or n.endswith("Date"):
+        return "Pick a date and time."
+    return None
+
+
+def _sensible_default(field: PrismaField, kind: str) -> Optional[str]:
+    """Create-form default when the field is empty and the value is obvious (pilot P2-3)."""
+    n = field.name
+    if n == "interval":
+        return "1"
+    if n == "turnIndex":
+        return "0"
+    if n == "leadDays":
+        return "3"
+    if n == "refillLeadDays":
+        return "7"
+    if kind == "int" and n in ("dosesPerDay",):
+        return "1"
+    return None
 
 
 def _form_input_html(
@@ -464,32 +642,99 @@ def _form_input_html(
     schema: PrismaSchema,
     fp_field: Optional[FormFieldProse] = None,
 ) -> str:
-    """The label + widget + inline-validation hooks + error slot for one form field.
-
-    *fp_field* (the form Words layer for this field) adds a ``placeholder`` + ``aria-describedby`` to the
-    widget and a ``{% include %}`` of the untracked help fragment; absent ⇒ byte-identical to today."""
+    """Label → instruction → control → error (FR-FH-11). Instruction never below the control."""
     name = field.name
     kind = _field_kind(field, schema)
     required = " required" if _is_required(field) else ""
-    extra = _field_extra_attrs(name, kind, fp_field)  # "" when no prose ⇒ widget byte-identical
+    label_text = html.escape(_human_label(name))
+
+    # Words help → above control. Structural hint only when no form_prose entry for the field
+    # (placeholder-only prose stays quiet — FR-FH-4 family).
+    described_by: Optional[str] = None
+    if fp_field is not None and fp_field.help is not None:
+        help_line = f'    {{% include "{entity_lower}/_help_{name}.html" %}}\n'
+        described_by = f"help-{name}"
+    elif fp_field is None:
+        hint = _structural_hint(field, kind)
+        if hint:
+            help_line = (
+                f'    <small class="field-hint" id="hint-{name}">{html.escape(hint)}</small>\n'
+            )
+            described_by = f"hint-{name}"
+        else:
+            help_line = ""
+    else:
+        help_line = ""
+
+    extra = _field_extra_attrs(name, kind, fp_field, described_by=described_by)
+    if (
+        (fp_field is None or fp_field.placeholder is None)
+        and kind == "datetime"
+        and 'placeholder="' not in extra
+    ):
+        extra += ' placeholder="YYYY-MM-DDTHH:MM"'
     hx = (
         f' hx-post="/ui/{entity_lower}/validate" hx-trigger="blur changed"'
         f' hx-target="#err-{name}" hx-swap="innerHTML" hx-include="this"'
     )
-    # On the create form (item is None) fall back to a query-param prefill value (FK pre-linking).
-    # `prefill` is undefined in edit/list contexts; the `if prefill` guard keeps Jinja safe there.
-    val = (
-        "{{ item." + name + " if item and item." + name + " is not none"
-        " else (prefill.get('" + name + "') if prefill else '') }}"
-    )
+    default = _sensible_default(field, kind)
+    if default is not None:
+        default_lit = html.escape(default, quote=True)
+        val = (
+            "{{ prefill['"
+            + name
+            + "'] if prefill is defined and prefill is not none and '"
+            + name
+            + "' in prefill else (item."
+            + name
+            + " if item and item."
+            + name
+            + " is not none else '"
+            + default_lit
+            + "') }}"
+        )
+    else:
+        val = (
+            "{{ prefill['"
+            + name
+            + "'] if prefill is defined and prefill is not none and '"
+            + name
+            + "' in prefill else (item."
+            + name
+            + " if item and item."
+            + name
+            + " is not none else '') }}"
+        )
 
     if kind == "select":
+        enum_vals = list(schema.enums[field.type])
+        first = enum_vals[0] if enum_vals else ""
         opts = []
-        for v in schema.enums[field.type]:
+        for v in enum_vals:
+            vq = v.replace("\\", "\\\\").replace("'", "\\'")
+            first_q = first.replace("\\", "\\\\").replace("'", "\\'")
             sel = (
-                "{% if item and item." + name + ' == "' + v + '" %}selected{% endif %}'
+                "{% if (prefill is defined and prefill and prefill.get('"
+                + name
+                + "') == '"
+                + vq
+                + "') or ((not prefill or not prefill.get('"
+                + name
+                + "')) and item and item."
+                + name
+                + " == '"
+                + vq
+                + "') or ((not prefill or not prefill.get('"
+                + name
+                + "')) and not item and '"
+                + vq
+                + "' == '"
+                + first_q
+                + "') %}selected{% endif %}"
             )
-            opts.append(f'    <option value="{v}" {sel}>{v}</option>')
+            opts.append(
+                f'    <option value="{html.escape(v, quote=True)}" {sel}>{html.escape(v)}</option>'
+            )
         widget = (
             f'<select name="{name}" id="f-{name}"{extra}{required}{hx}>\n'
             + "\n".join(opts)
@@ -515,20 +760,16 @@ def _form_input_html(
             f' value="{val}"{required}{hx}>'
         )
 
-    # The help line is the untracked Words-layer fragment (FR-FH-3); present only when help is authored,
-    # so a field with no prose renders the exact pre-feature markup (FR-FH-4). The include names the
-    # field id, never the help words → editing copy never drifts this owned template.
-    help_line = (
-        f'    {{% include "{entity_lower}/_help_{name}.html" %}}\n'
-        if (fp_field is not None and fp_field.help is not None)
-        else ""
+    err_slot = (
+        f'    <small id="err-{name}" class="field-error">'
+        f"{{{{ errors.get('{name}', '') if errors is defined and errors else '' }}}}</small>\n"
     )
     return (
         f'  <div class="field">\n'
-        f'    <label for="f-{name}">{name}</label>\n'
-        f"    {widget}\n"
+        f'    <label for="f-{name}">{label_text}</label>\n'
         f"{help_line}"
-        f'    <small id="err-{name}" class="field-error"></small>\n'
+        f"    {widget}\n"
+        f"{err_slot}"
         f"  </div>"
     )
 
@@ -595,7 +836,7 @@ def render_form_template(
         '{% if created %}<p class="flash">✓ ' + entity + f" stored.{view_link}</p>{{% endif %}}\n"
         f"<h1>{entity}</h1>\n"
         f"{intro_line}"
-        f'<form method="post" action="{action}">\n'
+        f'<form method="post" action="{action}" class="entity-form">\n'
         f"{inputs}\n"
         '  <button type="submit">Save</button>\n'
         "</form>\n"
@@ -697,15 +938,23 @@ def _coerce(kind: str, raw: str):
         return raw not in ("", "off", "false", "0")
     if kind == "text-list":
         return [p.strip() for p in raw.split(",") if p.strip()]
+    if kind == "datetime":
+        # HTML datetime-local is ``YYYY-MM-DDTHH:MM`` (optional seconds); SQLite needs a datetime.
+        text = str(raw).strip()
+        if len(text) == 16 and text[10] == "T":
+            text = text + ":00"
+        return datetime.fromisoformat(text)
     return raw
 
 
-def _field_error(kind: str, required: bool, raw: str) -> str:
+def _field_error(kind: str, required: bool, raw: str, allowed=None) -> str:
     """Deterministic single-field validation message ("" = valid)."""
     if required and (raw is None or str(raw).strip() == ""):
         return "This field is required."
     if raw in (None, ""):
         return ""
+    if allowed is not None and str(raw) not in allowed:
+        return "Choose a valid option."
     if kind == "int":
         try:
             int(raw)
@@ -716,7 +965,38 @@ def _field_error(kind: str, required: bool, raw: str) -> str:
             float(raw)
         except ValueError:
             return "Must be a number."
+    if kind == "datetime":
+        try:
+            text = str(raw).strip()
+            if len(text) == 16 and text[10] == "T":
+                text = text + ":00"
+            datetime.fromisoformat(text)
+        except ValueError:
+            return "Must be a date and time."
     return ""
+
+
+def _form_errors(rules: dict, form, allowed_map=None):
+    """Validate every declared field; return (errors, data). Pilot P0-2/P0-3/P0-4."""
+    allowed_map = allowed_map or {}
+    errors = {}
+    data = {}
+    for key, (kind, required) in rules.items():
+        raw = form.get(key)
+        if raw is not None and not isinstance(raw, str):
+            raw = str(raw)
+        msg = _field_error(kind, required, raw, allowed_map.get(key))
+        if msg:
+            errors[key] = msg
+            continue
+        if raw not in (None, ""):
+            try:
+                data[key] = _coerce(kind, raw)
+            except (ValueError, TypeError):
+                errors[key] = (
+                    "Must be a date and time." if kind == "datetime" else "Invalid value."
+                )
+    return errors, data
 '''
 
 
@@ -804,6 +1084,12 @@ def _entity_routes(
         kind = "text-list" if f.is_list else _field_kind(f, schema)
         rule_items.append(f'"{f.name}": ("{kind}", {_is_required(f)})')
     rules = "{" + ", ".join(rule_items) + "}"
+    allowed_items = []
+    for f in fields:
+        if _field_kind(f, schema) == "select" and f.type in schema.enums:
+            vals = ", ".join(repr(v) for v in schema.enums[f.type])
+            allowed_items.append(f'"{f.name}": frozenset({{{vals}}})')
+    allowed = "{" + ", ".join(allowed_items) + "}"
     pkkind = "str"
     pkname = pk.name if pk is not None else "id"
 
@@ -820,6 +1106,7 @@ def _entity_routes(
     lines = [
         f"# --- {name} ---",
         f"_{e}_rules = {rules}",
+        f"_{e}_allowed = {allowed}",
         "",
         "",
         f'@web_router.get("/ui/{e}", response_class=HTMLResponse)',
@@ -857,7 +1144,7 @@ def _entity_routes(
         "    for key, value in form.items():",
         f"        if key in _{e}_rules:",
         f"            kind, required = _{e}_rules[key]",
-        "            message = _field_error(kind, required, value)",
+        f"            message = _field_error(kind, required, value, _{e}_allowed.get(key))",
         "            break",
         "    return templates.TemplateResponse(",
         '        request, "_field_error.html", {"message": message}',
@@ -867,8 +1154,13 @@ def _entity_routes(
         f'@web_router.post("/ui/{e}", response_class=HTMLResponse)',
         f"async def create_{e}(request: Request, session: Session = Depends(get_session){pdep}):",
         "    form = await request.form()",
-        f"    data = {{k: _coerce(_{e}_rules[k][0], form.get(k))",
-        f"            for k in _{e}_rules if form.get(k) not in (None, '')}}",
+        f"    errors, data = _form_errors(_{e}_rules, form, _{e}_allowed)",
+        "    if errors:",
+        f"        prefill = {{k: (form.get(k) or '') for k in _{e}_rules}}",
+        '        return templates.TemplateResponse(',
+        f'            request, "{e}/form.html",',
+        '            {"item": None, "prefill": prefill, "errors": errors},',
+        "        )",
         f"    obj = {name}(**data)",
         *([f"    obj.{owner_field} = principal.id"] if owner_field else []),
         "    session.add(obj)",
@@ -910,9 +1202,15 @@ def _entity_routes(
             f"    obj = session.get({name}, {pkname})",
             *guard404("obj"),
             "    form = await request.form()",
-            f"    for k in _{e}_rules:",
-            "        if form.get(k) not in (None, ''):",
-            f"            setattr(obj, k, _coerce(_{e}_rules[k][0], form.get(k)))",
+            f"    errors, data = _form_errors(_{e}_rules, form, _{e}_allowed)",
+            "    if errors:",
+            f"        prefill = {{k: (form.get(k) or '') for k in _{e}_rules}}",
+            "        return templates.TemplateResponse(",
+            f'            request, "{e}/form.html",',
+            f'            {{"item": obj, "prefill": prefill, "errors": errors}},',
+            "        )",
+            "    for k, v in data.items():",
+            "        setattr(obj, k, v)",
             *([f"    obj.{owner_field} = principal.id"] if owner_field else []),  # ownership immutable
             "    session.add(obj)",
             "    session.commit()",
@@ -1043,6 +1341,7 @@ def render_web(
         header += f"\n# startd8-tenant: {tenant_owner_field}"
     imports = (
         "from __future__ import annotations\n\n"
+        "from datetime import datetime\n"
         "from pathlib import Path\n\n"
         "from fastapi import APIRouter, Depends, HTTPException, Request\n"
         "from fastapi.responses import HTMLResponse, RedirectResponse\n"

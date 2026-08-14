@@ -79,6 +79,21 @@ def nav_registry(
                 NavEntry(key=f"page:{p.slug}", label=p.nav_label or p.title, href=p.slug, group="page")
             )
 
+    # views.yaml `onboarding:` (optional) — first-run welcome route (FR-ONB); sits with pages.
+    if views_text:
+        from .onboarding_manifest import parse_onboarding
+
+        onb = parse_onboarding(views_text)
+        if onb is not None:
+            entries.append(
+                NavEntry(
+                    key=f"onboarding:{onb.route}",
+                    label=onb.title,
+                    href=onb.route,
+                    group="page",
+                )
+            )
+
     # entities (schema) — no label exists in generated code; derive one (FR-1a), unless the model
     # carries a `/// @nav <Label>` override in the schema (FR-26). The override changes only the
     # display label; the key stays ``entity:<Name>`` (identity is unchanged).

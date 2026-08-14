@@ -22,6 +22,7 @@ from .health_renderer import render_health
 from .openapi_contract_renderer import render_openapi_contract
 from .openapi_client_renderer import render_http_client
 from .editor_generator import render_editors
+from .onboarding_generator import render_onboarding
 from .flow_generator import render_flows
 from .htmx_generator import render_ui
 from .nav_generator import render_nav
@@ -141,6 +142,8 @@ def render_backend(
     out.extend(render_flows(schema_text, views_text or ""))
     # FR-ED: bulk child-field editors from views.yaml `editors:` (empty when none declared)
     out.extend(render_editors(schema_text, views_text or ""))
+    # FR-ONB: first-run orientation from views.yaml `onboarding:` (empty when none declared)
+    out.extend(render_onboarding(schema_text, views_text or ""))
     out.extend(
         render_derived(schema_text, source_file, completeness_text=completeness_text)
     )  # export / ai_schemas / completeness (completeness weighted when a manifest is given)
