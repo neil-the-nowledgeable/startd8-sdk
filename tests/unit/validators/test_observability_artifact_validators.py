@@ -162,9 +162,42 @@ class TestAlertValidation:
         r = validate_alert_rules(content)
         assert not r.summary_annotations_present
 
-    def test_checks_total_is_9(self):
+    def test_checks_total_is_10(self):
         r = validate_alert_rules(VALID_ALERT)
-        assert r.checks_total == 9
+        assert r.checks_total == 10
+
+    def test_duplicate_alert_name_flagged(self):
+        # Two rules named the same (e.g. a lossy _alert_name collision) — the
+        # generator defect must be caught at the source, OBS-101j.
+        content = textwrap.dedent("""\
+            groups:
+            - name: test
+              rules:
+              - alert: LatencyHigh
+                expr: a > 1
+                for: 5m
+                labels:
+                  severity: warning
+                  service: test
+                annotations:
+                  summary: one
+              - alert: LatencyHigh
+                expr: b > 2
+                for: 5m
+                labels:
+                  severity: critical
+                  service: test
+                annotations:
+                  summary: two
+        """)
+        r = validate_alert_rules(content)
+        dup = [i for i in r.issues if i["check"] == "OBS-101j"]
+        assert dup and "LatencyHigh" in dup[0]["message"]
+        assert dup[0]["severity"] == "error"
+
+    def test_unique_alert_names_pass_obs101j(self):
+        r = validate_alert_rules(VALID_ALERT)
+        assert not any(i["check"] == "OBS-101j" for i in r.issues)
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ No external tool dependency — all checks are YAML structural analysis.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -249,7 +250,7 @@ def validate_alert_rules(
     file_path: str = "",
     service_id: str = "",
 ) -> AlertValidationResult:
-    """Validate a Prometheus alert rule YAML against 9 structural checks.
+    """Validate a Prometheus alert rule YAML against 10 structural checks.
 
     Args:
         content: Raw YAML string.
@@ -264,7 +265,7 @@ def validate_alert_rules(
     )
     issues = result.issues
     passed = 0
-    total = 9
+    total = 10
 
     # OBS-101a: YAML parseable
     try:
@@ -298,12 +299,15 @@ def validate_alert_rules(
     all_have_severity = True
     all_have_service = True
     all_have_summary = True
+    name_counts: Counter[str] = Counter()
 
     for rule in rules:
         # OBS-101c: alert name
         alert_name = rule.get("alert", "")
         if not alert_name:
             all_have_name = False
+        else:
+            name_counts[str(alert_name)] += 1
 
         # OBS-101d: expr
         if not rule.get("expr"):
@@ -372,6 +376,21 @@ def validate_alert_rules(
     # OBS-101i: PromQL metric convention check (deferred — needs transport context)
     # Always pass for now; semantic check OBS-203 handles this with transport context
     passed += 1
+
+    # OBS-101j: alert names are unique. The `alert` name is a rule's identity
+    # (severity rides as a label, not a name-multiplier), so a repeated name is a
+    # generator defect — e.g. the lossy `_alert_name` PascalCase transform mapping
+    # two distinct signals to one. Prometheus loads both, and any run-over-run diff
+    # can only pair one. Catch it at the source rather than in the emitted mirror.
+    duplicate_names = sorted(n for n, c in name_counts.items() if c > 1)
+    if not duplicate_names:
+        passed += 1
+    else:
+        issues.append(_issue(
+            "OBS-101j", "error",
+            "Duplicate alert name(s) — names must be unique: "
+            + ", ".join(f"{n} (×{name_counts[n]})" for n in duplicate_names),
+        ))
 
     result.checks_passed = passed
     result.checks_total = total
