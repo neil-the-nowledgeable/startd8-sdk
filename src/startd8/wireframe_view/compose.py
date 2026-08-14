@@ -190,7 +190,7 @@ def _item_view(section_key: str, item, role: str = "architect", entity_cols: Opt
                       "multiline": _multiline_fields(parsed["shown"]), **parsed}
     elif section_key == "entities" and entity_cols and entity_cols.get(item.label):  # LH-1: list mockup
         mockup = {"kind": "list", "entity": item.label, "columns": entity_cols[item.label]}
-    return {
+    view = {
         "label": _display_label(item.label, role),  # user-data names kept; structural labels plain-ified
         "status": item.status,
         "detail": item.detail,
@@ -199,6 +199,32 @@ def _item_view(section_key: str, item, role: str = "architect", entity_cols: Opt
         # R1-F7: an item whose label is infrastructure jargon is hidden from the end_user render.
         "technical": has_jargon(item.label),
     }
+    # FR-2 / R1-F2: optional Node grounding — omit when empty so app-path JSON keyset is unchanged.
+    key = getattr(item, "key", "") or ""
+    if key:
+        view["key"] = key
+    lives = getattr(item, "lives", ()) or ()
+    if lives:
+        view["lives"] = [
+            {"type": ev.type, "ref": ev.ref, **({"note": ev.note} if getattr(ev, "note", "") else {})}
+            for ev in lives
+        ]
+    confidence = getattr(item, "confidence", None)
+    if confidence is not None:
+        view["confidence"] = confidence
+    ships_when = getattr(item, "ships_when", "") or ""
+    if ships_when:
+        view["ships_when"] = ships_when
+    was = getattr(item, "was", ()) or ()
+    if was:
+        view["was"] = list(was)
+    route_state = getattr(item, "route_state", "") or ""
+    if route_state:
+        view["route_state"] = route_state
+    prompts = getattr(item, "approve_prompts", ()) or ()
+    if prompts:
+        view["approve_prompts"] = list(prompts)
+    return view
 
 
 def _app_name(plan: WireframePlan) -> str:
@@ -221,6 +247,15 @@ def _plural(n: int, word: str) -> str:
 
 def _plain_shape(shape: dict) -> str:
     """A jargon-free restatement of the shape counts for the end-user band (FR-AUD gap-3, deterministic)."""
+    from ..wireframe.shape_dialect import is_app_cascade_shape
+
+    if not is_app_cascade_shape(shape):
+        parts = []
+        if "nodes" in shape:
+            parts.append(_plural(int(shape.get("nodes") or 0), "node"))
+        if "sections" in shape:
+            parts.append(_plural(int(shape.get("sections") or 0), "section"))
+        return " · ".join(parts) if parts else "No nodes yet."
     return " · ".join((
         _plural(shape.get("entities", 0), "thing") + " tracked",
         _plural(shape.get("pages", 0), "screen"),
@@ -231,6 +266,18 @@ def _plain_shape(shape: dict) -> str:
 
 # Item statuses that mean "this still needs the author's input" — the computed floor under NEED (R1-F1).
 GAP_STATUSES = {"not_defined", "placeholder", "invalid"}
+
+# NODE-SCHEMA inv. 7 honest-skips — excluded from need_items even if status looks gappy (FR-3).
+HONEST_SKIP_ROUTES = frozenset({"owned_elsewhere", "declared_unimplemented"})
+
+
+def _is_gap_item(item) -> bool:
+    """True when the item counts toward attention/gap (SV-10 floor + honest-skip exclusion)."""
+    route = getattr(item, "route_state", "") or ""
+    if route in HONEST_SKIP_ROUTES:
+        return False
+    return item.status in GAP_STATUSES
+
 
 # End-user section order: lead with what the author experiences (screens → forms → content they must
 # write → the things tracked), then the supporting/technical sections. Presentation only — the section
@@ -247,6 +294,27 @@ def _plain_status(counts: dict) -> str:
         # R1-F6: an empty plan must NOT read "nothing missing or broken" — that is false reassurance
         # to a first-time author (FR-AUD-C4). Say it's empty instead.
         return "Nothing's been set up yet — this project still looks empty."
+    # Node-domain statuses (requirements / capability navigator).
+    if any(
+        k in counts
+        for k in ("grounded", "spec", "unknown", "awaiting", "excluded", "built", "thin", "deprecated")
+    ):
+        issues = []
+        if counts.get("unknown"):
+            issues.append(_plural(counts["unknown"], "requirement") + " without Lives")
+        if counts.get("awaiting"):
+            issues.append(_plural(counts["awaiting"], "requirement") + " awaiting a decision")
+        if counts.get("spec"):
+            issues.append(_plural(counts["spec"], "item") + " still in spec")
+        if counts.get("thin"):
+            issues.append(_plural(counts["thin"], "capability") + " still thin")
+        if counts.get("deprecated"):
+            issues.append(_plural(counts["deprecated"], "capability") + " deprecated")
+        if not issues:
+            g = counts.get("grounded", 0) or counts.get("built", 0)
+            noun = "requirement" if counts.get("grounded") else "capability"
+            return f"{_plural(g, noun)} ready — nothing missing or broken."
+        return "Worth a look: " + "; ".join(issues) + "."
     issues = []
     if counts.get("not_defined"):
         issues.append(_plural(counts["not_defined"], "part") + " not set up yet")
@@ -298,18 +366,28 @@ def compose(
     sections = []
     for s in plan.sections:
         narr = describe(s, plan, role=role, fluency=fluency)  # audience-keyed; None if unnarrated
-        sections.append({
+        item_views = [_item_view(s.key, it, voice, entity_cols) for it in s.items]
+        # Aggregate APPROVE? prompts for the section sign-off export (Phase 2).
+        approve_prompts: list[str] = []
+        for it in s.items:
+            for q in getattr(it, "approve_prompts", ()) or ():
+                if q and q not in approve_prompts:
+                    approve_prompts.append(q)
+        sec_view = {
             "key": s.key,
             "title": (narr.get("title") if narr else None) or s.title,  # FR-AUD title override, else data
             "status": s.status,
             "consequence": s.consequence,
             "narration": narr,
-            "items": [_item_view(s.key, it, voice, entity_cols) for it in s.items],
+            "items": item_views,
             # R1-F1: the computed floor under NEED — items the plan itself flags as not-yet-provided
             # (not_defined / placeholder / invalid). Authored `need` prose layers on top; this ensures
             # a real gap is never silently under-reported by relying on authored text alone.
-            "need_items": [_display_label(it.label, voice) for it in s.items if it.status in GAP_STATUSES],
-        })
+            "need_items": [_display_label(it.label, voice) for it in s.items if _is_gap_item(it)],
+        }
+        if approve_prompts:
+            sec_view["approve_prompts"] = approve_prompts
+        sections.append(sec_view)
 
     if voice == "end_user":  # lead with the author-facing sections (presentation only — FR-AUD-4)
         rank = {k: i for i, k in enumerate(_END_USER_ORDER)}

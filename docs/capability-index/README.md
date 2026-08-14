@@ -1,14 +1,15 @@
 # Capability Index — Requirements Navigator
 
-**What this is:** the SDK's capability manifests (`startd8.sdk.capabilities.yaml` — 66 caps —
-and the `startd8.observability.manifest.yaml` signal leaf) rendered as **Node cards** — the
-*machine-readable* side of the same grammar the requirement docs use in
+**What this is:** the SDK's capability manifests (`startd8.sdk.capabilities.yaml` — **68** caps /
+`v1.27.0` — and the `startd8.observability.manifest.yaml` signal leaf) rendered as **Node cards** —
+the *machine-readable* side of the same grammar the requirement docs use in
 `startd8-ctxseed/docs/design/{kickoff,wireframe}/README.md`.
 
-> **Why this file exists (data point #4).** This is the **CL-13 migration rehearsal** for
-> `dev-os/NODE-SCHEMA.md`: render the live capability YAML as Nodes *by hand* to prove the
-> mapping and surface what the additive migration needs — **before** refactoring the shipped
-> `v1.25.0` manifest. It found one real schema refinement (see [Migration findings](#migration-findings-the-data-point-4-payload)).
+> **Why this file exists (data point #4).** Originally the **CL-13 migration rehearsal** for
+> `dev-os/NODE-SCHEMA.md` (hand-render before touching the manifest). **CL-13 `wont` is SHIPPED**
+> (v1.26.0 rolled `wont` to every capability; v1.27.0 = 68 caps). This README stays the mapping +
+> findings record — counts/status below match the live YAML (refreshed 2026-08-14 after a
+> survivorship catch: the “refreshed” claim had been stamped without updating this file).
 
 ---
 
@@ -22,18 +23,18 @@ The capability YAML is *already* a Node, minus two fields. Grounded against the 
 | `status` | *(derived)* | from `maturity` **×** evidence strength — see finding #1 |
 | `maturity` | `maturity` | `stable` / `beta` (API stability — a **distinct** axis) |
 | `does` | `summary` + `description{developer,agent}` | multi-audience, native |
-| `wont` | — **missing** | the migration adds it (seedable from anti-pattern prose) |
+| `wont` | `wont` | **present** on all 68 (CL-13 SHIPPED; seeded from each entry's own prose) |
 | `lives` | `evidence[]{type,ref,description}` | already **typed** (`code`/`test`/`doc`) |
-| `ships_when` | — **missing** | needed only for `maturity: alpha`/deferred (none here) |
+| `ships_when` | — **absent by design** | only when no code-type evidence / `maturity: alpha` (none here) |
 | `confidence` | `confidence` | native (0.7–0.95 across the file) |
 | `triggers` | `triggers` | search index, native |
 | `children` | evidence → `observability.manifest.yaml` signals | the drill edge already exists |
 
 ---
 
-## Level 1 — The landscape (66 caps, by domain)
+## Level 1 — The landscape (68 caps, by domain)
 
-*Fly over the whole SDK at the domain altitude — drill into a pedestal for its caps. Grounded 2026-07-16. Maturity mix file-wide: **31 stable · 35 beta** · confidence 0.7–0.95 (median 0.85).*
+*Fly over the whole SDK at the domain altitude — drill into a pedestal for its caps. Grounded 2026-08-14 against `v1.27.0`. Maturity mix file-wide: **31 stable · 37 beta** · confidence 0.7–0.95 (median 0.85).*
 
 ```
 domain                        caps   maturity mix
@@ -57,8 +58,8 @@ Same grammar at every altitude: a domain's `status` is the min of its caps; a ca
 
 ## Level 2 — The Observability layer, previewed
 
-The three observability caps as full Node cards. `WON'T` is **derived** from each entry's
-description/anti-pattern prose (the field the YAML doesn't yet carry — flagged for author confirm):
+The three observability caps as full Node cards. `WON'T` is **authored in YAML** (CL-13); cards
+below mirror the live entries (not hand-derived placeholders):
 
 ```
 ┌─ startd8.observability.cost_tracking ──────── ✅ built+wired · maturity: stable ─┐
@@ -85,16 +86,16 @@ description/anti-pattern prose (the field the YAML doesn't yet carry — flagged
 │  APPROVE?  [ is the anti-pattern the right WON'T? ]                                 │
 └────────────────────────────────────────────────────────────────────────────────────┘
 
-┌─ startd8.observability.session_tracking ───────── 🟡 built, thin · maturity: beta ─┐
+┌─ startd8.observability.session_tracking ───────── ✅ built · maturity: beta ────────┐
 │  DOES    SessionTracker singleton: start_session → id, record_request(tokens,       │
 │          time, cost), end_session. 7 OTel metrics (active_sessions up_down_counter, │
 │          requests/tokens/cost counters, response_time histogram, context_usage      │
 │          gauge, truncations counter). Thread-safe.                                   │
-│  WON'T   (derived) Graceful no-op when OTel not installed — won't crash the host.    │
-│          Metrics only — not a tracer/sampler.                                        │
+│  WON'T   Graceful no-op when OTel is not installed — never crashes the host.        │
+│          Metrics only — not a tracer/sampler. Thread-safe (no state corruption).     │
 │  LIVES   code src/startd8/session_tracking.py  (no test-type evidence listed)        │
 │  KEY     startd8.observability.session_tracking      confidence 0.80                 │
-│  APPROVE?  [ does the 🟡 (beta + single code ref, no test) match reality? ]          │
+│  APPROVE?  [ does built+beta with code-only evidence (no test) match reality? ]      │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -116,10 +117,9 @@ Rendering the live YAML by hand surfaced what the CL-13 migration must handle:
    `maturity` kept as a **distinct optional field**. The single-`status` markdown cards were lossy;
    the machine side caught it.
 
-2. **`wont` is seedable, not hand-written from scratch.** `otel_logging` carries its anti-pattern
-   *in the description* ("logging.getLogger() silently misses Loki") — that IS the floor.
-   `session_tracking`'s "graceful no-op when OTel not installed" is a won't-crash floor. The
-   migration can propose `wont` from existing prose, author-confirms, rather than inventing it.
+2. **`wont` is seedable, not hand-written from scratch.** (Confirmed by CL-13 rollout.) `otel_logging`
+   carries its anti-pattern *in the description* — that IS the floor. The migration proposed `wont`
+   from existing prose; author-confirm was unnecessary at scale (0 TODO flags in v1.26.0).
 
 3. **`ships_when` correctly stays absent.** All 3 have code leaves ⇒ no activation gate. Confirms
    the invariant *`ships_when` present ⟺ `lives` empty* holds on built entries (the wireframe's
@@ -130,15 +130,17 @@ Rendering the live YAML by hand surfaced what the CL-13 migration must handle:
    **bidirectional**: markdown gains `confidence`/typed-`lives`; YAML gains `wont`/`maturity`-as-
    status-source. Neither format was the superset — the Node is.
 
-### The additive migration (proposed, non-breaking)
+### The additive migration — **SHIPPED** (CL-13)
+
+Applied in `startd8.sdk.capabilities.yaml` **v1.26.0** (`wont` on all then-66 caps) and carried
+forward in **v1.27.0** (68 caps). Shape that landed:
 
 ```yaml
-# add to each capability entry — additive, no existing field changes:
-    wont: |                         # seeded from description/anti-pattern, author-confirmed
+    wont: |                         # seeded from each entry's own prose (no TODO flags)
       logging.getLogger() misses Loki — the OTel handler is never attached.
     # `status` is not stored — it is DERIVED at render time from maturity × evidence.
     # `ships_when` added ONLY when a capability has no code-type evidence (maturity: alpha).
 ```
 
-**Do not apply yet** — this rehearsal *is* the gate evidence; the actual edit to the shipped
-`v1.25.0` manifest is CL-13's next step, taken deliberately after this lands.
+Residual (not CL-13): keep `status` derived (never stored); optional `ships_when` only for
+alpha/empty-lives. Hand cards above are the consumed face — keep them in sync with YAML counts.

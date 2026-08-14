@@ -92,8 +92,10 @@ def render_html(
     # the app path's payload — and its bytes — are unchanged (byte-identity tests).
     if profile is not None:
         payload["profile"] = profile.to_dict()
+    doc_title = profile.title if profile is not None else "Your app — a first look"
     html = (
         WIREFRAME_VIEW_TEMPLATE
+        .replace("__DOC_TITLE__", doc_title)
         .replace("__EXPECTED_SCHEMA__", str(EXPECTED_SCHEMA_VERSION))
         .replace("__PLAN_DATA__", _embed_json(payload))
     )

@@ -19,7 +19,7 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Your app — a first look</title>
+<title>__DOC_TITLE__</title>
 <style>
   :root{
     --paper:#f4efe4; --card:#fffdf6; --card2:#fbf7ec;
@@ -123,6 +123,10 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .item .row{display:flex;align-items:center;gap:9px}
   .item .lbl{font-weight:600;font-size:14px}
   .item .det{color:var(--ink2);font-size:12px;font-family:var(--mono);margin:4px 0 0 1px}
+  .item .lives{color:var(--ink2);font-size:12px;font-family:var(--mono);margin:4px 0 0 1px}
+  .item .lives .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin-right:6px}
+  .item .was{color:var(--faint);font-size:12px;font-family:var(--mono);margin:2px 0 0 1px}
+  .item .was .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-right:6px}
   .badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;
     border-radius:20px;color:#fff;white-space:nowrap}
   .b-planned{background:var(--planned)}.b-defaults{background:var(--defaults)}
@@ -201,6 +205,10 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .signoff .so-note{display:none;flex-basis:100%;width:100%;margin-top:4px;font:inherit;font-size:13px;color:var(--ink);
     border:1px solid var(--line2);border-radius:8px;padding:8px 10px;background:var(--card2);resize:vertical;min-height:42px}
   .signoff.flagged .so-note{display:block}
+  .signoff .so-prompts{flex-basis:100%;width:100%;margin:0 0 6px;padding:8px 10px;background:var(--card2);
+    border:1px dashed var(--line2);border-radius:8px}
+  .signoff .so-prompts ul{margin:4px 0 0 1.1em;padding:0;font-size:13px;color:var(--ink2)}
+  .signoff .so-prompts li{margin:2px 0}
   .signbar{display:flex;align-items:center;gap:10px;margin:20px 0 0;background:var(--card);border:1px solid var(--line);
     border-radius:12px;padding:11px 15px;font-size:13.5px;color:var(--ink2)}
   .signbar b{color:var(--accent)}
@@ -290,7 +298,14 @@ __PLAN_DATA__
   function signRow(sec,mk){
     var w=document.createElement("div"); var st0=SIGN[sec.key]||{};
     w.className="signoff"+(st0.status==="flag"?" flagged":"");
-    w.innerHTML='<span class="slab">Your call</span>'+
+    var prompts=(sec.approve_prompts||[]);
+    var promptHtml=prompts.length
+      ?('<div class="so-prompts"><span class="slab">Approve?</span><ul>'+
+        prompts.map(function(q){ return '<li>'+esc(q)+'</li>'; }).join("")+
+        '</ul></div>')
+      :'';
+    w.innerHTML=promptHtml+
+      '<span class="slab">Your call</span>'+
       '<button type="button" class="so-ok'+(st0.status==="ok"?" on-ok":"")+'">✓ Looks right</button>'+
       '<button type="button" class="so-flag'+(st0.status==="flag"?" on-flag":"")+'">⚑ Flag this</button>'+
       '<textarea class="so-note" placeholder="What should change here? (optional)"></textarea>';
@@ -323,7 +338,9 @@ __PLAN_DATA__
   }
   function exportSign(){
     var rows=(data.sections||[]).map(function(x){ var st=SIGN[x.key]||{};
-      return {key:x.key, title:x.title, status:st.status||"unreviewed", note:st.note||""}; });
+      var row={key:x.key, title:x.title, status:st.status||"unreviewed", note:st.note||""};
+      if(x.approve_prompts&&x.approve_prompts.length) row.approve_prompts=x.approve_prompts.slice();
+      return row; });
     // SO-1: stamp the plan identity so --signoff can bind this verdict to the exact plan it reviewed.
     var out={app:APP, audience:(data.audience||{}),
       inputs_fingerprint:(payload.inputs_fingerprint||null), schema_version:(data.schema_version||null),
@@ -413,7 +430,19 @@ __PLAN_DATA__
     var w=document.createElement("div"); w.className="item";
     var mock=mockFor(k,item);
     var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
-    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+badge(item.status)+'</div>'+det;
+    var livesHtml="";
+    if(item.lives&&item.lives.length&&!EU){
+      livesHtml='<div class="lives"><span class="lk">Lives</span>'+
+        item.lives.map(function(e){
+          var t=(e.type||"ref"), r=(e.ref||"");
+          return esc(t)+": "+esc(r);
+        }).join(" · ")+'</div>';
+    }
+    var wasHtml="";
+    if(item.was&&item.was.length&&!EU){
+      wasHtml='<div class="was"><span class="lk">Was</span>'+esc(item.was.join(" · "))+'</div>';
+    }
+    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+badge(item.status)+'</div>'+det+livesHtml+wasHtml;
     if(mock||k==="pages"){
       var d=document.createElement("details");
       var sm=document.createElement("summary"); sm.className="drill"; sm.textContent="show a sketch";
