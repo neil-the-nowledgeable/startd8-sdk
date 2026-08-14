@@ -70,7 +70,11 @@ def _pilot_score(m: Dict[str, Any]) -> float:
         score += 0.20
     if m["lives_count"] and m["lives_resolve"] == m["lives_count"]:
         score += 0.20
-    if m["fr_health"] not in ("", "n/a", None):
+    # Health is HONEST unless it is a dishonest done-claim. det_req.fr_health only emits a verdict
+    # for done-claims (done-ish Verify annotation); a spec-time FR is legitimately "n/a". So score
+    # the ABSENCE of dishonesty (!= "unknown"), not the presence of a verdict — else the rubric would
+    # pay you to falsely stamp a spec "done" (the mis-calibration the dogfood loop surfaced).
+    if m["fr_health"] != "unknown":
         score += 0.15
     if m["approve_prompts"]:
         score += 0.15
@@ -127,8 +131,10 @@ def _top_gap(m: Dict[str, Any]) -> str:
         return (f"CONFIDENCE is {m['confidence']} — cite BOTH code AND test Lives so "
                 f"default_confidence yields 0.9 (currently {t}). If the extractor drops one type "
                 "per FR, that is the FR-6 fidelity gap.")
-    if m["fr_health"] in ("", "n/a", None):
-        return "HEALTH — fr_health is n/a; the vendor_thin fr_health helper is not producing a verdict."
+    if m["fr_health"] == "unknown":
+        return ("HEALTH — reads as a done-claim but cites no resolvable evidence "
+                "(fr_health=unknown); add a resolvable Lives ref or drop the done-ish Verify "
+                "annotation. (A spec-time FR is honestly n/a — not a gap.)")
     if not m["approve_prompts"]:
         return "SIGN-OFF — no APPROVE? prompt on this FR; add one so it lights up the per-item sign-off."
     return "glance-approvable ✓ — no mechanical gap; promote as an exemplar."

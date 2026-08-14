@@ -67,7 +67,7 @@ Composite in `[0,1]` over the glance-approvability signals the architect test ca
 | status grounded/built | 0.30 | not spec/unknown |
 | confidence ≥ 0.9 | 0.20 | code+test Lives (FR-4 rubric) |
 | all Lives resolve | 0.20 | every `git:sha:path` exists on disk |
-| `fr_health` is a real verdict | 0.15 | not `n/a` |
+| `fr_health` is not a dishonest done-claim | 0.15 | `!= "unknown"` — spec-time `n/a` is honest and earns it; only a done-claim citing no evidence fails |
 | has APPROVE? prompt | 0.15 | per-item sign-off lights up |
 
 ## Git cadence (per the standing rule)

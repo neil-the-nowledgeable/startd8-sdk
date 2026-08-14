@@ -18,6 +18,7 @@ from typing import Optional
 from ..wireframe.delivery_roles import effective_voice, label_for, lens_for
 from ..wireframe.describe import describe, describe_summary
 from ..wireframe.plan import WireframePlan
+from ..wireframe.profile import RenderProfile
 from ..wireframe.render import SCHEMA_VERSION, WIREFRAME_META, footer_lines
 
 # FR-AUD-C1 banned register (R1-F7), word-boundary matched so domain names ("identity", "AiCall") don't
@@ -347,13 +348,22 @@ def _plain_content(cov) -> str:
 
 
 def compose(
-    plan: WireframePlan, *, role: str = "architect", fluency: str = "intermediate"
+    plan: WireframePlan,
+    *,
+    role: str = "architect",
+    fluency: str = "intermediate",
+    profile: Optional[RenderProfile] = None,
 ) -> dict:
     """Pure, deterministic, JSON-safe view-model for the wireframe-visual preview (FR-WV-6).
 
     ``role``/``fluency`` select the audience variant of the narration (FR-AUD); they change ONLY the
     wording — the shape, items, statuses, and mockups are identical across audiences (FR-AUD-4). The
     default ``("architect", "intermediate")`` resolves to base narration, byte-identical.
+
+    ``profile`` (a non-app consumer's RenderProfile) makes the APEX narration profile-driven: the
+    summary meta/why/do come from the profile instead of the app-authored ``WIREFRAME_META`` /
+    ``describe_summary`` — the single seam that keeps app-build framing off a Node consumer. ``None``
+    (the app path) uses the built-in narration, byte-identical.
 
     EC-4: a delivery-role *kit* (e.g. ``pm``, ``backend-dev``) renders as its declared base voice — the
     ``voice`` (plain/technical) drives the display/reorder decisions below, so a plain-base kit gets the
@@ -410,7 +420,9 @@ def compose(
             # structured figures behind it (for badges) and the authored meaning (FR-WV-5 / FR-DL-12).
             # Architect tool-meta (WIREFRAME_META = process framing) is NEVER shown to the end_user (R2-F1);
             # the end_user gets a benefit-first, actionable intro instead (headline/lead/steps, FR-AUD-C4/R2-F2).
-            "meta": summary_narr.get("meta") or (list(WIREFRAME_META) if role == "architect" else []),
+            # Apex narration seam: a profiled (non-app) consumer supplies its own; else the app default.
+            "meta": (list(profile.summary_meta) if profile is not None
+                     else summary_narr.get("meta") or (list(WIREFRAME_META) if role == "architect" else [])),
             "headline": summary_narr.get("headline", ""),
             "lead": summary_narr.get("lead", ""),
             "steps": summary_narr.get("steps", []),
@@ -426,8 +438,8 @@ def compose(
             "plain_status": _plain_status(plan.status_counts),
             "plain_content": _plain_content(plan.content_coverage),
             "plain_ready": _plain_ready(plan.readiness),
-            "why": summary_narr.get("why", ""),
-            "do": summary_narr.get("do", ""),
+            "why": profile.why if profile is not None else summary_narr.get("why", ""),
+            "do": profile.do if profile is not None else summary_narr.get("do", ""),
         },
         "sections": sections,
     }
