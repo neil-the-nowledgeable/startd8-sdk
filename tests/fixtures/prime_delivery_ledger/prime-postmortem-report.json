@@ -1,0 +1,46 @@
+{
+  "report_id": "fixture-prime-delivery-ledger-g0",
+  "timestamp": "2026-06-06T22:05:00+00:00",
+  "total_features": 3,
+  "successful_features": 3,
+  "failed_features": 0,
+  "features": [
+    {
+      "feature_id": "PI-001a",
+      "success": true,
+      "verdict": "PASS",
+      "target_files": [
+        "app/templates/wizard/done.html"
+      ],
+      "generated_files": [
+        "/FIXTURE_PROJECT_ROOT/app/templates/wizard/done.html"
+      ],
+      "disk_quality_score": 1.0
+    },
+    {
+      "feature_id": "PI-001c",
+      "success": true,
+      "verdict": "PASS",
+      "target_files": [
+        "app/wizard.py"
+      ],
+      "generated_files": [
+        "/FIXTURE_PROJECT_ROOT/app/wizard.py"
+      ],
+      "disk_quality_score": 1.0
+    },
+    {
+      "feature_id": "PI-001b",
+      "success": true,
+      "verdict": "PASS",
+      "target_files": [
+        "app/templates/wizard/step.html"
+      ],
+      "generated_files": [
+        "/FIXTURE_PROJECT_ROOT/app/templates/wizard/step.html"
+      ],
+      "disk_quality_score": 1.0
+    }
+  ],
+  "_fixture_note": "Scrubbed from strtd8-v2-cascade latest/plan-ingestion (run-010 lineage). Secrets removed; paths placeholdered."
+}
