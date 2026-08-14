@@ -25,7 +25,7 @@ from .derived import (
 )
 from .drift import check_drift, embedded_mode, is_owned_generated_file, owned_file_in_sync
 from .settings_renderer import render_settings
-from .auth_renderer import is_reference_auth_seam, render_auth_seam
+from .auth_renderer import is_reference_auth_seam, is_verified_auth_seam, render_auth_seam
 from .forms_manifest import parse_forms
 from .htmx_generator import (
     render_confirm_template,
@@ -91,6 +91,7 @@ __all__ = [
     "render_settings",
     "render_auth_seam",
     "is_reference_auth_seam",
+    "is_verified_auth_seam",
     "embedded_mode",
     "PydanticSQLModelProvider",
     "verify_pydantic_fidelity",
