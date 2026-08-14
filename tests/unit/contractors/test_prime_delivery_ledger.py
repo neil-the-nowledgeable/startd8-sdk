@@ -152,7 +152,7 @@ def test_disk_pass_alone_does_not_create_evidence_without_blob(tmp_path: Path):
 
 def test_refuses_to_overwrite_dossier_yaml(tmp_path: Path):
     root, sha = _git_project(tmp_path)
-    with pytest.raises(SystemExit, match="dossier.yaml"):
+    with pytest.raises(ValueError, match="dossier.yaml"):
         emit_delivery_ledger(
             postmortem=FIXTURE / "prime-postmortem-report.json",
             traceability=FIXTURE / "ingestion-traceability.json",
@@ -244,3 +244,102 @@ Only humans enter: nothing.
     assert statuses.get("FR-11") == "fr-missing-lives"
     assert statuses.get("FR-6") == "fr-missing-lives"
     assert statuses.get("FR-8") == "fr-missing-lives"
+
+
+def test_reconciler_agree_when_lives_match_emitted_locators(tmp_path: Path):
+    """Iter-2 altitude 2: fueled Book A → at least one agree (FR-6)."""
+    import sys
+
+    root, sha = _git_project(tmp_path)
+    ledger = tmp_path / "delivery-ledger.yaml"
+    result = emit_delivery_ledger(
+        postmortem=FIXTURE / "prime-postmortem-report.json",
+        traceability=FIXTURE / "ingestion-traceability.json",
+        project_root=root,
+        merge_sha=sha,
+        output_path=ledger,
+    )
+    by_path = {
+        e["locator"].split(":", 2)[-1]: e for e in result.ledger["delivery"]["evidence"]
+    }
+    done = by_path["app/templates/wizard/done.html"]
+    step = by_path["app/templates/wizard/step.html"]
+    wizard = by_path["app/wizard.py"]
+
+    fueled = tmp_path / "REQ-fueled.md"
+    fueled.write_text(
+        f"""# Requirements: Fixture Fueled
+
+**Project:** fixture   **Criticality:** low
+**Version:** 0.1.0   **Date:** 2026-08-14
+**Format:** det-req/0.1
+**Backend:** spike-component
+
+## Overview
+Book A with Lives matching emitted evidence.
+
+## Objectives
+- O-1: Agree.
+
+## Risks
+| Type | Description | Mitigation | Priority |
+|---|---|---|---|
+| quality | none | n/a | low |
+
+## Profile
+Declared profile: **internal**
+
+## Functional requirements
+- **FR-11 — Wizard done.** Touches: X. Lives: code {done["locator"]}. Verify: y. Serves: O-1
+- **FR-6 — Wizard step.** Touches: X. Lives: code {step["locator"]}. Verify: y. Serves: O-1
+- **FR-8 — Wizard py.** Touches: X. Lives: code {wizard["locator"]}. Verify: y. Serves: O-1
+
+## Non-goals
+- Sync conductor.
+
+## Owned fields
+Only humans enter: Lives.
+
+## Contract projection
+- **Backend:** spike-component
+""",
+        encoding="utf-8",
+    )
+    sys.path.insert(0, str(Path("/Users/neilyashinsky/Documents/dev/dev-os/scripts")))
+    from reconcile_lives_evidence import reconcile
+
+    report = reconcile(fueled, ledger, root)
+    statuses = {
+        m["requirement_id"]: m["status"] for m in report["requirement_mappings"]
+    }
+    assert statuses.get("FR-11") == "agree"
+    assert statuses.get("FR-6") == "agree"
+    assert statuses.get("FR-8") == "agree"
+
+
+def test_postmortem_hook_emits_when_merge_sha_supplied(tmp_path: Path):
+    """Iter-1 optional hook: _write_outputs emits ledger only with merge_sha."""
+    from startd8.contractors.prime_postmortem import PrimePostMortemEvaluator
+
+    root, sha = _git_project(tmp_path)
+    out = tmp_path / "pipeline-out"
+    out.mkdir()
+    # Minimal postmortem already on disk (hook reads these paths)
+    import json
+    import shutil
+
+    shutil.copy(FIXTURE / "prime-postmortem-report.json", out / "prime-postmortem-report.json")
+    shutil.copy(FIXTURE / "ingestion-traceability.json", out / "ingestion-traceability.json")
+
+    ev = PrimePostMortemEvaluator()
+    ev._project_root = str(root)
+    ev._result_dict = {}
+    ev._maybe_emit_delivery_ledger(str(out))
+    assert not (root / ".startd8" / "delivery-ledger.yaml").exists()
+
+    ev._result_dict = {"delivery_merge_sha": sha}
+    ev._maybe_emit_delivery_ledger(str(out))
+    ledger = root / ".startd8" / "delivery-ledger.yaml"
+    assert ledger.is_file()
+    doc = yaml.safe_load(ledger.read_text(encoding="utf-8"))
+    assert len(doc["delivery"]["evidence"]) == 3

@@ -61,11 +61,11 @@ def _load_json(path_or_data: Path | Mapping[str, Any], *, label: str) -> dict[st
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise SystemExit(f"{label}: cannot read {path}: {exc}") from exc
+        raise ValueError(f"{label}: cannot read {path}: {exc}") from exc
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"{label}: invalid JSON in {path}: {exc}") from exc
+        raise ValueError(f"{label}: invalid JSON in {path}: {exc}") from exc
     if not isinstance(raw, dict):
-        raise SystemExit(f"{label}: {path} must be a JSON object")
+        raise ValueError(f"{label}: {path} must be a JSON object")
     return raw
 
 
@@ -164,7 +164,7 @@ def emit_delivery_ledger(
     tr = _load_json(traceability, label="traceability")
     root = Path(project_root).resolve()
     if not root.is_dir():
-        raise SystemExit(f"project_root is not a directory: {root}")
+        raise ValueError(f"project_root is not a directory: {root}")
 
     skips: list[EmitSkip] = []
     sha = (merge_sha or "").strip().lower()
@@ -172,7 +172,7 @@ def emit_delivery_ledger(
         effective_sha: str | None = None
         skips.append(EmitSkip(reason="merge_sha missing or unknown — no evidence rows emitted"))
     elif not _GIT_SHA.fullmatch(sha):
-        raise SystemExit(f"merge_sha must be 40-hex or unknown, got {merge_sha!r}")
+        raise ValueError(f"merge_sha must be 40-hex or unknown, got {merge_sha!r}")
     else:
         effective_sha = sha
 
@@ -191,7 +191,7 @@ def emit_delivery_ledger(
     # feature_id / task_id → files produced (postmortem features use feature_id = PI-*)
     features = pm.get("features") or []
     if not isinstance(features, list):
-        raise SystemExit("postmortem.features must be a list")
+        raise ValueError("postmortem.features must be a list")
 
     for feat in features:
         if not isinstance(feat, Mapping):
@@ -286,7 +286,7 @@ def emit_delivery_ledger(
     if output_path is not None:
         out = Path(output_path)
         if out.name == "dossier.yaml":
-            raise SystemExit(
+            raise ValueError(
                 "refusing to write dossier.yaml — emit a delivery-ledger beside .startd8/ (FR-5)"
             )
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -306,6 +306,14 @@ def default_output_path(project_root: Path) -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Emit a dossier-shaped delivery ledger from prime postmortem + traceability."
     )

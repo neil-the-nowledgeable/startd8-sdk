@@ -193,6 +193,55 @@ No back-edges. Iter 3 must not invent emitter behavior.
 
 ---
 
+## HTH harvest (2026-08-14) — post Iter 1–3 Check→Act
+
+**Surface:** `feat/prime-delivery-ledger` (emitter + postmortem hook + dogfood).  
+**Composition:** code-review (value-path) → python-refactor → retro → CEP → bus.  
+**review: offered → continued** after each step.
+
+### Step-1 Fix report
+
+| ID | Severity | Finding | Disposition |
+|----|----------|---------|-------------|
+| HTH-1 | High | `emit_delivery_ledger` raised `SystemExit` — bypasses hook `except Exception` and can abort postmortem | **Applied** — library raises `ValueError`; CLI maps to exit 2; hook logs refuse |
+| HTH-2 | Medium | Dual surface: hook only logs skips, no sidecar emit-report JSON | **Declined (soft-label)** → CEP-B1 |
+| HTH-3 | Low | OQ-5 multi-task same-file bind unused by G0 fixture (each file one producer) | **Declined** → CEP-B2 if a real run shows shared files |
+
+**Value-path:** `emit_delivery_ledger` reachable via CLI `-m` + `_maybe_emit_delivery_ledger`; HOWTO documents both; orchestrator + negative (unknown merge, refuse dossier.yaml, hook skip) exercised; guard not skip-forever.
+
+### Step-2 python-code-refactor
+
+Applied only HTH-1 API boundary. Further logging/style pass **skipped (mechanical)** — emitter already fail-loud with structured skips.
+
+### Step-3 Retrospective — extracted standard
+
+**Standard:** Post-merge Prime artifacts project into dossier `delivery:` vocabulary; Check stays the existing twin-sync reconciler; merge identity is operator/gate context — never invented; draft PASS never becomes evidence.
+
+**Phase 2.5 dormants:**
+- D1 — no checked-in Lives-fueled REQ beside the fixture (agree only in unit test) → CEP-B3
+- D2 — thin path-forwarding wrapper not shipped → CEP-B4
+- D3 — emitted rows do not yet carry Option-3 `elements:` → CEP-B5
+- D4 — `_write_outputs` hook still default-off without merge_sha (by design, not dormant)
+
+### Step-4 CEP backlog (triaged; no auto-PR)
+
+| ID | Size | Item |
+|----|------|------|
+| CEP-B1 | S | Optional emit-report sidecar (skips + counts) next to ledger |
+| CEP-B2 | S | Multi-task same-file evidence bind plate when a run shares paths |
+| CEP-B3 | S | Check in a Lives-fueled dogfood REQ for offline `agree` demos |
+| CEP-B4 | XS | Thin `--req/--dossier/--repo` forwarder (no new reconcile logic) |
+| CEP-B5 | M | Optional `elements:` on emitted evidence (cite Option 3 / startd8 helper) |
+
+### Step-5 Bus notify
+
+`no bus peer` — projection is startd8-internal; Yokoten to ContextCore is the HOWTO + harvest row, not an agent-comms-queue post. Option 5 remains rejected.
+
+---
+
 *v0.3 — Aligned with REQ-PRIME-DELIVERY-LEDGER.md v0.3. Coding blocked on G0.*
 
-*G0 CLEAR 2026-08-14. Iter 1–3 implemented: emitter + reconciler dogfood test + HOWTO.*
+*G0 CLEAR 2026-08-14. Iter 1–3 implemented: emitter + optional `_write_outputs` hook +
+reconciler dogfood (`fr-missing-lives` **and** Lives-fueled `agree`) + HOWTO.*
+
+*HTH 2026-08-14 appended (does not bump plan version).*

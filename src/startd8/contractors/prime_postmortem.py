@@ -1880,12 +1880,14 @@ class PrimePostMortemEvaluator:
 
         # Write outputs (stash result_dict for _write_outputs to merge query_security)
         self._result_dict = result_dict
+        self._project_root = project_root
         try:
             self._write_outputs(report, output_dir)
         except Exception:
             logger.warning("Failed to write postmortem outputs", exc_info=True)
         finally:
             self._result_dict = None  # don't hold reference after write
+            self._project_root = None
 
         # Extract exemplars from perfect-scoring features (REQ-PEP-000)
         try:
@@ -3197,6 +3199,88 @@ class PrimePostMortemEvaluator:
                     )
                 except (ImportError, OSError) as exc:
                     logger.debug("Pipeline query_security merge skipped: %s", exc)
+
+        # Optional delivery-ledger projection (REQ-PRIME-DELIVERY-LEDGER).
+        # Only when an explicit merge SHA is supplied — never invent one.
+        try:
+            self._maybe_emit_delivery_ledger(output_dir)
+        except Exception:
+            logger.warning(
+                "Delivery ledger emit failed (non-fatal)", exc_info=True
+            )
+
+    def _maybe_emit_delivery_ledger(self, output_dir: str) -> None:
+        """Emit ``.startd8/delivery-ledger.yaml`` when merge SHA + inputs exist.
+
+        Merge SHA sources (first wins): ``result_dict['delivery_merge_sha']``,
+        ``result_dict['merge_sha']``, env ``PRIME_DELIVERY_MERGE_SHA``.
+        Absent / ``unknown`` → skip loud (info), write nothing pretending to be evidence.
+        """
+        import os
+
+        merge_sha: str | None = None
+        if getattr(self, "_result_dict", None):
+            merge_sha = (
+                self._result_dict.get("delivery_merge_sha")
+                or self._result_dict.get("merge_sha")
+            )
+        if not merge_sha:
+            merge_sha = os.environ.get("PRIME_DELIVERY_MERGE_SHA")
+        if not merge_sha or str(merge_sha).strip().lower() in {"", "unknown", "none"}:
+            logger.info(
+                "Delivery ledger emit skipped (no merge_sha; set "
+                "result_dict['delivery_merge_sha'] or PRIME_DELIVERY_MERGE_SHA)"
+            )
+            return
+
+        project_root = getattr(self, "_project_root", None)
+        if not project_root:
+            logger.info(
+                "Delivery ledger emit skipped (no project_root on evaluate())"
+            )
+            return
+
+        out = Path(output_dir)
+        postmortem = out / "prime-postmortem-report.json"
+        traceability = out / "ingestion-traceability.json"
+        if not postmortem.is_file() or not traceability.is_file():
+            logger.info(
+                "Delivery ledger emit skipped (need %s and %s)",
+                postmortem.name,
+                traceability.name,
+            )
+            return
+
+        from startd8.contractors.prime_delivery_ledger import (
+            default_output_path,
+            emit_delivery_ledger,
+        )
+
+        dest = default_output_path(Path(project_root))
+        try:
+            result = emit_delivery_ledger(
+                postmortem=postmortem,
+                traceability=traceability,
+                project_root=Path(project_root),
+                merge_sha=str(merge_sha),
+                output_path=dest,
+            )
+        except ValueError as exc:
+            logger.warning("Delivery ledger emit refused: %s", exc)
+            return
+        for skip in result.skips[:20]:
+            logger.info(
+                "Delivery ledger skip: %s%s%s",
+                skip.reason,
+                f" path={skip.path}" if skip.path else "",
+                f" task={skip.task_id}" if skip.task_id else "",
+            )
+        logger.info(
+            "Delivery ledger written: %s (%d work_items, %d evidence)",
+            dest,
+            result.work_item_count,
+            result.evidence_count,
+        )
 
     def _extract_exemplars(
         self,
