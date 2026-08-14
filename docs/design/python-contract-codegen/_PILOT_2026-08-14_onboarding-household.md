@@ -40,7 +40,7 @@
 | P1-1 | Empty required `anchorDate` still created (model/`now()` default) | Required check on create (omit ≠ valid) |
 | P1-2 | FK fields are raw text IDs (`assigneeId`, `memberId`, …) | Structural field hint + form_prose help; picker is later enhancement |
 | P1-3 | Delete returns HTMX row fragment (200), not redirect | Documented as HTMX-list contract (FORM_SUBMIT); leave |
-| P1-4 | Nav: duplicate Home; raw view labels (`chore_fairness`) | Tracked — nav polish / display labels (not blocking create) |
+| P1-4 | Nav: duplicate Home; raw view labels (`chore_fairness`) | **Closed** — brand ≠ Home; view labels humanized; `nav_label` on onboarding |
 
 ### P2 — default form UI (pilot ask)
 

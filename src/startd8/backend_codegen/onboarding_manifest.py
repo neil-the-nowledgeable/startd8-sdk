@@ -20,6 +20,8 @@ _OPTIONAL = (
     "tips",
     "empty_states",
     "storage_key",
+    "nav_label",
+    "redirect_root_if_empty",
 )
 _KEYS = frozenset(_REQUIRED + _OPTIONAL)
 
@@ -34,10 +36,17 @@ class OnboardingSpec:
     tips: Tuple[str, ...] = ()
     empty_states: Tuple[Tuple[str, str], ...] = ()  # (entity, copy)
     storage_key: str = "onboarding_tips_dismissed"
+    nav_label: str = ""  # nav chrome; defaults to title when empty
+    redirect_root_if_empty: bool = False
 
     @property
     def empty_state_map(self) -> dict:
         return dict(self.empty_states)
+
+    @property
+    def nav_text(self) -> str:
+        return self.nav_label or self.title
+
 
 
 def parse_onboarding(
@@ -74,6 +83,9 @@ def parse_onboarding(
                     f"views.yaml: onboarding empty_states references unknown entity {ent!r}"
                 )
     empty_states = tuple(sorted((str(k), str(v)) for k, v in empty_raw.items()))
+    redirect_raw = raw.get("redirect_root_if_empty", False)
+    if not isinstance(redirect_raw, bool):
+        raise ValueError("views.yaml: onboarding `redirect_root_if_empty` must be a boolean")
     return OnboardingSpec(
         route=str(raw["route"]),
         title=str(raw["title"]),
@@ -83,4 +95,6 @@ def parse_onboarding(
         tips=tips,
         empty_states=empty_states,
         storage_key=str(raw.get("storage_key") or "onboarding_tips_dismissed"),
+        nav_label=str(raw.get("nav_label") or ""),
+        redirect_root_if_empty=redirect_raw,
     )

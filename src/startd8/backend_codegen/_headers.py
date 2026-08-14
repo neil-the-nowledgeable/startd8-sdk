@@ -170,22 +170,33 @@ def header_pages(
     schema_sha: str,
     pages_sha: str,
     kind: str,
+    *,
+    forms_sha: str | None = None,
 ) -> str:
-    """Content-pages provenance header — derives from two inputs (schema + pages.yaml), two hashes.
+    """Content-pages provenance header — schema + pages.yaml (+ optional views.yaml).
 
     Drift on a content-page artifact is **stale if either** the schema or ``pages.yaml`` changes (see
     :func:`startd8.backend_codegen.drift.pages_stale_reason`). The page *prose* (``app/pages/*.md``)
     is deliberately **not** an input here — it lives only in the untracked rendered body fragment, so
     editing prose never flags drift (mirrors the ai-passes prompt rule).
+
+    When *forms_sha* is set (onboarding ``redirect_root_if_empty`` wires views.yaml into ``/``),
+    a third ``forms-sha256`` line is added so views edits flip the pages router stale.
     """
-    return (
+    sot = "the Prisma schema and the pages manifest"
+    if forms_sha is not None:
+        sot = "the Prisma schema, the pages manifest, and views.yaml (onboarding root redirect)"
+    lines = [
         f"# GENERATED from {source_file} (+ pages.yaml) — do not edit by hand; "
-        f"regenerate via `startd8 generate backend`.\n"
-        f"# startd8-artifact: {kind}\n"
-        f"# Source of truth: the Prisma schema and the pages manifest.\n"
-        f"# schema-sha256: {schema_sha}\n"
-        f"# pages-sha256: {pages_sha}"
-    )
+        f"regenerate via `startd8 generate backend`.",
+        f"# startd8-artifact: {kind}",
+        f"# Source of truth: {sot}.",
+        f"# schema-sha256: {schema_sha}",
+        f"# pages-sha256: {pages_sha}",
+    ]
+    if forms_sha is not None:
+        lines.append(f"# forms-sha256: {forms_sha}")
+    return "\n".join(lines)
 
 
 def header_pages_tmpl(

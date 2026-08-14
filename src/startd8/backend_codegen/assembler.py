@@ -197,7 +197,15 @@ def render_backend(
     if pages_text:
         from .pages_generator import render_pages
 
-        out.extend(render_pages(schema_text, pages_text, source_file, app_dir=pages_app_dir))
+        out.extend(
+            render_pages(
+                schema_text,
+                pages_text,
+                source_file,
+                app_dir=pages_app_dir,
+                views_text=views_text,
+            )
+        )
         if authoring:
             from .pages_authoring import render_authoring
 

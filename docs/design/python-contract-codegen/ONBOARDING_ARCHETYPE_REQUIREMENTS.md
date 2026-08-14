@@ -52,8 +52,11 @@ Declared profile: **internal**
   Verify: `parse_onboarding` returns () when section absent; raises on unknown keys.
 - **FR-2 — Grammar.** Required: `route`, `title`. Optional: `lead`, `continue_href` (default `/`),
   `help_href`, `tips` (string list), `empty_states` (entity → copy), `storage_key` (default
-  `onboarding_tips_dismissed`). Touches: onboarding_manifest.
-  Verify: fixture YAML parses to OnboardingSpec with those fields.
+  `onboarding_tips_dismissed`), `nav_label` (nav chrome; defaults to `title`),
+  `redirect_root_if_empty` (bool; when true and a pages.yaml page owns `/`, GET `/` redirects to
+  `route` while every `empty_states` entity still has zero rows). Touches: onboarding_manifest,
+  pages_generator.
+  Verify: fixture YAML parses to OnboardingSpec with those fields; pages router embeds redirect when flagged.
 - **FR-3 — Welcome router + template.** Emit `app/onboarding/welcome.py` +
   `app/templates/onboarding/welcome.html` + aggregator. GET `route` renders title/lead/tips/
   checklist/continue/help. Tips dismiss via `localStorage` + content (not modal). Touches: onboarding_generator.

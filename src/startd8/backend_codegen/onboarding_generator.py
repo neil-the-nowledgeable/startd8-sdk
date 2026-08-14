@@ -64,6 +64,23 @@ def render_onboarding_welcome_router(schema_text: str, views_text: str) -> str:
         )
     checklist_body = "".join(checklist_lines) if checklist_lines else "    # no empty_states declared\n"
 
+    all_empty_fn = ""
+    if spec.empty_states:
+        checks = " and ".join(
+            f"(len(session.exec(select({ent})).all()) == 0)" for ent, _ in spec.empty_states
+        )
+        all_empty_fn = (
+            "\ndef checklist_all_empty(session: Session) -> bool:\n"
+            '    """True when every onboarding empty_states entity still has zero rows (first-run)."""\n'
+            f"    return {checks}\n"
+        )
+    else:
+        all_empty_fn = (
+            "\ndef checklist_all_empty(session: Session) -> bool:\n"
+            '    """No empty_states declared — never treat root as first-run empty."""\n'
+            "    return False\n"
+        )
+
     # Starlette/FastAPI: TemplateResponse is request-first. The legacy
     # TemplateResponse(name, {"request": request, ...}) form 500s on modern Starlette.
     body = (
@@ -75,7 +92,8 @@ def render_onboarding_welcome_router(schema_text: str, views_text: str) -> str:
         "from sqlmodel import Session, select\n\n"
         f"{import_block}\n\n"
         'templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))\n'
-        'onboarding_welcome_router = APIRouter(tags=["onboarding"])\n\n'
+        'onboarding_welcome_router = APIRouter(tags=["onboarding"])\n'
+        f"{all_empty_fn}\n"
         f"@onboarding_welcome_router.get({spec.route!r}, response_class=HTMLResponse)\n"
         "def onboarding_welcome(request: Request, session: Session = Depends(get_session)):\n"
         "    checklist = []\n"
@@ -113,11 +131,84 @@ def render_onboarding_welcome_template(schema_text: str, views_text: str) -> str
         entity="welcome",
     )
     # Tips: <aside> content + localStorage hide — never role=dialog / modal.
+    # Visual stack mirrors FR-FH-11 clipboard-ledger tokens (var fallbacks for unpolished apps).
     return (
         header + "\n"
         '{% extends "base.html" %}\n'
         "{% block title %}{{ title }}{% endblock %}\n"
         "{% block content %}\n"
+        "<style>\n"
+        "  .onboarding-welcome {\n"
+        "    max-width: 36rem;\n"
+        "    margin: 0.5rem 0 2rem;\n"
+        "    padding: 1.35rem 1.45rem 1.6rem;\n"
+        "    background: var(--hh-card, #fffcf7);\n"
+        "    border: 1.5px solid var(--hh-line, #5a6f76);\n"
+        "    border-left: 5px solid var(--hh-teal, #0f7a6c);\n"
+        "    border-radius: 2px 12px 12px 2px;\n"
+        "    box-shadow: 0 12px 28px rgba(11, 61, 74, 0.07);\n"
+        "  }\n"
+        "  .onboarding-welcome h1 {\n"
+        "    margin: 0 0 0.35rem;\n"
+        "    font-size: 1.85rem;\n"
+        "    color: var(--hh-ink, #0b3d4a);\n"
+        "  }\n"
+        "  .onboarding-welcome .lead {\n"
+        "    margin: 0 0 1.15rem;\n"
+        "    color: var(--hh-ink-soft, #3d5c66);\n"
+        "    font-size: 1.02rem;\n"
+        "    line-height: 1.45;\n"
+        "  }\n"
+        "  .onboarding-tips, .onboarding-checklist {\n"
+        "    margin: 0 0 1.15rem;\n"
+        "    padding: 0.85rem 1rem;\n"
+        "    background: rgba(15, 122, 108, 0.06);\n"
+        "    border-radius: 8px;\n"
+        "  }\n"
+        "  .onboarding-tips h2, .onboarding-checklist h2 {\n"
+        "    margin: 0 0 0.5rem;\n"
+        "    font-size: 0.78rem;\n"
+        "    letter-spacing: 0.06em;\n"
+        "    text-transform: uppercase;\n"
+        "    color: var(--hh-ink, #0b3d4a);\n"
+        "  }\n"
+        "  .onboarding-tips ul, .onboarding-checklist ul {\n"
+        "    margin: 0; padding-left: 1.15rem;\n"
+        "  }\n"
+        "  .onboarding-tips li, .onboarding-checklist li {\n"
+        "    margin: 0.35rem 0;\n"
+        "    color: var(--hh-ink-soft, #3d5c66);\n"
+        "    line-height: 1.4;\n"
+        "  }\n"
+        "  .onboarding-checklist a { color: var(--hh-teal-deep, #0a5c52); font-weight: 600; }\n"
+        "  #onboarding-tips-dismiss {\n"
+        "    margin-top: 0.65rem;\n"
+        "    background: transparent;\n"
+        "    border: 1px solid var(--hh-line, #5a6f76);\n"
+        "    border-radius: 6px;\n"
+        "    color: var(--hh-ink-soft, #3d5c66);\n"
+        "    font: inherit;\n"
+        "    font-size: 0.85rem;\n"
+        "    padding: 0.35rem 0.65rem;\n"
+        "    cursor: pointer;\n"
+        "  }\n"
+        "  .onboarding-actions {\n"
+        "    margin: 1.25rem 0 0;\n"
+        "    font-weight: 600;\n"
+        "  }\n"
+        "  .onboarding-actions a.onboarding-continue {\n"
+        "    display: inline-block;\n"
+        "    background: var(--hh-teal, #0f7a6c);\n"
+        "    color: #fff !important;\n"
+        "    text-decoration: none;\n"
+        "    padding: 0.55rem 1rem;\n"
+        "    border-radius: 8px;\n"
+        "  }\n"
+        "  .onboarding-actions a.onboarding-help {\n"
+        "    color: var(--hh-teal-deep, #0a5c52);\n"
+        "    font-weight: 600;\n"
+        "  }\n"
+        "</style>\n"
         '<main class="onboarding-welcome">\n'
         "  <h1>{{ title }}</h1>\n"
         '  {% if lead %}<p class="lead">{{ lead }}</p>{% endif %}\n'
@@ -161,8 +252,8 @@ def render_onboarding_welcome_template(schema_text: str, views_text: str) -> str
         "  </section>\n"
         "  {% endif %}\n"
         '  <p class="onboarding-actions">\n'
-        '    <a href="{{ continue_href }}">Continue</a>\n'
-        "    {% if help_href %} · <a href=\"{{ help_href }}\">Help</a>{% endif %}\n"
+        '    <a class="onboarding-continue" href="{{ continue_href }}">Continue</a>\n'
+        "    {% if help_href %} · <a class=\"onboarding-help\" href=\"{{ help_href }}\">Help</a>{% endif %}\n"
         "  </p>\n"
         "</main>\n"
         "{% endblock %}\n"
