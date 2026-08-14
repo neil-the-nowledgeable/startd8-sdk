@@ -59,17 +59,18 @@ def _keyed_plan() -> WireframePlan:
     )
 
 
-def test_structure_only_switch_is_profiled_and_byte_safe():
-    # FR-11: the Structure-only machinery ships (switch + body-class CSS + per-item bare-key span),
-    # the switch is RUNTIME-gated to a profile (so the app path renders none of it), and the
-    # no-profile render is byte-identical. The gate is runtime, so we assert the guard expression
-    # exists in the template rather than substring-diffing profiled vs app (the switch code lives in
-    # the shared template JS either way).
+def test_debug_view_mode_panel_is_profiled_and_byte_safe():
+    # FR-11/FR-12: the debugging layer ships — a top-right view-mode panel (Structure only + Combined)
+    # with body-class CSS and per-item bare-key/metadata spans. It is RUNTIME-gated to a profile
+    # (so the app path renders an empty, hidden panel) and the no-profile render is byte-identical.
     prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
     profiled = render_html(_keyed_plan(), profile=prof)
-    assert 'id="structOnly"' in profiled                 # the switch
-    assert "body.structure-only" in profiled             # the body-class CSS rules
-    assert 'class="lbl-key"' in profiled                 # per-item bare-key span
-    assert "payload.profile ?" in profiled               # the switch is gated on a profile
+    assert 'id="debug"' in profiled                      # the debug panel container
+    assert 'id="structOnly"' in profiled                 # Structure only switch
+    assert 'id="combined"' in profiled                   # Combined switch
+    assert "body.structure-only" in profiled and "body.combined" in profiled  # both modes' CSS
+    assert 'class="lbl-key"' in profiled                 # structure-only bare key
+    assert 'class="node-meta"' in profiled or "node-meta" in profiled          # metadata line
+    assert "if(payload.profile)" in profiled             # the panel is gated on a profile
     # Byte-safe: the app path is byte-identical with/without an explicit None (FR-8 preserved).
     assert render_html(_plan()) == render_html(_plan(), profile=None)

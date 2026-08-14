@@ -95,9 +95,20 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .lbl-key{display:none}
   body.structure-only .lbl{display:none}
   body.structure-only .lbl-key{display:inline;font-weight:600;font-size:14px}
-  /* the available structural metadata per node — hidden normally, revealed in structure-only */
+  /* the available structural metadata per node — hidden normally, revealed in structure-only + combined */
   .node-meta{display:none;font-family:var(--mono);font-size:11.5px;color:var(--ink2);margin:3px 0 0 1px}
-  body.structure-only .node-meta{display:block}
+  body.structure-only .node-meta, body.combined .node-meta{display:block}
+
+  /* ---------- debugging layer: fixed top-right view-mode panel ---------- */
+  #debug:empty{display:none}
+  #debug{position:fixed;top:14px;right:14px;z-index:50;background:var(--card);border:1px solid var(--line2);
+    border-radius:10px;padding:9px 12px;box-shadow:0 6px 22px -14px rgba(40,32,16,.5);max-width:230px}
+  #debug .dbg-title{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+    font-weight:700;margin-bottom:6px}
+  #debug .dbg-opt{display:flex;align-items:flex-start;gap:6px;font-size:12.5px;color:var(--ink);
+    cursor:pointer;padding:2px 0}
+  #debug .dbg-opt input{margin-top:2px;flex:none}
+  @media (max-width:920px){#debug{position:static;max-width:none;margin:14px 0 0;box-shadow:none}}
 
   /* ---------- sections (progressive disclosure) ---------- */
   details.sec{background:var(--card);border:1px solid var(--line);border-radius:13px;margin:11px 0;
@@ -251,6 +262,7 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
 </style>
 </head>
 <body>
+<div id="debug" role="group" aria-label="View mode"></div>
 <div class="wrap">
   <header class="mast" id="mast"></header>
   <div id="warn" role="status"></div>
@@ -596,10 +608,6 @@ __PLAN_DATA__
     '<label class="tg" id="tg-depth">Depth<select id="tg-flu">'+
       '<option value="beginner">Fuller</option><option value="intermediate">Standard</option>'+
       '<option value="advanced">Terser</option></select></label>'+
-    // Structure-only switch: a profiled (navigator) consumer can strip all prose and see just the
-    // node structure. Gated to profiled views so the app-scaffold path is byte-identical (FR-8).
-    (payload.profile ? '<label class="tg" id="tg-struct"><input type="checkbox" id="structOnly">'+
-      '<span style="margin-left:5px">Structure only</span></label>' : '')+
     '<span style="flex:1"></span>'+
     '<button id="ex">Open all</button><button id="co">Close all</button>';
   var selRole=document.getElementById("tg-role"), selFlu=document.getElementById("tg-flu");
@@ -613,8 +621,24 @@ __PLAN_DATA__
   selRole.onchange=onToggle; selFlu.onchange=onToggle; syncDepth();
   document.getElementById("ex").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=true;}); };
   document.getElementById("co").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=false;}); };
-  var struct=document.getElementById("structOnly");   // structure-only view toggle (profiled only)
-  if(struct) struct.onchange=function(){ document.body.classList.toggle("structure-only", struct.checked); };
+
+  // ---------- debugging layer: top-right view-mode panel (profiled navigator only) ----------
+  // Three modes over the node view: content (default) · structure only (keys + metadata, no prose) ·
+  // combined (content AND the structural metadata together). Gated to a profile so the app path is
+  // byte-identical (FR-8). Structure-only and Combined are mutually exclusive.
+  if(payload.profile){
+    document.getElementById("debug").innerHTML=
+      '<div class="dbg-title">View mode</div>'+
+      '<label class="dbg-opt"><input type="checkbox" id="structOnly"><span>Structure only</span></label>'+
+      '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>';
+    var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
+    function syncModes(){
+      document.body.classList.toggle("structure-only", struct.checked);
+      document.body.classList.toggle("combined", comb.checked);
+    }
+    struct.onchange=function(){ if(struct.checked) comb.checked=false; syncModes(); };
+    comb.onchange=function(){ if(comb.checked) struct.checked=false; syncModes(); };
+  }
 
   renderAll();
 })();
