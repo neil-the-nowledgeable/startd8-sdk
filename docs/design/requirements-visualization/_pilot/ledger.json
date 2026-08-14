@@ -81,6 +81,48 @@
       "phase": "verify",
       "top_gap": "SIGN-OFF \u2014 no APPROVE? prompt on this FR; add one so it lights up the per-item sign-off.",
       "when": "2026-08-14T19:28:47.190441+00:00"
+    },
+    {
+      "cruft_lint": "cruft_lint: FR-4.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": true,
+        "confidence": 0.9,
+        "fr": "FR-4",
+        "fr_health": "n/a",
+        "lives_count": 3,
+        "lives_resolve": 2,
+        "lives_types": {
+          "code": 2,
+          "test": 1
+        },
+        "pilot_score": 0.8,
+        "ships_when": false,
+        "status_key": "grounded"
+      },
+      "phase": "verify",
+      "top_gap": "EVIDENCE \u2014 1 of 3 Lives refs do not resolve on disk; fix the path or sha.",
+      "when": "2026-08-14T19:29:57.371526+00:00"
+    },
+    {
+      "cruft_lint": "cruft_lint: FR-4.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": true,
+        "confidence": 0.9,
+        "fr": "FR-4",
+        "fr_health": "n/a",
+        "lives_count": 2,
+        "lives_resolve": 2,
+        "lives_types": {
+          "code": 1,
+          "test": 1
+        },
+        "pilot_score": 1.0,
+        "ships_when": false,
+        "status_key": "grounded"
+      },
+      "phase": "verify",
+      "top_gap": "glance-approvable \u2713 \u2014 no mechanical gap; promote as an exemplar.",
+      "when": "2026-08-14T19:31:53.604731+00:00"
     }
   ],
   "FR-6": [
@@ -250,6 +292,27 @@
       "phase": "verify",
       "top_gap": "SIGN-OFF \u2014 no APPROVE? prompt on this FR; add one so it lights up the per-item sign-off.",
       "when": "2026-08-14T19:28:49.912252+00:00"
+    },
+    {
+      "cruft_lint": "cruft_lint: FR-8.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": true,
+        "confidence": 0.9,
+        "fr": "FR-8",
+        "fr_health": "n/a",
+        "lives_count": 3,
+        "lives_resolve": 3,
+        "lives_types": {
+          "code": 1,
+          "test": 2
+        },
+        "pilot_score": 1.0,
+        "ships_when": false,
+        "status_key": "grounded"
+      },
+      "phase": "verify",
+      "top_gap": "glance-approvable \u2713 \u2014 no mechanical gap; promote as an exemplar.",
+      "when": "2026-08-14T19:30:00.496130+00:00"
     }
   ]
 }

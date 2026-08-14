@@ -76,13 +76,16 @@ def extract_lives(rest: str) -> Tuple[str, List[Dict[str, str]]]:
 
 
 # Writer-parity Approve prompts (kickoff navigator APPROVE? → signoff).
+# Terminator = a *sentence-ending* period (followed by whitespace or end), so a decimal inside the
+# prompt ("does 0.9 require…") does NOT prematurely truncate it — the earlier `\.\s*` did, because
+# `\s*` allows zero spaces and matched the "." in "0.9" (dogfood FR-4 surfaced this).
 _APPROVE = re.compile(
-    r"(?:\*\*)?\bApprove\?:(?:\*\*)?\s*(?P<q>.+?)(?:\.\s*|$)",
+    r"(?:\*\*)?\bApprove\?:(?:\*\*)?\s*(?P<q>.+?)(?:\.(?=\s|$)|$)",
     re.IGNORECASE,
 )
 # NODE-SCHEMA: key is identity; Was: carries prior presentation aliases (rebrand notes).
 _WAS = re.compile(
-    r"(?:\*\*)?\bWas:(?:\*\*)?\s*(?P<body>.+?)(?:\.\s*|$)",
+    r"(?:\*\*)?\bWas:(?:\*\*)?\s*(?P<body>.+?)(?:\.(?=\s|$)|$)",
     re.IGNORECASE,
 )
 
