@@ -225,6 +225,9 @@ def _item_view(section_key: str, item, role: str = "architect", entity_cols: Opt
     prompts = getattr(item, "approve_prompts", ()) or ()
     if prompts:
         view["approve_prompts"] = list(prompts)
+    meta = getattr(item, "meta", "") or ""
+    if meta:
+        view["meta"] = meta
     return view
 
 

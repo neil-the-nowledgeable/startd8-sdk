@@ -78,6 +78,25 @@ def _rollup(statuses: List[str]) -> str:
     return worst
 
 
+def _node_meta(node: Node) -> str:
+    """Compact structural metadata for the structure-only view — type · default · provenance · ← origin.
+
+    The metadata a reader wants when the prose is stripped: what the field holds structurally and
+    where it comes from. Origin is the source file of the first (git-anchored) Lives ref.
+    """
+    a = node.attributes
+    bits: List[str] = []
+    if a.get("field_type"):
+        bits.append(a["field_type"])
+    if a.get("field_default"):
+        bits.append(f"default {a['field_default']}")
+    if a.get("provenance"):
+        bits.append(a["provenance"])
+    if node.lives:
+        bits.append("← " + node.lives[0].ref.split(":")[-1])
+    return " · ".join(bits)
+
+
 def _node_detail(node: Node) -> str:
     lines: List[str] = []
     a = node.attributes
@@ -166,6 +185,7 @@ def nodes_to_wireframe_plan(
                     was=was,
                     route_state=node.route_state or "",
                     approve_prompts=prompts,
+                    meta=_node_meta(node),
                 )
             )
         sections.append(

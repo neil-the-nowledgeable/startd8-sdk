@@ -46,18 +46,22 @@ DEFAULT_SOURCE = "requirements"
 PILOTS_BY_SOURCE = {
     "requirements": ("FR-6", "FR-4", "FR-8"),
     "capability-index": (),  # discover via --survey, then pass keys explicitly
+    "node-schema": (),       # the Node model's fields (Kagami mirror); discover via --survey
 }
-LEDGER_SUFFIX = {"requirements": "", "capability-index": "-capability"}
+LEDGER_SUFFIX = {"requirements": "", "capability-index": "-capability", "node-schema": "-node-schema"}
 
 
 def _nodes_for(source: str, path):
-    """Load Nodes from the named consumer source (requirements | capability-index)."""
+    """Load Nodes from the named consumer source (requirements | capability-index | node-schema)."""
     if source == "capability-index":
         from startd8.navigator.sources_capability import (
             default_capability_index_path,
             nodes_from_capability_index,
         )
         return nodes_from_capability_index(path or default_capability_index_path())
+    if source == "node-schema":
+        from startd8.navigator.sources_node_schema import nodes_from_node_schema
+        return nodes_from_node_schema()
     from startd8.navigator.sources_requirements import nodes_from_requirements
     return nodes_from_requirements(path or REQ01)
 

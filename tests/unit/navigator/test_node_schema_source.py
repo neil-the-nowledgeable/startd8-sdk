@@ -34,3 +34,44 @@ def test_each_field_carries_type_default_and_deterministic_name():
 def test_provenance_classes_are_known():
     for n in nodes_from_node_schema():
         assert n.attributes["provenance"] in {"authored", "derived", "computed", "meta"}
+
+
+def test_chrome_provenance_traces_every_element_no_orphans():
+    """Origin audit: every apex/chrome element of the node-schema view traces to a present source."""
+    from startd8.navigator.project import nodes_to_wireframe_plan
+    from startd8.navigator.provenance import chrome_provenance
+    from startd8.navigator.sources_node_schema import NODE_SCHEMA_PROFILE
+
+    nodes = nodes_from_node_schema()
+    rows = chrome_provenance(nodes, nodes_to_wireframe_plan(nodes), NODE_SCHEMA_PROFILE)
+    by = {r["element"]: r for r in rows}
+    assert by["summary_meta"]["origin"].startswith("profile.summary_meta")
+    assert "Kagami mirror" in by["summary_meta"]["value"]
+    assert by["status_band"]["origin"].startswith("computed")
+    assert "authored" in by["status_band"]["value"]              # 8 authored / 3 computed / …
+    assert by["shape_band"]["value"].startswith("Nodes: 15")
+    assert all(r["present"] for r in rows), "no chrome element should be an orphan"
+
+
+def test_chrome_provenance_flags_an_orphan():
+    """A profile field with no value is an orphan (Kagami: sourceless chrome on the page)."""
+    import dataclasses
+
+    from startd8.navigator.project import nodes_to_wireframe_plan
+    from startd8.navigator.provenance import chrome_provenance
+    from startd8.navigator.sources_node_schema import NODE_SCHEMA_PROFILE
+
+    empty_why = dataclasses.replace(NODE_SCHEMA_PROFILE, why="")
+    nodes = nodes_from_node_schema()
+    rows = chrome_provenance(nodes, nodes_to_wireframe_plan(nodes), empty_why)
+    assert any(r["element"] == "why" and not r["present"] for r in rows)
+
+
+def test_node_schema_items_carry_structure_only_metadata():
+    """Each field-node's WireframeItem carries the compact meta shown in structure-only."""
+    from startd8.navigator.project import nodes_to_wireframe_plan
+
+    plan = nodes_to_wireframe_plan(nodes_from_node_schema())
+    metas = [it.meta for sec in plan.sections for it in sec.items]
+    assert metas and all(m for m in metas)                       # every field-node has meta
+    assert any("models.py" in m and "default" in m for m in metas)

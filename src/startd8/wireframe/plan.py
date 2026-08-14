@@ -142,6 +142,8 @@ class WireframeItem:
     route_state: str = ""
     # Kickoff-navigator APPROVE? questions → signoff export (Phase 2).
     approve_prompts: Tuple[str, ...] = ()
+    # Compact structural metadata (type · default · provenance · ← origin) — revealed in structure-only.
+    meta: str = ""
 
 
 @dataclass(frozen=True)

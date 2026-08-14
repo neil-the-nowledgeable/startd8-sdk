@@ -62,6 +62,27 @@ a script and/or runbook.
 - **State:** `docs/design/requirements-visualization/_pilot/ledger-content*.{json,md}`.
 - **Status:** ACTIVE. Requirements: FR-1 authored (content 0.9), FR-2…FR-10 need `Name:` (0.6).
 
+### 3. Chrome Origin Audit  *(audit sub-loop)*
+
+- **What it does:** traces every **apex/chrome** element of a navigator view (eyebrow · headline ·
+  summary meta · why · do · status band · shape band · legend · sections · node keys) to its
+  **origin** — a RenderProfile field, a computed aggregate, or the node data — and flags any
+  **orphan** (chrome with no source value). Answers "where does this text come from?" and enforces
+  Kagami: the mirror must not show sourceless hand-drawn chrome.
+- **Driver:** `scripts/navigator_origin_audit.py`  ·  **Core:** `src/startd8/navigator/provenance.py`
+- **Moving number:** `chrome_score` = fraction of chrome elements that trace to a present source
+  (1.0 = no orphans). Exit 1 on any orphan.
+- **Companion view feature (FR-11 structure-only):** with **Structure only** on, each remaining
+  element also shows its **available metadata** inline (`type · default · provenance · ← origin`),
+  so the skeleton carries its provenance — the audit made visible on the page.
+- **Run it:**
+  ```bash
+  python3 scripts/navigator_origin_audit.py --source node-schema   # trace + score the chrome
+  python3 scripts/navigator_origin_audit.py --source requirements --record
+  ```
+- **State:** `docs/design/requirements-visualization/_pilot/ledger-origin*.json`.
+- **Status:** ACTIVE. All three sources score 1.0 (no orphan chrome).
+
 ---
 
 ## Related established loops in the repo (cross-reference)

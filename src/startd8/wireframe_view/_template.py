@@ -95,6 +95,9 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .lbl-key{display:none}
   body.structure-only .lbl{display:none}
   body.structure-only .lbl-key{display:inline;font-weight:600;font-size:14px}
+  /* the available structural metadata per node — hidden normally, revealed in structure-only */
+  .node-meta{display:none;font-family:var(--mono);font-size:11.5px;color:var(--ink2);margin:3px 0 0 1px}
+  body.structure-only .node-meta{display:block}
 
   /* ---------- sections (progressive disclosure) ---------- */
   details.sec{background:var(--card);border:1px solid var(--line);border-radius:13px;margin:11px 0;
@@ -470,9 +473,10 @@ __PLAN_DATA__
     if(item.was&&item.was.length&&!EU){
       wasHtml='<div class="was"><span class="lk">Was</span>'+esc(item.was.join(" · "))+'</div>';
     }
+    var metaHtml=(item.meta&&!EU)?'<div class="node-meta">'+esc(item.meta)+'</div>':'';  // structure-only reveal
     w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
       (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // structure-only: bare node key
-      badge(item.status)+'</div>'+det+livesHtml+wasHtml;
+      badge(item.status)+'</div>'+det+livesHtml+wasHtml+metaHtml;
     if(mock||k==="pages"){
       var d=document.createElement("details");
       var sm=document.createElement("summary"); sm.className="drill"; sm.textContent="show a sketch";
