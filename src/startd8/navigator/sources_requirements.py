@@ -6,6 +6,7 @@ on ``sys.path``.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,6 +15,40 @@ from startd8.wireframe.profile import RenderProfile, StatusStyle
 from .det_req import fr_health, parse_fr_lines_prefer_kit
 from .git_lives import prefer_git_ref
 from .models import Node, NodeEvidence, NodeStatus, default_confidence, derive_status
+
+# A Touches path is test evidence when it lives under a tests/ tree or is a test_/_test file.
+_TEST_PATH = re.compile(r"(?:^|/)tests?(?:/|_)|(?:^|/)test_|_test\.")
+
+
+def _lives_from_touches(
+    touches: List[str],
+    existing_refs: set,
+    repo_root: Path,
+) -> List[NodeEvidence]:
+    """FR-6 fidelity: mine an FR's authored ``Touches:`` for typed evidence.
+
+    An FR often cites only one ``Lives:`` type (code *or* test) even though its ``Touches:`` names
+    both its implementation and its test — so ``default_confidence`` never sees code+test and every
+    node flatlines at 0.6. Each Touches path that **resolves to a real file on disk** becomes
+    git-anchored evidence (test-path → ``test``, else ``code``), deduped against explicit Lives.
+    Existence-gated so planned/not-yet-created files (and non-path kinds like ``navigator-build``)
+    never count — the enrichment is source-bound (Touches is authored), not invented.
+    """
+    out: List[NodeEvidence] = []
+    seen = set(existing_refs)
+    for raw in touches or []:
+        p = raw.strip().strip("`").lstrip("./")
+        if not p or "/" not in p:
+            continue
+        if not (repo_root / p).is_file():
+            continue
+        ref = prefer_git_ref(p, repo=repo_root)
+        if ref in seen:
+            continue
+        seen.add(ref)
+        etype = "test" if _TEST_PATH.search(p) else "code"
+        out.append(NodeEvidence(type=etype, ref=ref, note="from Touches"))
+    return out
 
 REQUIREMENTS_PROFILE = RenderProfile(
     statuses=(
@@ -51,7 +86,7 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
     repo_root = Path(repo) if repo else _guess_repo(path)
     nodes: List[Node] = []
     for fr in frs:
-        lives = tuple(
+        explicit = tuple(
             NodeEvidence(
                 type=str(e.get("type", "")),
                 ref=prefer_git_ref(str(e.get("ref", "")), repo=repo_root),
@@ -59,6 +94,12 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
             )
             for e in (fr.get("lives") or [])
         )
+        # FR-6 fidelity: complete typed evidence from the FR's own authored Touches (existence-
+        # gated, deduped) so a code+test FR grounds to both without hand-citing every Lives.
+        from_touches = _lives_from_touches(
+            fr.get("touches") or [], {e.ref for e in explicit}, repo_root
+        )
+        lives = explicit + tuple(from_touches)
         # Recompute health after prefer_git upgrades soft→strong (EVIDENCE-1).
         health = fr_health(
             {
