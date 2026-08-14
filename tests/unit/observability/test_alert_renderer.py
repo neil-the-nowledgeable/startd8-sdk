@@ -52,6 +52,21 @@ def test_value_type_preserved_in_expr():
     assert exprs["CountMetric"] == "count_metric > 0"     # int has no .0
 
 
+def test_colliding_signal_names_fail_honest():
+    # `_alert_name` is lossy: household.chore.overdue and household_chore_overdue
+    # both mint HouseholdChoreOverdue. The renderer must refuse to emit a corrupt
+    # mirror and surface the collision at the source, not silently duplicate.
+    spec = ObservabilitySpec(signals=[
+        Signal("household.chore.overdue", Threshold(op=">", value=0)),
+        Signal("household_chore_overdue", Threshold(op=">", value=1)),
+    ])
+    res = render_domain_alert_rules(spec, project_id="household")
+    assert res.status == "error"
+    assert "HouseholdChoreOverdue" in res.error_message
+    assert "household.chore.overdue" in res.error_message
+    assert not (res.content or "")  # corrupt mirror not emitted
+
+
 def test_raw_expr_escape_hatch_passthrough():
     spec = ObservabilitySpec(signals=[Signal("custom", expr="rate(x[5m]) > 0.1", origin="declared")])
     rule = _rules(render_domain_alert_rules(spec))[0]
