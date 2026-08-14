@@ -115,6 +115,17 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   #debug .dbg-prov b{font-weight:700}
   @media (max-width:920px){#debug{position:static;max-width:none;margin:14px 0 0;box-shadow:none}}
 
+  /* multi-stage cruft purge — hide the app-scaffold chrome the audit flagged (non-destructive;
+     opt-in via the debug panel). Sign-off subsystem, dead mockup drills, EU need-signals, todos,
+     and the delivery-role kit optgroups in the VIEW dropdown. */
+  body.hide-scaffold .signoff,
+  body.hide-scaffold #signbar,
+  body.hide-scaffold .item .row details,
+  body.hide-scaffold .todos-box,
+  body.hide-scaffold .needs,
+  body.hide-scaffold .allset,
+  body.hide-scaffold #tg-role optgroup[label^="Delivery role"]{display:none !important}
+
   /* ---------- sections (progressive disclosure) ---------- */
   details.sec{background:var(--card);border:1px solid var(--line);border-radius:13px;margin:11px 0;
     overflow:hidden;transition:border-color .15s, box-shadow .15s}
@@ -644,14 +655,21 @@ __PLAN_DATA__
       '<div class="dbg-title">View mode</div>'+
       '<label class="dbg-opt"><input type="checkbox" id="structOnly"><span>Structure only</span></label>'+
       '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>'+
+      // Multi-stage cruft purge: an orthogonal filter (not a view mode) that HIDES the app-scaffold
+      // chrome the fresh-eyes audit flagged (sign-off subsystem · mockups · delivery-role kits) —
+      // non-destructive so a downstream consumer opts in and elements can resurface later in a
+      // different light. Default off (nothing hidden until selected).
+      '<label class="dbg-opt"><input type="checkbox" id="hideScaffold"><span>Hide app-scaffold chrome</span></label>'+
       prov;
     var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
+    var hide=document.getElementById("hideScaffold");
     function syncModes(){
       document.body.classList.toggle("structure-only", struct.checked);
       document.body.classList.toggle("combined", comb.checked);
     }
     struct.onchange=function(){ if(struct.checked) comb.checked=false; syncModes(); };
     comb.onchange=function(){ if(comb.checked) struct.checked=false; syncModes(); };
+    hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
   }
 
   renderAll();
