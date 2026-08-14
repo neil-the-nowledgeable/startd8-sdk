@@ -21,20 +21,39 @@ def test_lives_inside_verify_prose_is_not_evidence():
         "Touches: x. "
         "Verify: fixture REQ with `Lives: code git:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:src/x.py` builds."
     )
-    _b, _t, _v, _s, lives, _ann, _ap, _was = split_fr_fields(rest)
+    _b, _t, _v, _s, lives, _ann, _ap, _was, _n = split_fr_fields(rest)
     assert lives == []
 
 
 def test_approve_prompts_parsed():
     rest = "Touches: x. Approve?: does DOES match · is WON'T right?. Verify: ok."
-    _b, _t, _v, _s, _lives, _ann, prompts, _was = split_fr_fields(rest)
+    _b, _t, _v, _s, _lives, _ann, prompts, _was, _n = split_fr_fields(rest)
     assert prompts == ("does DOES match", "is WON'T right?")
 
 
 def test_was_aliases_parsed_and_projected():
     rest = "Touches: x. Was: old-name · prior-label. Verify: ok."
-    _b, _t, _v, _s, _lives, _ann, _ap, was = split_fr_fields(rest)
+    _b, _t, _v, _s, _lives, _ann, _ap, was, _n = split_fr_fields(rest)
     assert was == ("old-name", "prior-label")
+
+
+def test_deterministic_name_parsed_and_not_swallowed_by_lives():
+    # `Name:` is extracted before the Lives split, so it does not leak into a Lives ref.
+    rest = ("Name: SDK exposes a Node surface. Touches: `src/x.py`. "
+            "Lives: code src/x.py. Verify: ok.")
+    _b, _t, _v, _s, lives, _ann, _ap, _was, name = split_fr_fields(rest)
+    assert name == "SDK exposes a Node surface"
+    assert [e["ref"] for e in lives] == ["src/x.py"]  # Name did not contaminate the Lives ref
+
+
+def test_fr1_carries_deterministic_name_forms():
+    # FR-1 in REQ-01 carries an authored semantic name + derived handle + canonical ref — a
+    # requirement identified by MEANING, not the integer+content-type key alone.
+    fr1 = next(n for n in nodes_from_requirements(REQ01) if n.key == "FR-1")
+    a = fr1.attributes
+    assert a.get("name", "").startswith("SDK exposes a NODE-SCHEMA-compatible Node")
+    assert a.get("handle", "").startswith("requirement/sdk-exposes-")
+    assert a.get("canonical") == "cc:intent:sdk-node-home:requirement:fr-1"
 
 
 def test_req01_dogfood_ten_frs_no_false_lives_on_fr6():

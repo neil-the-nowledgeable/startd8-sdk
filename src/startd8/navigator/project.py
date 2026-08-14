@@ -81,6 +81,11 @@ def _rollup(statuses: List[str]) -> str:
 def _node_detail(node: Node) -> str:
     lines: List[str] = []
     a = node.attributes
+    # Deterministic semantic name first (identify by meaning, not the integer key alone).
+    if a.get("name"):
+        lines.append("NAME → " + a["name"])
+    if a.get("handle"):
+        lines.append("HANDLE: " + a["handle"])
     desc = a.get("description") or node.does
     if desc and desc != node.does:
         lines.append(desc.strip())

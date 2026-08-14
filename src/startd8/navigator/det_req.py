@@ -88,6 +88,23 @@ _WAS = re.compile(
     r"(?:\*\*)?\bWas:(?:\*\*)?\s*(?P<body>.+?)(?:\.(?=\s|$)|$)",
     re.IGNORECASE,
 )
+# Deterministic semantic name (DETERMINISTIC_INTENT_DELIVERY_LANGUAGE §"How the naming works"):
+# an actor·action·object·outcome phrase, so a requirement is identified by MEANING, not by the
+# integer+content-type key alone (`FR-1`). The local key stays as a short reference.
+_NAME = re.compile(
+    r"(?:\*\*)?\bName:(?:\*\*)?\s*(?P<n>.+?)(?:\.(?=\s|$)|$)",
+    re.IGNORECASE,
+)
+
+
+def parse_name(rest: str) -> Tuple[str, str]:
+    """Pull the authored ``Name: <actor·action·object·outcome>`` semantic name out of an FR rest."""
+    m = _NAME.search(rest)
+    if not m:
+        return rest, ""
+    name = m.group("n").strip().rstrip(".")
+    cleaned = (rest[: m.start()] + rest[m.end() :]).strip()
+    return cleaned, name
 
 
 def parse_approve_prompts(rest: str) -> Tuple[str, Tuple[str, ...]]:
@@ -114,12 +131,15 @@ def parse_was_aliases(rest: str) -> Tuple[str, Tuple[str, ...]]:
     return cleaned, aliases
 
 
-def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dict[str, str]], Optional[str], Tuple[str, ...], Tuple[str, ...]]:
+def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dict[str, str]], Optional[str], Tuple[str, ...], Tuple[str, ...], str]:
     sm = _SERVES.search(rest)
     serves = [s.strip() for s in sm.group(1).split(",") if s.strip()] if sm else []
     rest = _SERVES.sub("", rest).strip()
     rest, approve_prompts = parse_approve_prompts(rest)
     rest, was_aliases = parse_was_aliases(rest)
+    # Extract the semantic name BEFORE the Lives/Verify split (Name is not a Lives stop-word, so an
+    # un-extracted `Name:` would be swallowed into a Lives ref — same class as approve/was).
+    rest, name = parse_name(rest)
     # Lives only before Verify: — Verify prose often cites `Lives: …` as an example
     # (dogfood REQ-01 FR-6); extracting after Verify invents false evidence.
     vm_pre = _VERIFY_LABEL.search(rest)
@@ -140,7 +160,7 @@ def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dic
     else:
         behavior = rest[:verify_start].strip()
         touches = []
-    return behavior, touches, verify, serves, lives, verify_ann, approve_prompts, was_aliases
+    return behavior, touches, verify, serves, lives, verify_ann, approve_prompts, was_aliases, name
 
 
 def fr_health(fr: Dict[str, Any]) -> str:
@@ -180,10 +200,12 @@ def parse_fr_lines(text: str) -> List[Dict[str, Any]]:
             verify_ann,
             approve_prompts,
             was_aliases,
+            name,
         ) = split_fr_fields(rest)
         fr: Dict[str, Any] = {
             "id": fid,
             "title": title,
+            "name": name,
             "behavior": behavior or title,
             "touches": touches,
             "verify": verify,
@@ -213,6 +235,7 @@ def _frs_from_kit_doc(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         fr: Dict[str, Any] = {
             "id": str(raw.get("id", "")),
             "title": str(raw.get("title") or raw.get("behavior") or raw.get("id") or ""),
+            "name": str(raw.get("name") or ""),
             "behavior": str(raw.get("behavior") or raw.get("title") or ""),
             "touches": list(raw.get("touches") or []),
             "verify": str(raw.get("verify") or ""),

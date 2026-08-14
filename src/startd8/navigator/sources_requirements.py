@@ -6,6 +6,7 @@ on ``sys.path``.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import List, Optional
@@ -18,6 +19,39 @@ from .models import Node, NodeEvidence, NodeStatus, default_confidence, derive_s
 
 # A Touches path is test evidence when it lives under a tests/ tree or is a test_/_test file.
 _TEST_PATH = re.compile(r"(?:^|/)tests?(?:/|_)|(?:^|/)test_|_test\.")
+
+
+def _slug(text: str, *, cap: int = 48) -> str:
+    """Deterministic, compact kebab slug of a semantic name (for the readable handle).
+
+    Capped so the handle stays recognizable, not a full-sentence string; the 8-hex digest that the
+    handle appends preserves uniqueness even when two names share a truncated slug.
+    """
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    if len(s) > cap:
+        s = s[:cap].rsplit("-", 1)[0].strip("-")  # trim to a word boundary
+    return s
+
+
+def _initiative_slug(path: Path) -> str:
+    """Initiative id for the canonical ref, from the REQ filename (REQ-01-sdk-node-home → sdk-node-home)."""
+    return re.sub(r"^REQ-\d+-", "", Path(path).stem, flags=re.IGNORECASE) or "requirements"
+
+
+def _name_forms(name: str, fr_id: str, path: Path) -> dict:
+    """The deterministic name projections for a requirement (semantic name → handle + canonical ref).
+
+    Per DETERMINISTIC_INTENT_DELIVERY_LANGUAGE §"How the naming works": local key (`FR-1`) is a short
+    reference; the readable handle adds recognition + compact deterministic correlation (an 8-hex
+    digest of the name); the canonical ref is a stable machine identity independent of wording.
+    """
+    slug = _slug(name)
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    return {
+        "name": name,
+        "handle": f"requirement/{slug}-{digest}" if slug else "",
+        "canonical": f"cc:intent:{_initiative_slug(path)}:requirement:{fr_id.lower()}",
+    }
 
 
 def _lives_from_touches(
@@ -149,6 +183,12 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
             attrs["approve_prompts"] = " · ".join(prompts)
         if was:
             attrs["was"] = " · ".join(was)
+        # Deterministic semantic name (anti-pattern guard: a requirement must be identifiable by
+        # MEANING, not the integer+content-type key alone). Authored `Name:` → name + derived handle
+        # + canonical ref. Absent → only the local key (surfaced as a content gap by the loop).
+        name = str(fr.get("name") or "").strip()
+        if name:
+            attrs.update(_name_forms(name, str(fr["id"]), path))
         nodes.append(
             Node(
                 key=str(fr["id"]),
