@@ -92,6 +92,17 @@ def render_html(
     # the app path's payload — and its bytes — are unchanged (byte-identity tests).
     if profile is not None:
         payload["profile"] = profile.to_dict()
+        # Data-plane honesty: a profiled (non-app) consumer must not carry the app-build apex
+        # meta/why/do in the *embed* either — else a static-text guard (cruft_lint / `tok in src`)
+        # still sees "$0 generation / entity count IS the contract" bleed even though the DOM is
+        # clean. Overwrite each variant's summary apex with the profile's (app path: profile is
+        # None ⇒ untouched ⇒ byte-identical).
+        for _vm in variants.values():
+            _summ = _vm.get("summary")
+            if isinstance(_summ, dict):
+                _summ["meta"] = list(profile.summary_meta)
+                _summ["why"] = profile.why
+                _summ["do"] = profile.do
     doc_title = profile.title if profile is not None else "Your app — a first look"
     html = (
         WIREFRAME_VIEW_TEMPLATE

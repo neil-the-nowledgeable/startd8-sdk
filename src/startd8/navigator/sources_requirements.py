@@ -28,6 +28,18 @@ REQUIREMENTS_PROFILE = RenderProfile(
     section_lead="What this spec defines",
     headline="A first look at this spec",
     gap_noun="requirement",
+    summary_meta=(
+        "A glance-approvable view of every requirement in this spec — each grounded in code, "
+        "or flagged as still-spec.",
+    ),
+    why=(
+        "Each requirement is a Node: what it does, where it Lives (code/test refs), and "
+        "whether evidence grounds it."
+    ),
+    do=(
+        "Read top-down — grounded (green) reuses existing code; spec/awaiting needs a "
+        "decision. Approve or flag each requirement below."
+    ),
 )
 
 

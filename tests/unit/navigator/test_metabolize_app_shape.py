@@ -6,9 +6,19 @@ from pathlib import Path
 
 import pytest
 
-from startd8.navigator.project import nodes_to_wireframe_plan
-from startd8.navigator.sources_requirements import nodes_from_requirements
+from startd8.navigator.project import nodes_to_wireframe_plan, render_nodes_html
+from startd8.navigator.sources_capability import (
+    CAPABILITY_PROFILE,
+    default_capability_index_path,
+    nodes_from_capability_index,
+)
+from startd8.navigator.sources_requirements import (
+    REQUIREMENTS_PROFILE,
+    nodes_from_requirements,
+)
 from startd8.wireframe.shape_dialect import (
+    APP_APEX_BLEED_TOKENS,
+    find_app_apex_bleed,
     format_shape_line,
     format_status_counts_line,
     reject_app_bound_node_shape,
@@ -74,3 +84,39 @@ def test_format_helpers_dialect():
     assert format_shape_line({"nodes": 3, "sections": 1}) == "Nodes: 3 | Sections: 1"
     assert "grounded" in format_status_counts_line({"grounded": 9, "spec": 1})
     assert "planned" in format_status_counts_line({"planned": 2, "not_defined": 1})
+
+
+# --- ATM metabolize, second face: app-build APEX prose on a profiled Node consumer ----------
+# The shape/footer guard above stops "Entities/CRUD zeros"; these stop the masthead sub-headline
+# and Why/Do whybox from bleeding "$0 generation / entity count IS the contract / DATA MODEL
+# bookend" onto a requirements / capability navigator (the apex band the first metabolize missed).
+
+
+def test_find_app_apex_bleed_bites_on_app_prose():
+    """The detector FIRES on raw app apex prose and is clean on Node apex prose."""
+    assert set(find_app_apex_bleed(" ".join(APP_APEX_BLEED_TOKENS))) == set(APP_APEX_BLEED_TOKENS)
+    assert find_app_apex_bleed("Each requirement is a Node — where it Lives, and whether it grounds.") == []
+
+
+def test_requirements_html_apex_speaks_node_dialect(tmp_path):
+    """Dogfood: the REQ-01 navigator HTML carries no app-build apex prose and shows the profile apex."""
+    nodes = nodes_from_requirements(REQ01)
+    out = render_nodes_html(nodes, tmp_path / "req.html", profile=REQUIREMENTS_PROFILE)
+    html = out.read_text(encoding="utf-8")
+    assert find_app_apex_bleed(html) == [], "app-build apex prose bled into the requirements navigator"
+    # The profile's own apex chrome is present (headline + summary_meta lead-in). Assert an ASCII
+    # slice of summary_meta — the embed JSON escapes non-ASCII (em-dash → —).
+    assert REQUIREMENTS_PROFILE.headline in html
+    assert "A glance-approvable view of every requirement in this spec" in html
+
+
+def test_capability_html_apex_speaks_node_dialect(tmp_path):
+    """Same guard on the capability-index consumer (the other profiled source)."""
+    path = default_capability_index_path()
+    if not path.is_file():  # capability manifest not present in this checkout
+        pytest.skip(f"capability index absent at {path}")
+    nodes = nodes_from_capability_index(path)
+    out = render_nodes_html(nodes, tmp_path / "cap.html", profile=CAPABILITY_PROFILE)
+    html = out.read_text(encoding="utf-8")
+    assert find_app_apex_bleed(html) == [], "app-build apex prose bled into the capability navigator"
+    assert CAPABILITY_PROFILE.headline in html

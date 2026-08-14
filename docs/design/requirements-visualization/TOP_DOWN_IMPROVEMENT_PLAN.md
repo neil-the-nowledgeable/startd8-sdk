@@ -130,6 +130,30 @@ wire kickoff APPROVE? questions into `signoff.py`.
 Requirements Panel emits det-req/0.1 with `Lives:` · flows into Definer `roundtrip.sh --no-serve` ·
 HOWTO §6 becomes the per-iteration improvement loop.
 
+**No dedicated REQ-03/PLAN-03 yet** (2026-08-14 research). Phase 3 is this section only;
+Phase 1 pair remains `REQ-01` / `PLAN-01` in this folder.
+
+**Emit-seam flag (must resolve in REQ-03):** TOP_DOWN wording assumes *Requirements Panel*
+emits det-req — but the Panel REQ/PLAN
+(`docs/design/requirements-panel/REQUIREMENTS_PANEL_{REQUIREMENTS,PLAN}.md`) is
+**persona prose elicitation** (no det-req/`Lives:`). The **live** emit path today is
+Definer `detReqWriter.js` → `dev-os/loops/builder/roundtrip.sh`. REQ-03 must choose:
+Panel · Definer · or both (elicitation → Detiner emit).
+
+**Research threads (starter + inventory):** see conversation research +
+[Find Phase 3 authoring threads](9b7b02c7-c525-4314-847d-e72a71712432). Anchors:
+
+| Theme | Canonical paths |
+|-------|-----------------|
+| Definer / roundtrip | `dev-os/visual-editor/VISUAL-REQUIREMENTS-DEFINER-ROADMAP.md`, `DEFINER-PILOTS-AND-GAPS.md`, `loops/builder/{roundtrip.sh,writers/detReqWriter.js,req-health.mjs}` |
+| Grammar / evidence | `dev-os/NODE-SCHEMA.md`, `det-req-kit/{SCHEMA.md,docs/REQ-02-fr-evidence-binding.md,EVIDENCE1-INV7-TWIN-MATRIX.md}`, ContextCore `DELIVERY_EVIDENCE_CONTRACT.md` + `DETERMINISTIC_INTENT_DELIVERY_LANGUAGE_OVERVIEW.md` |
+| Recipe / UX laws | `dev-os/HOWTO-VISUALIZE-A-REQUIREMENT.md` §6, `OPERATOR-PANEL-UX-STANDARD.md`, `PANEL-POLISH-LOOP.md`, `scripts/cruft_lint.py` (`CRUFT-EXPUNGE-LOOP.md` cited but missing) |
+| Validate / corpus | `dev-os/REQ-{06,07,08}-*.md` (+ PLANs), ContextCore `navigator/` + `DET_REQ_VISUALIZATION_STANDARD.md` |
+| Elicitation sibling | `docs/design/requirements-panel/*` (not the emit path) |
+| SDK substrate | `src/startd8/navigator/` (Phase 1/2) |
+
+`/private/tmp/contextcore-delivery-evidence/` — **absent**; dogfood under `/private/tmp/roundtrip-*`.
+
 ### Explicitly deferred
 
 Interactive/3D fsn navigator · auto-gen navigator READMEs (descriptive OQ-5) · converging all HTML
@@ -171,6 +195,27 @@ Representative instances: zeroed `entities/crud_routes/…` in `nodes_to_wirefra
 
 `cruft_lint` on dogfood HTML: bleed gaps **0** (was 8); residual = JS-template redundancy FPs.
 Phase 3 record: this §5.5 block. Bus: **no bus peer** (SDK-local class).
+
+**Phase 2 metabolize — SECOND FACE 2026-08-14 (user: visual inspection).** The first pass cleaned
+the shape/footer/`renderItem`, but a live browser inspection of the dogfood found the **masthead
+APEX band still app-bound**: headline `Wireframe Preview`, sub-headline `deterministic $0 generation
+your manifests will produce`, and the Why/Do whybox `the entity count IS the contract (~89% of the
+app)` — plus empty `CONTENT`/`CASCADE` quadrant cells. `cruft_lint` missed it because `DEFAULT_BLEED`
+carried only the shape nouns, not the apex prose (the survivorship gap: a "0 gaps" that only proved
+the *checked* class was clean). Class climbed to rung-4 on its apex face:
+
+| Guard | What it does |
+|-------|----------------|
+| `RenderProfile.{summary_meta,why,do}` | Optional apex chrome; empty ⇒ app path byte-identical |
+| `sources_{requirements,capability}` profiles | Supply Node-dialect apex (`This spec — a first look` / capability voice) |
+| `wireframe_view.view.render_html` | When profiled, overwrites embed `summary.{meta,why,do}` → clean **bytes**, not just DOM |
+| `_template.renderMast` / `renderGlance` | Masthead reads profile eyebrow/headline/apex; glance drops empty cells when profiled |
+| `wireframe/shape_dialect.{APP_APEX_BLEED_TOKENS,find_app_apex_bleed}` | Single-sourced apex-bleed detector (excludes the inert `Wireframe Preview` fallback literal) |
+| `dev-os/scripts/cruft_lint.py DEFAULT_BLEED` | +4 apex tokens so the rung-4 backstop now catches this face too |
+| `tests/unit/navigator/test_metabolize_app_shape.py` | +3 bites: detector fires on app prose · REQ & capability HTML apex clean + profile apex present |
+
+Dogfood re-rendered + re-inspected: apex reads `This spec` / `A first look at this spec` / Node Why/Do;
+`find_app_apex_bleed(html) == []`; app-path byte-identity + determinism tests green (217 pass).
 
 ---
 

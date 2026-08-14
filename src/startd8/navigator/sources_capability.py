@@ -37,6 +37,18 @@ CAPABILITY_PROFILE = RenderProfile(
     section_lead="What the SDK ships",
     headline="A first look at SDK capabilities",
     gap_noun="capability",
+    summary_meta=(
+        "A glance-approvable view of what the SDK ships — each capability grounded in a code "
+        "leaf, or flagged as thin/spec.",
+    ),
+    why=(
+        "Each capability is a Node: what it does, where it Lives (code refs), and whether a "
+        "code leaf grounds it."
+    ),
+    do=(
+        "Read top-down — built (green) has a code leaf; thin/spec needs evidence or is "
+        "declared-only. Approve or flag each capability below."
+    ),
 )
 
 

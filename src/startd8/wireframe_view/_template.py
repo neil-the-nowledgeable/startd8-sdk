@@ -363,12 +363,21 @@ __PLAN_DATA__
         (s.lead?'<p class="lead">'+esc(s.lead)+'</p>':'')+
         (steps?'<ol class="steps">'+steps+'</ol>':'');
     } else {
-      var meta=(s.meta||[]).map(function(m){ return '<div class="meta">'+esc(m)+'</div>'; }).join("");
+      // A profiled (non-app) consumer supplies its own apex chrome so the masthead speaks its
+      // domain; without a profile the built-in app strings + summary meta/why/do are unchanged
+      // (byte-identity: esc() of the literals is the literals).
+      var P=payload.profile||null;
+      var eyebrow=(P&&P.eyebrow)||"Wireframe";
+      var headline=(P&&P.headline)||"Wireframe Preview";
+      var metaLines=P?(P.summary_meta||[]):(s.meta||[]);
+      var why=P?(P.why||""):(s.why||"");
+      var doo=P?(P.do||""):(s.do||"");
+      var meta=metaLines.map(function(m){ return '<div class="meta">'+esc(m)+'</div>'; }).join("");
       h.innerHTML=
-        '<div class="eyebrow">Wireframe <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
-        '<h1 class="headline">Wireframe Preview</h1>'+ meta +
-        ((s.why||s.do)?'<div class="whybox"><div><b>Why </b>'+esc(s.why)+'</div>'+
-          '<div><b>Do </b>'+esc(s.do)+'</div></div>':'');
+        '<div class="eyebrow">'+esc(eyebrow)+' <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
+        '<h1 class="headline">'+esc(headline)+'</h1>'+ meta +
+        ((why||doo)?'<div class="whybox"><div><b>Why </b>'+esc(why)+'</div>'+
+          '<div><b>Do </b>'+esc(doo)+'</div></div>':'');
     }
     if(data.schema_version!==EXPECTED_SCHEMA){
       document.getElementById("warn").innerHTML='<div class="banner">This preview was made with a '+
@@ -382,6 +391,9 @@ __PLAN_DATA__
     var rows = EU
       ? [["Health",s.plain_status],["Size",s.plain_shape],["Content",s.plain_content],["Ready to build?",s.plain_ready]]
       : [["Status",s.counts],["Shape",s.shape],["Content",s.content],["Cascade",s.readiness]];
+    // A profiled (non-app) consumer often has no Content/Cascade figures; drop the empty cells
+    // rather than render bare "CONTENT"/"CASCADE" labels. App path (no profile) keeps all four.
+    if(payload.profile){ rows=rows.filter(function(r){ return r[1]!=null && String(r[1]).trim()!==""; }); }
     g.innerHTML=rows.map(function(r){
       return '<div class="cell"><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
     }).join("");

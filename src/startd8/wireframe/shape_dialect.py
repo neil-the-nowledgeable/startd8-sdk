@@ -7,10 +7,33 @@ zero-pad the app cascade keys (entities / crud_routes / pages / views / ai_passe
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, List, Mapping
 
 # Canonical app-cascade shape keys (wireframe `$0` landscape). Present together ⇒ app dialect.
 APP_CASCADE_SHAPE_KEYS = ("entities", "crud_routes", "pages", "views", "ai_passes")
+
+# App-build *apex* prose (masthead sub-headline + Why/Do whybox) authored for the app-scaffold
+# domain (WIREFRAME_META + descriptive.yaml summary narration). A profiled non-app consumer
+# (requirements / capability navigator) must not carry these in its rendered HTML — the second
+# face of the metabolized ATM class (``app-bound wireframe summary/chrome on non-app Node
+# consumers``), beyond the shape/footer already guarded. Discriminating substrings only —
+# ``Wireframe Preview`` is deliberately excluded (it is the template's inert JS fallback literal,
+# present in every render including a legitimate app title, so not a bleed signal).
+APP_APEX_BLEED_TOKENS = (
+    "entity count IS the contract",
+    "DATA MODEL bookend",
+    "deterministic $0 generation your manifests",
+    "core-vs-derived",
+)
+
+
+def find_app_apex_bleed(html_text: str) -> List[str]:
+    """Return the app-build apex tokens present in ``html_text`` (empty ⇒ clean).
+
+    A profiled navigator render should return ``[]``; a non-empty list is the app summary
+    narration leaking into a Node consumer's masthead — the guarded regression.
+    """
+    return [tok for tok in APP_APEX_BLEED_TOKENS if tok in html_text]
 
 
 def is_app_cascade_shape(shape: Mapping[str, Any]) -> bool:
