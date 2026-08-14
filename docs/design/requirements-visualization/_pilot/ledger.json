@@ -1,0 +1,68 @@
+{
+  "FR-4": [
+    {
+      "cruft_lint": "cruft_lint: FR-4.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": false,
+        "confidence": 0.6,
+        "fr": "FR-4",
+        "fr_health": "n/a",
+        "lives_count": 1,
+        "lives_resolve": 1,
+        "lives_types": {
+          "code": 1
+        },
+        "pilot_score": 0.5,
+        "ships_when": false,
+        "status_key": "grounded"
+      },
+      "phase": "baseline",
+      "top_gap": "CONFIDENCE is 0.6 \u2014 cite BOTH code AND test Lives so default_confidence yields 0.9 (currently code:1). If the extractor drops one type per FR, that is the FR-6 fidelity gap.",
+      "when": "2026-08-14T17:46:30.640331+00:00"
+    }
+  ],
+  "FR-6": [
+    {
+      "cruft_lint": "cruft_lint: FR-6.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": true,
+        "confidence": 0.6,
+        "fr": "FR-6",
+        "fr_health": "n/a",
+        "lives_count": 2,
+        "lives_resolve": 2,
+        "lives_types": {
+          "code": 2
+        },
+        "pilot_score": 0.65,
+        "ships_when": false,
+        "status_key": "grounded"
+      },
+      "phase": "baseline",
+      "top_gap": "CONFIDENCE is 0.6 \u2014 cite BOTH code AND test Lives so default_confidence yields 0.9 (currently code:2). If the extractor drops one type per FR, that is the FR-6 fidelity gap.",
+      "when": "2026-08-14T17:46:28.621838+00:00"
+    }
+  ],
+  "FR-8": [
+    {
+      "cruft_lint": "cruft_lint: FR-8.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": false,
+        "confidence": 0.6,
+        "fr": "FR-8",
+        "fr_health": "n/a",
+        "lives_count": 1,
+        "lives_resolve": 1,
+        "lives_types": {
+          "test": 1
+        },
+        "pilot_score": 0.2,
+        "ships_when": false,
+        "status_key": "spec"
+      },
+      "phase": "baseline",
+      "top_gap": "STATUS is 'spec' \u2014 cite a code Lives ref for the implementation (currently test:1); a built FR that cites only tests reads as spec.",
+      "when": "2026-08-14T17:46:32.533983+00:00"
+    }
+  ]
+}
