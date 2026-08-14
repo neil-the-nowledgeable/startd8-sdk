@@ -37,8 +37,33 @@ if str(SRC) not in sys.path:
 
 REQ01 = REPO / "docs/design/requirements-visualization/REQ-01-sdk-node-home.md"
 LEDGER_DIR = REPO / "docs/design/requirements-visualization/_pilot"
-PILOTS = ("FR-6", "FR-4", "FR-8")  # the confirmed trio, in causal order
 CRUFT_LINT = Path.home() / "Documents/dev/dev-os/scripts/cruft_lint.py"
+
+# Per-consumer config so the SAME loop runs on any navigator source. The requirements consumer
+# (REQ-01) has a confirmed causal trio; the capability-index consumer has 68 nodes, so its pilots
+# are discovered by --survey (lowest pilot_score first). Ledgers are per-source so they don't collide.
+DEFAULT_SOURCE = "requirements"
+PILOTS_BY_SOURCE = {
+    "requirements": ("FR-6", "FR-4", "FR-8"),
+    "capability-index": (),  # discover via --survey, then pass keys explicitly
+}
+LEDGER_SUFFIX = {"requirements": "", "capability-index": "-capability"}
+
+
+def _nodes_for(source: str, path):
+    """Load Nodes from the named consumer source (requirements | capability-index)."""
+    if source == "capability-index":
+        from startd8.navigator.sources_capability import (
+            default_capability_index_path,
+            nodes_from_capability_index,
+        )
+        return nodes_from_capability_index(path or default_capability_index_path())
+    from startd8.navigator.sources_requirements import nodes_from_requirements
+    return nodes_from_requirements(path or REQ01)
+
+
+def _pilots(source: str):
+    return PILOTS_BY_SOURCE.get(source, ())
 
 
 # --------------------------------------------------------------------------- #
@@ -81,30 +106,21 @@ def _pilot_score(m: Dict[str, Any]) -> float:
     return round(score, 3)
 
 
-def _metrics_for(fr_id: str, req: Path) -> Optional[Dict[str, Any]]:
-    from startd8.navigator.sources_requirements import nodes_from_requirements
-
-    nodes = nodes_from_requirements(req)
-    node = None
-    for n in nodes:
-        nd = {
-            "key": n.key,
-            "confidence": n.confidence,
-            "ships_when": n.ships_when,
-            "route_state": n.route_state,
-            "lives": [{"type": e.type, "ref": e.ref} for e in n.lives],
-            "attributes": dict(n.attributes),
-        }
-        if n.key == fr_id:
-            node = nd
-            break
-    if node is None:
-        return None
+def _metrics_of_node(n) -> Dict[str, Any]:
+    """Score a single Node (source-agnostic — works for FRs and capabilities alike)."""
+    node = {
+        "key": n.key,
+        "confidence": n.confidence,
+        "ships_when": n.ships_when,
+        "route_state": n.route_state,
+        "lives": [{"type": e.type, "ref": e.ref} for e in n.lives],
+        "attributes": dict(n.attributes),
+    }
     a = node["attributes"]
     types = _lives_types(node)
     refs = [e["ref"] for e in node["lives"]]
     m = {
-        "fr": fr_id,
+        "fr": n.key,
         "status_key": a.get("status_key", ""),
         "confidence": node["confidence"],
         "fr_health": a.get("fr_health", ""),
@@ -118,8 +134,15 @@ def _metrics_for(fr_id: str, req: Path) -> Optional[Dict[str, Any]]:
     return m
 
 
-def _top_gap(m: Dict[str, Any]) -> str:
-    """The single highest-value fix to attempt next for this FR (actionable, ordered)."""
+def _metrics_for(key: str, source: str, path) -> Optional[Dict[str, Any]]:
+    for n in _nodes_for(source, path):
+        if n.key == key:
+            return _metrics_of_node(n)
+    return None
+
+
+def _top_gap(m: Dict[str, Any], source: str = DEFAULT_SOURCE) -> str:
+    """The single highest-value fix to attempt next for this node (actionable, ordered)."""
     t = ",".join(f"{k}:{v}" for k, v in m["lives_types"].items()) or "none"
     if m["status_key"] not in ("grounded", "built"):
         return (f"STATUS is {m['status_key']!r} — cite a code Lives ref for the implementation "
@@ -128,6 +151,10 @@ def _top_gap(m: Dict[str, Any]) -> str:
         return (f"EVIDENCE — {m['lives_count'] - m['lives_resolve']} of {m['lives_count']} Lives "
                 "refs do not resolve on disk; fix the path or sha.")
     if (m["confidence"] or 0) < 0.9:
+        if source == "capability-index":
+            return (f"CONFIDENCE is {m['confidence']} (authored in the manifest, currently {t}) — "
+                    "add test evidence or confirm the authored value; capability confidence is not "
+                    "derived from lives the way an FR's is.")
         return (f"CONFIDENCE is {m['confidence']} — cite BOTH code AND test Lives so "
                 f"default_confidence yields 0.9 (currently {t}). If the extractor drops one type "
                 "per FR, that is the FR-6 fidelity gap.")
@@ -136,6 +163,9 @@ def _top_gap(m: Dict[str, Any]) -> str:
                 "(fr_health=unknown); add a resolvable Lives ref or drop the done-ish Verify "
                 "annotation. (A spec-time FR is honestly n/a — not a gap.)")
     if not m["approve_prompts"]:
+        if source == "capability-index":
+            return ("SIGN-OFF — no APPROVE? prompt (systemic: the capability manifest carries none) "
+                    "— add per-capability approve questions so the sign-off surface lights up.")
         return "SIGN-OFF — no APPROVE? prompt on this FR; add one so it lights up the per-item sign-off."
     return "glance-approvable ✓ — no mechanical gap; promote as an exemplar."
 
@@ -144,56 +174,64 @@ def _top_gap(m: Dict[str, Any]) -> str:
 # diagnose helpers
 # --------------------------------------------------------------------------- #
 
-def _render_html(req: Path, out: Path) -> None:
-    from startd8.navigator.sources_requirements import (
-        REQUIREMENTS_PROFILE,
-        nodes_from_requirements,
-    )
+def _render_html(source: str, path, out: Path) -> None:
     from startd8.navigator.project import render_nodes_html
 
-    nodes = nodes_from_requirements(req)
-    render_nodes_html(nodes, out, project_root=str(req.parent), profile=REQUIREMENTS_PROFILE)
+    nodes = _nodes_for(source, path)
+    if source == "capability-index":
+        from startd8.navigator.sources_capability import (
+            CAPABILITY_PROFILE,
+            default_capability_index_path,
+        )
+        root = str((path or default_capability_index_path()).parent)
+        render_nodes_html(nodes, out, project_root=root, profile=CAPABILITY_PROFILE)
+    else:
+        from startd8.navigator.sources_requirements import REQUIREMENTS_PROFILE
+        render_nodes_html(nodes, out, project_root=str((path or REQ01).parent),
+                          profile=REQUIREMENTS_PROFILE)
 
 
-def _cruft_lint(html: Path, req: Path) -> str:
+def _cruft_lint(html: Path, source_path) -> str:
     if not CRUFT_LINT.is_file():
         return f"(cruft_lint not found at {CRUFT_LINT} — run /cruft-audit by hand per the runbook)"
     try:
-        r = subprocess.run(
-            [sys.executable, str(CRUFT_LINT), str(html), f"--source={req}"],
-            capture_output=True, text=True, timeout=60,
-        )
+        cmd = [sys.executable, str(CRUFT_LINT), str(html)]
+        if source_path:
+            cmd.append(f"--source={source_path}")
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         return (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr) else "(no output)"
     except (subprocess.SubprocessError, OSError) as e:
         return f"(cruft_lint failed: {e})"
 
 
 # --------------------------------------------------------------------------- #
-# ledger
+# ledger (per-source)
 # --------------------------------------------------------------------------- #
 
-def _ledger_path() -> Path:
-    return LEDGER_DIR / "ledger.json"
+def _ledger_path(source: str) -> Path:
+    return LEDGER_DIR / f"ledger{LEDGER_SUFFIX.get(source, '-' + source)}.json"
 
 
-def _load_ledger() -> Dict[str, List[Dict[str, Any]]]:
-    p = _ledger_path()
+def _load_ledger(source: str) -> Dict[str, List[Dict[str, Any]]]:
+    p = _ledger_path(source)
     if p.is_file():
         return json.loads(p.read_text(encoding="utf-8"))
     return {}
 
 
-def _save_ledger(led: Dict[str, List[Dict[str, Any]]]) -> None:
+def _save_ledger(source: str, led: Dict[str, List[Dict[str, Any]]]) -> None:
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-    _ledger_path().write_text(json.dumps(led, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    _render_ledger_md(led)
+    _ledger_path(source).write_text(
+        json.dumps(led, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _render_ledger_md(source, led)
 
 
-def _render_ledger_md(led: Dict[str, List[Dict[str, Any]]]) -> None:
-    lines = ["# Navigator dogfood — pilot improvement ledger", "",
-             "Repeatable per-FR loop (see `PILOT_IMPROVEMENT_LOOP.md`). Auto-generated; do not hand-edit.",
+def _render_ledger_md(source: str, led: Dict[str, List[Dict[str, Any]]]) -> None:
+    keys = list(_pilots(source)) or sorted(led)  # discovered pilots (capability) → ledger keys
+    lines = [f"# Navigator dogfood — pilot ledger ({source})", "",
+             "Repeatable per-node loop (see `PILOT_IMPROVEMENT_LOOP.md`). Auto-generated; do not hand-edit.",
              ""]
-    for fr in PILOTS:
+    for fr in keys:
         entries = led.get(fr, [])
         if not entries:
             lines += [f"## {fr} — not started", ""]
@@ -211,8 +249,9 @@ def _render_ledger_md(led: Dict[str, List[Dict[str, Any]]]) -> None:
                 f"| {i} | {e['phase']} | {e['when'][:16]} | {m['status_key']} | {m['confidence']} | "
                 f"{m['fr_health'] or 'n/a'} | {t} ({m['lives_resolve']}/{m['lives_count']}) | "
                 f"{'Y' if m['approve_prompts'] else '-'} | {m['pilot_score']} |")
-        lines += ["", f"**Next gap:** {_top_gap(entries[-1]['metrics'])}", ""]
-    (LEDGER_DIR / "ledger.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines += ["", f"**Next gap:** {_top_gap(entries[-1]['metrics'], source)}", ""]
+    (LEDGER_DIR / f"ledger{LEDGER_SUFFIX.get(source, '-' + source)}.md").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _now() -> str:
@@ -231,37 +270,39 @@ def _print_metrics(m: Dict[str, Any]) -> None:
     print(f"  pilot_score={m['pilot_score']}")
 
 
-def run_pilot(fr_id: str, req: Path, verify: bool, reset: bool) -> int:
-    if fr_id not in PILOTS:
-        print(f"warning: {fr_id} is not in the confirmed pilot trio {PILOTS}", file=sys.stderr)
-    led = _load_ledger()
+def run_pilot(key: str, source: str, path, verify: bool, reset: bool) -> int:
+    pilots = _pilots(source)
+    if pilots and key not in pilots:
+        print(f"warning: {key} is not in the confirmed pilot set {pilots}", file=sys.stderr)
+    led = _load_ledger(source)
     if reset:
-        led.pop(fr_id, None)
-        _save_ledger(led)
-        print(f"reset ledger for {fr_id}")
+        led.pop(key, None)
+        _save_ledger(source, led)
+        print(f"reset ledger for {key} ({source})")
         return 0
 
-    m = _metrics_for(fr_id, req)
+    m = _metrics_for(key, source, path)
     if m is None:
-        print(f"error: {fr_id} not found in {req}", file=sys.stderr)
+        print(f"error: {key} not found in {source}", file=sys.stderr)
         return 1
 
-    entries = led.setdefault(fr_id, [])
+    entries = led.setdefault(key, [])
     phase = "verify" if (verify and entries) else "baseline"
     if phase == "baseline" and entries:
-        print(f"note: {fr_id} already has a baseline; recording another baseline "
+        print(f"note: {key} already has a baseline; recording another baseline "
               "(use --verify to record a delta pass, --reset to start over)")
 
     # diagnose (both phases): render + cruft_lint + evidence gate + top gap
-    html = LEDGER_DIR / f"{fr_id}.html"
+    safe = key.replace("/", "_").replace(".", "_")
+    html = LEDGER_DIR / f"{source}-{safe}.html"
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-    _render_html(req, html)
-    cruft = _cruft_lint(html, req)
+    _render_html(source, path, html)
+    cruft = _cruft_lint(html, path)
 
-    print(f"\n=== {fr_id} — {phase} @ {_now()[:16]} ===")
+    print(f"\n=== {key} ({source}) — {phase} @ {_now()[:16]} ===")
     _print_metrics(m)
     print(f"  cruft_lint: {cruft}")
-    print(f"  TOP GAP → {_top_gap(m)}")
+    print(f"  TOP GAP → {_top_gap(m, source)}")
 
     if phase == "verify":
         base = entries[0]["metrics"]
@@ -273,43 +314,71 @@ def run_pilot(fr_id: str, req: Path, verify: bool, reset: bool) -> int:
                 print(f"    {k}: {base[k]!r} → {m[k]!r}")
 
     entries.append({"phase": phase, "when": _now(), "metrics": m,
-                    "cruft_lint": cruft, "top_gap": _top_gap(m)})
-    _save_ledger(led)
-    print(f"\nrecorded {phase} for {fr_id} → {_ledger_path().relative_to(REPO)}")
+                    "cruft_lint": cruft, "top_gap": _top_gap(m, source)})
+    _save_ledger(source, led)
+    print(f"\nrecorded {phase} for {key} → {_ledger_path(source).relative_to(REPO)}")
     return 0
 
 
-def run_status(req: Path) -> int:
-    led = _load_ledger()
-    print(f"{'FR':6}{'baseline':10}{'latest':8}{'passes':8}next gap")
-    print("-" * 90)
-    for fr in PILOTS:
-        entries = led.get(fr, [])
+def run_status(source: str, path) -> int:
+    led = _load_ledger(source)
+    keys = list(_pilots(source)) or sorted(led)
+    if not keys:
+        print(f"no pilots for {source} yet — run --survey to pick some.")
+        return 0
+    print(f"{'KEY':34}{'baseline':10}{'latest':8}{'passes':8}next gap")
+    print("-" * 110)
+    for key in keys:
+        entries = led.get(key, [])
         if not entries:
-            m = _metrics_for(fr, req)
-            print(f"{fr:6}{'—':10}{m['pilot_score'] if m else '?':<8}{0:<8}(not started) {_top_gap(m) if m else ''}"[:120])
+            m = _metrics_for(key, source, path)
+            sc = m["pilot_score"] if m else "?"
+            print(f"{key:34}{'—':10}{sc:<8}{0:<8}(not started)"[:150])
             continue
         b = entries[0]["metrics"]["pilot_score"]
         l = entries[-1]["metrics"]["pilot_score"]
-        print(f"{fr:6}{b:<10}{l:<8}{len(entries):<8}{_top_gap(entries[-1]['metrics'])}"[:120])
+        print(f"{key:34}{b:<10}{l:<8}{len(entries):<8}{_top_gap(entries[-1]['metrics'], source)}"[:150])
+    return 0
+
+
+def run_survey(source: str, path, top: int) -> int:
+    """Score EVERY node in the source, ranked lowest pilot_score first (pick pilots from the head)."""
+    nodes = _nodes_for(source, path)
+    scored = sorted((_metrics_of_node(n) for n in nodes), key=lambda m: m["pilot_score"])
+    print(f"{source}: {len(nodes)} nodes — lowest {min(top, len(scored))} pilot_scores (most improvable):\n")
+    print(f"{'KEY':38}{'score':7}{'conf':6}{'appr':6}top gap")
+    print("-" * 120)
+    for m in scored[:top]:
+        print(f"{m['fr']:38}{m['pilot_score']:<7}{m['confidence']:<6}"
+              f"{'Y' if m['approve_prompts'] else '-':<6}{_top_gap(m, source)}"[:150])
+    scores = [m["pilot_score"] for m in scored]
+    from collections import Counter
+    dist = dict(sorted(Counter(scores).items()))
+    print(f"\nscore distribution across all {len(scored)}: {dist}")
     return 0
 
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("fr", nargs="?", help="FR id, e.g. FR-6")
+    ap.add_argument("key", nargs="?", help="node key, e.g. FR-6 or startd8.agent.system_prompt")
+    ap.add_argument("--source", default=DEFAULT_SOURCE, choices=sorted(PILOTS_BY_SOURCE),
+                    help="navigator consumer (default: requirements)")
     ap.add_argument("--verify", action="store_true", help="record a delta pass vs the baseline")
-    ap.add_argument("--reset", action="store_true", help="drop this FR's ledger and start over")
-    ap.add_argument("--status", action="store_true", help="show all pilots' current scores")
-    ap.add_argument("--req", type=Path, default=REQ01, help="requirements doc (default: REQ-01)")
+    ap.add_argument("--reset", action="store_true", help="drop this node's ledger and start over")
+    ap.add_argument("--status", action="store_true", help="show this source's pilots' scores")
+    ap.add_argument("--survey", action="store_true", help="score all nodes, lowest-first (pick pilots)")
+    ap.add_argument("--top", type=int, default=12, help="--survey: how many to list")
+    ap.add_argument("--path", type=Path, default=None, help="source doc/manifest override")
     args = ap.parse_args(argv[1:])
 
+    if args.survey:
+        return run_survey(args.source, args.path, args.top)
     if args.status:
-        return run_status(args.req)
-    if not args.fr:
+        return run_status(args.source, args.path)
+    if not args.key:
         ap.print_help()
         return 2
-    return run_pilot(args.fr, args.req, verify=args.verify, reset=args.reset)
+    return run_pilot(args.key, args.source, args.path, verify=args.verify, reset=args.reset)
 
 
 if __name__ == "__main__":
