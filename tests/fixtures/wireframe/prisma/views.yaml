@@ -6,3 +6,16 @@ views:
     aggregates:
       - {name: metric_count, of: Metric, fk: profileId}
     signal: "metric_count >= 1"
+
+# First-run orientation dogfood (onboarding: archetype — harness for FR-ONB).
+onboarding:
+  route: /welcome
+  title: Welcome
+  lead: Wireframe fixture orientation — skip anytime.
+  continue_href: /ui/profile
+  tips:
+    - Add a Profile first
+    - Metrics hang off a Profile
+  empty_states:
+    Profile: Add your first profile to get started.
+    Note: Capture a note when you are ready.

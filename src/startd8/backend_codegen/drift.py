@@ -85,6 +85,7 @@ _FORMS_KINDS: frozenset = frozenset(
         "fastapi-web-forms", "htmx-created",
         "fastapi-flow", "flow-shell", "flow-aggregator",          # flows (FR-ED-15)
         "fastapi-editor", "editor-form", "editor-aggregator",     # bulk child-field editors (FR-ED-10)
+        "fastapi-onboarding", "onboarding-welcome", "onboarding-aggregator",  # first-run (FR-ONB)
     }
 )
 
@@ -705,21 +706,29 @@ def _check_ai_drift(
 
 
 def pages_stale_reason(
-    ondisk_text: str, *, schema_sha: str, pages_sha: str
+    ondisk_text: str, *, schema_sha: str, pages_sha: str, forms_sha: Optional[str] = None
 ) -> Optional[str]:
-    """For a content-page file, return why it is **stale**, or ``None`` if both inputs match.
+    """For a content-page file, return why it is **stale**, or ``None`` if inputs match.
 
     A content-page artifact derives from two inputs (schema + pages.yaml), so it is stale if **either**
     embedded hash differs from the current input hash. A missing embedded hash counts as stale. The
     page prose is deliberately not an input, so editing a ``.md`` never reaches here.
+
+    When the pages router embeds ``forms-sha256`` (onboarding root redirect), views.yaml is a third
+    input and must match too.
     """
-    checks = (
+    checks = [
         ("schema", embedded_schema_sha(ondisk_text), schema_sha),
         ("pages", embedded_pages_sha(ondisk_text), pages_sha),
-    )
+    ]
+    embedded_forms = embedded_forms_sha(ondisk_text)
+    if embedded_forms is not None:
+        checks.append(("forms", embedded_forms, forms_sha))
     for label, embedded, current in checks:
         if embedded is None:
             return f"missing {label}-sha256 header"
+        if current is None:
+            return f"missing {label} input for check"
         if embedded != current:
             return (
                 f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
@@ -727,15 +736,19 @@ def pages_stale_reason(
     return None
 
 
-def _pages_renderers():
+def _pages_renderers(views_text: Optional[str] = None):
     """Map content-page kind → a ``(schema, pages, source_file, entity) -> text`` renderer.
 
     base.html is no longer here — it is the schema-only ``htmx-base`` kind (FR-27), re-rendered via the
-    default ``_renderers()`` map; only the pages router + per-page shells are two-input page kinds."""
+    default ``_renderers()`` map; only the pages router + per-page shells are two-input page kinds.
+    *views_text* threads into the pages router when onboarding root-redirect is declared.
+    """
     from .pages_generator import render_page_shell, render_pages_router
 
     return {
-        "pages-router": lambda s, p, sf, e: render_pages_router(s, p, sf),
+        "pages-router": lambda s, p, sf, e: render_pages_router(
+            s, p, sf, views_text=views_text
+        ),
         "pages-content": lambda s, p, sf, e: render_page_shell(s, p, sf, e),
     }
 
@@ -802,7 +815,7 @@ def _check_nav_drift(
 
 
 def _check_pages_drift(
-    schema_text, pages_text, ondisk_text, source_file, kind
+    schema_text, pages_text, ondisk_text, source_file, kind, forms_text=None
 ) -> DriftResult:
     """Drift for a content-page file: stale if schema or pages.yaml changed; else byte re-render."""
     if pages_text is None:
@@ -813,11 +826,12 @@ def _check_pages_drift(
         ondisk_text,
         schema_sha=schema_sha256(schema_text),
         pages_sha=schema_sha256(pages_text),
+        forms_sha=schema_sha256(forms_text) if forms_text is not None else None,
     )
     if reason is not None:
         status = "tampered" if "missing" in reason else "stale"
         return DriftResult(status, DRIFT, reason)
-    renderer = _pages_renderers().get(kind)
+    renderer = _pages_renderers(views_text=forms_text).get(kind)
     if renderer is None:
         return DriftResult("tampered", DRIFT, f"unknown content-page kind ({kind!r})")
     rendered = renderer(schema_text, pages_text, source_file, embedded_entity(ondisk_text))
@@ -877,6 +891,11 @@ def _forms_renderers(tenant: Optional[str] = None, human_inputs_text: Optional[s
         render_named_editor_form,
         render_named_editor_router,
     )
+    from .onboarding_generator import (
+        render_onboarding_aggregator,
+        render_onboarding_welcome_router,
+        render_onboarding_welcome_template,
+    )
 
     return {
         "fastapi-web-forms": lambda s, f, sf, e: render_web(
@@ -891,6 +910,10 @@ def _forms_renderers(tenant: Optional[str] = None, human_inputs_text: Optional[s
         "fastapi-editor": lambda s, f, sf, e: render_named_editor_router(s, f, e),
         "editor-form": lambda s, f, sf, e: render_named_editor_form(s, f, e),
         "editor-aggregator": lambda s, f, sf, e: render_editor_aggregator(s, f),
+        # onboarding (FR-ONB): single welcome pack; entity slot is "welcome".
+        "fastapi-onboarding": lambda s, f, sf, e: render_onboarding_welcome_router(s, f),
+        "onboarding-welcome": lambda s, f, sf, e: render_onboarding_welcome_template(s, f),
+        "onboarding-aggregator": lambda s, f, sf, e: render_onboarding_aggregator(s, f),
     }
 
 
@@ -1350,7 +1373,9 @@ def check_drift(
             schema_text, manifest_text, human_inputs_text, ondisk_text, source_file, kind
         )
     if kind in _PAGES_KINDS:
-        return _check_pages_drift(schema_text, pages_text, ondisk_text, source_file, kind)
+        return _check_pages_drift(
+            schema_text, pages_text, ondisk_text, source_file, kind, forms_text=forms_text
+        )
     if kind in _NAV_KINDS:
         # 3-input nav (schema + views.yaml [forms_text] + pages.yaml). owned_file_in_sync already
         # threads BOTH manifests, so the skip-hook recognizes this with no new plumbing.

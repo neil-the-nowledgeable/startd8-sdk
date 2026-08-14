@@ -156,25 +156,69 @@ def _pages_sha(pages_text: str) -> str:
 
 
 def render_pages_router(
-    schema_text: str, pages_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    pages_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    views_text: Optional[str] = None,
 ) -> str:
-    """``app/pages.py`` — a ``pages_router`` with one GET route per slug (kind ``pages-router``)."""
+    """``app/pages.py`` — a ``pages_router`` with one GET route per slug (kind ``pages-router``).
+
+    When ``views.yaml`` declares ``onboarding.redirect_root_if_empty: true`` and a page owns ``/``,
+    the home handler redirects to the welcome route while every empty_states entity is still empty.
+    """
+    from .onboarding_manifest import parse_onboarding
+
     pages, _ = parse_pages(pages_text)
-    header = header_pages(source_file, schema_sha256(schema_text), _pages_sha(pages_text), "pages-router")
+    onb = parse_onboarding(views_text) if views_text else None
+    redirect_root = bool(
+        onb is not None and onb.redirect_root_if_empty and any(p.slug == "/" for p in pages)
+    )
+    forms_sha = schema_sha256(views_text) if redirect_root else None
+    header = header_pages(
+        source_file,
+        schema_sha256(schema_text),
+        _pages_sha(pages_text),
+        "pages-router",
+        forms_sha=forms_sha,
+    )
     routes: List[str] = []
     for p in pages:
-        routes.append(
-            f'@pages_router.get({p.slug!r}, response_class=HTMLResponse)\n'
-            f"def page_{p.name}(request: Request):\n"
-            f'    """Render the {p.slug!r} content page (prose rendered at generate time)."""\n'
-            f'    return templates.TemplateResponse(request, "pages/{p.name}.html", {{}})'
+        if redirect_root and p.slug == "/":
+            assert onb is not None
+            routes.append(
+                f'@pages_router.get({p.slug!r}, response_class=HTMLResponse)\n'
+                f"def page_{p.name}(request: Request, session: Session = Depends(get_session)):\n"
+                f'    """Render the {p.slug!r} content page; redirect to welcome while first-run empty."""\n'
+                f"    from app.onboarding.welcome import checklist_all_empty\n\n"
+                f"    if checklist_all_empty(session):\n"
+                f"        return RedirectResponse({onb.route!r}, status_code=303)\n"
+                f'    return templates.TemplateResponse(request, "pages/{p.name}.html", {{}})'
+            )
+        else:
+            routes.append(
+                f'@pages_router.get({p.slug!r}, response_class=HTMLResponse)\n'
+                f"def page_{p.name}(request: Request):\n"
+                f'    """Render the {p.slug!r} content page (prose rendered at generate time)."""\n'
+                f'    return templates.TemplateResponse(request, "pages/{p.name}.html", {{}})'
+            )
+    fastapi_imports = "from fastapi import APIRouter, Request"
+    response_imports = "from fastapi.responses import HTMLResponse"
+    extra_imports = ""
+    if redirect_root:
+        fastapi_imports = "from fastapi import APIRouter, Depends, Request"
+        response_imports = "from fastapi.responses import HTMLResponse, RedirectResponse"
+        extra_imports = (
+            "from sqlmodel import Session\n\n"
+            "from app.db import get_session\n"
         )
     body = (
         "from __future__ import annotations\n\n"
         "from pathlib import Path\n\n"
-        "from fastapi import APIRouter, Request\n"
-        "from fastapi.responses import HTMLResponse\n"
+        f"{fastapi_imports}\n"
+        f"{response_imports}\n"
         "from fastapi.templating import Jinja2Templates\n\n"
+        f"{extra_imports}"
         'templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))\n'
         "pages_router = APIRouter()\n\n\n"
         + "\n\n\n".join(routes)
@@ -257,6 +301,7 @@ def render_pages(
     source_file: str = "prisma/schema.prisma",
     *,
     app_dir: Optional[Path] = None,
+    views_text: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Content-page artifacts as ``(path, text)`` pairs.
 
@@ -266,7 +311,12 @@ def render_pages(
     A referenced ``.md`` missing on disk is a loud error.
     """
     pages, _ = parse_pages(pages_text)  # fail loud before emitting anything
-    out: List[Tuple[str, str]] = [("app/pages.py", render_pages_router(schema_text, pages_text, source_file))]
+    out: List[Tuple[str, str]] = [
+        (
+            "app/pages.py",
+            render_pages_router(schema_text, pages_text, source_file, views_text=views_text),
+        )
+    ]
     for p in pages:
         out.append(
             (f"app/templates/pages/{p.name}.html", render_page_shell(schema_text, pages_text, source_file, p.name))

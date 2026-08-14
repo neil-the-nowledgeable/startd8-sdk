@@ -61,6 +61,15 @@ def _titleize(name: str) -> str:
     return "".join(out).strip() or name
 
 
+def _humanize_view_label(name: str) -> str:
+    """``chore_fairness`` / ``rx-run-out`` → ``Chore Fairness`` / ``Rx Run Out`` (pilot P1-4)."""
+    spaced = name.replace("_", " ").replace("-", " ").strip()
+    parts = [p for p in spaced.split() if p]
+    if not parts:
+        return name
+    return " ".join(p[:1].upper() + p[1:].lower() if p else p for p in parts)
+
+
 def nav_registry(
     schema_text: str,
     views_text: Optional[str] = None,
@@ -77,6 +86,21 @@ def nav_registry(
         for p in pages:
             entries.append(
                 NavEntry(key=f"page:{p.slug}", label=p.nav_label or p.title, href=p.slug, group="page")
+            )
+
+    # views.yaml `onboarding:` (optional) — first-run welcome route (FR-ONB); sits with pages.
+    if views_text:
+        from .onboarding_manifest import parse_onboarding
+
+        onb = parse_onboarding(views_text)
+        if onb is not None:
+            entries.append(
+                NavEntry(
+                    key=f"onboarding:{onb.route}",
+                    label=onb.nav_text,
+                    href=onb.route,
+                    group="page",
+                )
             )
 
     # entities (schema) — no label exists in generated code; derive one (FR-1a), unless the model
@@ -101,7 +125,14 @@ def nav_registry(
         from ..view_codegen.manifest import parse_views
 
         for v in parse_views(views_text, known_entities=frozenset(schema.models)):
-            entries.append(NavEntry(key=f"view:{v.route}", label=v.name, href=v.route, group="view"))
+            entries.append(
+                NavEntry(
+                    key=f"view:{v.route}",
+                    label=_humanize_view_label(v.name),
+                    href=v.route,
+                    group="view",
+                )
+            )
 
     # The generated home/index is itself a navigable surface (FR-28e), so it appears in the nav bar.
     # Its own ``group`` is "index", which the index page deliberately does not list (it lists only

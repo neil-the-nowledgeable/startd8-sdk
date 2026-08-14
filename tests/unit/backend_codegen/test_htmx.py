@@ -114,9 +114,11 @@ def test_new_form_query_param_prefill():
     # handler builds a prefill dict restricted to the entity's declared rules
     assert "prefill = {k: v for k, v in request.query_params.items() if k in _proofpoint_rules}" in web
     assert '"prefill": prefill' in web
-    # form template uses the prefill fallback (guarded for edit/list contexts where it's undefined)
+    # form template prefers prefill (query or failed-submit) over item / defaults
     form = render_form_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
-    assert "prefill.get('result') if prefill else ''" in form
+    assert "prefill is defined and prefill is not none and 'result' in prefill" in form
+    assert "_form_errors" in web
+    assert "_proofpoint_allowed" in web
 
 
 # Schema carrying the full provenance/timestamp set, to exercise FR-PG-5 omission.
@@ -139,8 +141,8 @@ _SYSTEM_FIELDS = ("id", "ownerId", "source", "confirmed", "createdAt", "updatedA
 def test_form_omits_system_and_provenance_fields():
     form = render_form_template(PROV_SCHEMA, "prisma/schema.prisma", "Profile")
     # human-authored fields are present...
-    assert '<label for="f-name">name</label>' in form
-    assert '<label for="f-title">title</label>' in form
+    assert '<label for="f-name">Name</label>' in form
+    assert '<label for="f-title">Title</label>' in form
     # ...and every system/provenance/timestamp field is gone (FR-PG-5)
     for sysf in _SYSTEM_FIELDS:
         assert f'name="{sysf}"' not in form, sysf
@@ -503,3 +505,58 @@ def test_template_provided_via_registry(tmp_path):
         is_deterministically_provided(out, form.replace("<h1>", "<h2>", 1), ctx)
         is False
     )
+
+
+DATETIME_SCHEMA = """\
+model Event {
+  id        String   @id
+  startsAt  DateTime
+  title     String
+}
+"""
+
+
+def test_web_py_coerces_datetime_local_strings():
+    """HTML datetime-local posts ``YYYY-MM-DDTHH:MM``; SQLite needs a real datetime."""
+    web = render_web(DATETIME_SCHEMA)
+    compile(web, "<web>", "exec")
+    assert "from datetime import datetime" in web
+    assert 'if kind == "datetime":' in web
+    assert "datetime.fromisoformat" in web
+    assert "def _form_errors(" in web
+    # Execute the helper as emitted (same body as household web.py).
+    start = web.index("def _coerce")
+    end = web.index("\n@", start)  # first route decorator after helpers
+    ns: dict = {}
+    exec("from datetime import datetime\n" + web[start:end], ns)
+    dt = ns["_coerce"]("datetime", "2026-08-14T10:00")
+    assert dt.year == 2026 and dt.month == 8 and dt.day == 14
+    assert dt.hour == 10 and dt.minute == 0
+    assert ns["_field_error"]("datetime", True, "not-a-date") == "Must be a date and time."
+    assert ns["_field_error"]("datetime", True, "2026-08-14T10:00") == ""
+    errors, data = ns["_form_errors"](
+        {"startsAt": ("datetime", True), "title": ("text", True)},
+        {"startsAt": "not-a-date", "title": "x"},
+    )
+    assert "startsAt" in errors and "title" not in errors
+    errors2, data2 = ns["_form_errors"](
+        {"startsAt": ("datetime", True), "title": ("text", True)},
+        {"startsAt": "2026-08-14T10:00", "title": "x"},
+    )
+    assert errors2 == {} and data2["title"] == "x"
+
+
+def test_form_has_contrast_borders_and_structural_hints():
+    base = render_ui(SCHEMA)
+    base_html = dict(base)["app/templates/base.html"]
+    assert "--teal:" in base_html or "border: 1.5px solid" in base_html
+    assert ".field-hint" in base_html
+    form = render_form_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert 'id="hint-metricId"' in form
+    assert "errors.get('result'" in form
+    # FR-FH-11: humanized label + hint above control
+    assert '<label for="f-metricId">Metric id</label>' in form
+    hint_i = form.index('id="hint-metricId"')
+    input_i = form.index('name="metricId"')
+    assert hint_i < input_i
+    assert 'class="entity-form"' in form
