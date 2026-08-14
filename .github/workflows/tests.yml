@@ -31,6 +31,7 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  workflow_dispatch:  # manual "Run workflow" button — trigger without a dummy commit
 
 jobs:
   test:
