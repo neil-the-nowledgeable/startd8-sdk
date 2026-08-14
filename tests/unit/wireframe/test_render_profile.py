@@ -88,3 +88,49 @@ def test_chrome_provenance_readout_embeds_and_is_byte_safe():
     assert "dbg-prov" in withc                            # the readout element + its cruft styling
     # No chrome ⇒ payload unchanged; app path byte-identical regardless of the new param.
     assert render_html(_plan()) == render_html(_plan(), profile=None, chrome=None)
+
+
+def test_profiled_render_carries_filter_machinery_and_data_status():
+    """PF-1: a profiled render must embed the profile payload so the client-side filter machinery
+    activates, AND the no-profile path must remain byte-identical (re-asserted here for completeness).
+
+    The filter machinery is client-side JS — chip DOM nodes and data-status attributes are injected at
+    runtime by renderGlance() / renderItem().  What we can inspect in the raw HTML is:
+      • the embedded plan-data JSON — profile key present iff a profile was passed (the JS guard);
+      • the JS source in the template — contains the filter machinery identifiers unconditionally
+        (the template is a constant; behavior is gated on payload.profile at runtime, not on template bytes).
+    """
+    prof = RenderProfile(
+        statuses=(
+            StatusStyle("spec", "Spec", "#888888", "written, not built"),
+            StatusStyle("grounded", "Grounded", "#3d7a57", "verified against source"),
+        ),
+    )
+    html = render_html(_plan(), profile=prof)
+    no_profile = render_html(_plan())
+
+    # Byte-identity re-assertion: explicit profile=None must equal the default (no arg).
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+    # The profiled render must differ from the no-profile render.
+    assert html != no_profile
+
+    # The profiled JSON payload embeds the profile dict (the JS guard: payload.profile).
+    assert '"profile"' in html
+
+    # The profile's status keys and colors are in the embedded JSON.
+    assert '"spec"' in html
+    assert '#888888' in html
+
+    # The no-profile payload does NOT embed a profile key — the app path is untouched.
+    assert '"profile"' not in no_profile
+
+    # The template (constant) carries the filter machinery JS identifiers regardless of profile;
+    # this confirms the JS source is present in both renders (it is always emitted by the template).
+    assert 'status-chips' in html
+    assert 'data-chip-key' in html
+    assert 'data-status' in html
+    # Same strings appear in no-profile (template is constant; runtime behavior is gated on payload.profile).
+    assert 'status-chips' in no_profile
+    assert 'data-chip-key' in no_profile
+    assert 'data-status' in no_profile

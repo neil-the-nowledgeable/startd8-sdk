@@ -262,6 +262,17 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
     border:1px solid var(--accent);border-radius:20px;padding:6px 15px;cursor:pointer}
   .signbar button:hover{background:var(--accent2)}
 
+  /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
+  .status-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+  .status-chip{font-size:11px;font-weight:700;letter-spacing:.03em;padding:3px 9px;border-radius:20px;
+    color:#fff;cursor:pointer;border:2px solid transparent;white-space:nowrap;line-height:1.4}
+  .status-chip:hover{opacity:.85}
+  .status-chip.active{box-shadow:0 0 0 2px var(--ink),0 0 0 4px transparent;outline:2px solid var(--ink);outline-offset:1px}
+  /* items hidden by the active filter (JS sets display:none via applyFilter) */
+  .item.pf-hidden{display:none}
+  /* sections with no visible items are collapsed + dimmed when a filter is active */
+  details.sec.pf-empty{opacity:.45;pointer-events:none}
+
   /* ---------- motion ---------- */
   @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
   .mast,.glance,.rule,.toolbar,.section-lead,details.sec,.closing{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
@@ -432,6 +443,34 @@ __PLAN_DATA__
     }
   }
 
+  // ---------- PF-1: status-filter machinery (profiled navigator only) ----------
+  var _activeFilter = null;   // current status key filter, null = show all
+
+  function _applyFilter(key){
+    // Walk every .item in the outline, show/hide by data-status; hide empty sections.
+    var items = document.querySelectorAll("#outline .item[data-status]");
+    items.forEach(function(it){
+      var match = (key === null) || (it.getAttribute("data-status") === key);
+      it.classList.toggle("pf-hidden", !match);
+    });
+    // Collapse / dim sections that have no visible items under the active filter.
+    var secs = document.querySelectorAll("#outline details.sec");
+    secs.forEach(function(sec){
+      if(key === null){ sec.classList.remove("pf-empty"); return; }
+      var visible = sec.querySelectorAll(".item[data-status]:not(.pf-hidden)").length;
+      sec.classList.toggle("pf-empty", visible === 0);
+    });
+    // Sync chip active state.
+    document.querySelectorAll(".status-chip").forEach(function(ch){
+      ch.classList.toggle("active", ch.getAttribute("data-chip-key") === key);
+    });
+  }
+
+  function _onChipClick(key){
+    _activeFilter = (_activeFilter === key) ? null : key;   // toggle: click active chip → clear
+    _applyFilter(_activeFilter);
+  }
+
   // ---------- at-a-glance ----------
   function renderGlance(){
     var g=document.getElementById("glance");
@@ -441,9 +480,28 @@ __PLAN_DATA__
     // A profiled (non-app) consumer often has no Content/Cascade figures; drop the empty cells
     // rather than render bare "CONTENT"/"CASCADE" labels. App path (no profile) keeps all four.
     if(payload.profile){ rows=rows.filter(function(r){ return r[1]!=null && String(r[1]).trim()!==""; }); }
-    g.innerHTML=rows.map(function(r){
-      return '<div class="cell"><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
-    }).join("");
+    // PF-1 (inspect-loop derivative value): in a profiled navigator view, replace the STATUS cell's
+    // plain text with interactive chips — the status roll-up becomes a live grounding filter.
+    if(!EU && payload.profile && s.status_counts && Object.keys(s.status_counts).length){
+      g.innerHTML=rows.map(function(r){
+        if(r[0] !== "Status") return '<div class="cell"><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
+        var chips = Object.keys(s.status_counts).map(function(key){
+          var cnt=s.status_counts[key], p=profStatus(key), bg=p?p.color:"#888", lbl=p?p.label:key;
+          return '<button class="status-chip" type="button" data-chip-key="'+esc(key)+'"'+
+            ' style="background:'+esc(bg)+'" title="Filter to '+esc(lbl)+' items">'+
+            esc(lbl)+' ('+esc(String(cnt))+')</button>';
+        }).join("");
+        return '<div class="cell" id="glance-status-cell"><div class="k">'+esc(r[0])+'</div>'+
+          '<div class="status-chips" id="status-chips">'+chips+'</div></div>';
+      }).join("");
+      g.querySelectorAll(".status-chip").forEach(function(btn){
+        btn.addEventListener("click", function(){ _onChipClick(btn.getAttribute("data-chip-key")); });
+      });
+    } else {
+      g.innerHTML=rows.map(function(r){
+        return '<div class="cell"><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
+      }).join("");
+    }
   }
 
   // ---------- mockups ----------
@@ -487,6 +545,9 @@ __PLAN_DATA__
   // ---------- items ----------
   function renderItem(k,item,nav){
     var w=document.createElement("div"); w.className="item";
+    // PF-1: expose the item's status as a data attribute when a domain profile is active so the
+    // filter machinery (data-status selectors) can show/hide items without touching the app path.
+    if(payload.profile && item.status) w.setAttribute("data-status", item.status);
     var mock=mockFor(k,item);
     var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
     var livesHtml="";
@@ -585,6 +646,7 @@ __PLAN_DATA__
 
   // ---------- render the whole document from the current variant (re-run on toggle, QW-1) ----------
   function renderAll(){
+    _activeFilter = null;   // PF-1: reset status filter on each full re-render (voice/depth toggle)
     data=resolveVM(cur);                                       // EC-4: kit → its base voice's variant
     EU=((data.audience&&data.audience.voice)==="end_user"); s=data.summary||{};
     renderLens();                                              // EC-4: the delivery-role focus lens
