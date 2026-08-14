@@ -1,0 +1,62 @@
+{# OWNED — authored for F-304; maintained by the project. #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="wizard-step-container">
+    <header class="wizard-header">
+        <h1>{{ title }}</h1>
+        <div class="wizard-mode-toggle">
+            <a href="{{ request.url.replace_query_params(mode='fast') }}" 
+               class="toggle-button {% if not is_deep_mode %}active{% endif %}">
+               Fast
+            </a>
+            <a href="{{ request.url.replace_query_params(mode='deep') }}" 
+               class="toggle-button {% if is_deep_mode %}active{% endif %}">
+               Deep
+            </a>
+        </div>
+    </header>
+
+    <form method="post" action="{{ request.url }}" class="wizard-form">
+        {{ form.csrf_token }}
+
+        {% for field in form if field.type not in ['CSRFTokenField'] %}
+        <div class="form-field">
+            {{ field.label(class="form-label") }}
+            {{ field(class="form-input") }}
+            {% if field.errors %}
+            <ul class="form-errors">
+                {% for error in field.errors %}
+                <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            {% if field.description %}
+            <p class="form-description">{{ field.description }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        <footer class="wizard-actions">
+            <div class="nav-buttons">
+                {% if back_url %}
+                <a href="{{ back_url }}" class="button secondary">Back</a>
+                {% endif %}
+                <button type="submit" class="button primary">Save and Continue</button>
+            </div>
+            <div class="ai-action">
+                {% if ai_draft_url %}
+                <button type="button" class="button ai-draft"
+                        hx-post="{{ ai_draft_url }}"
+                        hx-params='{"mode": "{% if is_deep_mode %}deep{% else %}fast{% endif %}"}'
+                        hx-target="form"
+                        hx-swap="outerHTML"
+                        hx-indicator=".htmx-indicator">
+                    Draft with AI
+                </button>
+                {% endif %}
+            </div>
+        </footer>
+    </form>
+</div>
+{% endblock %}
