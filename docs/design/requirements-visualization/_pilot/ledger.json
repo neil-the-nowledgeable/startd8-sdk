@@ -207,6 +207,36 @@
       "phase": "verify",
       "top_gap": "glance-approvable \u2713 \u2014 no mechanical gap; promote as an exemplar.",
       "when": "2026-08-14T19:28:44.581639+00:00"
+    },
+    {
+      "cruft_lint": "cruft_lint: requirements-FR-6.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": true,
+        "canonical": "",
+        "confidence": 0.9,
+        "does": "Project a det-req/0.1 file into FR Nodes (does / Verify / Touches / optional evidence locators / derived fr_health). Default coupling = **vendor_thin** evidence/`fr_health` helper with SCHEMA/extract cite; optional `DET_REQ_KIT` subprocess; forbid required sibling-path import; do not fork the kit schema. Full V-1..V-5 plan-DAG parity is out of scope.",
+        "fr": "FR-6",
+        "fr_health": "n/a",
+        "handle": "",
+        "lives_count": 3,
+        "lives_resolve": 3,
+        "lives_types": {
+          "code": 2,
+          "test": 1
+        },
+        "name": "",
+        "pilot_score": 1.0,
+        "serves": "O-1",
+        "ships_when": false,
+        "status_key": "grounded",
+        "title": "Minimal det-req requirements source",
+        "touches": "`src/startd8/navigator/sources_requirements.py`, `tests/unit/navigator/test_sources_and_cli.py`, navigator-build",
+        "verify": "fixture REQ with a commit-anchored code locator builds exit 0 with typed evidence; done-claim without locator \u2260 grounded; unit tests pass with det-req-kit **absent** from `sys.path`",
+        "wont": []
+      },
+      "phase": "verify",
+      "top_gap": "glance-approvable \u2713 \u2014 no mechanical gap; promote as an exemplar.",
+      "when": "2026-08-14T20:08:04.278464+00:00"
     }
   ],
   "FR-8": [

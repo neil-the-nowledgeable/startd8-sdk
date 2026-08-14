@@ -1,8 +1,8 @@
-# Navigator dogfood — pilot improvement ledger
+# Navigator dogfood — pilot ledger (requirements)
 
-Repeatable per-FR loop (see `PILOT_IMPROVEMENT_LOOP.md`). Auto-generated; do not hand-edit.
+Repeatable per-node loop (see `PILOT_IMPROVEMENT_LOOP.md`). Auto-generated; do not hand-edit.
 
-## FR-6 — score 0.65 ↑ 1.0 (4 pass(es))
+## FR-6 — score 0.65 ↑ 1.0 (5 pass(es))
 
 | # | phase | when | status | conf | health | lives(resolve) | appr | score |
 |---|-------|------|--------|------|--------|----------------|------|-------|
@@ -10,6 +10,7 @@ Repeatable per-FR loop (see `PILOT_IMPROVEMENT_LOOP.md`). Auto-generated; do not
 | 1 | verify | 2026-08-14T19:18 | grounded | 0.6 | n/a | code:2 (2/2) | Y | 0.65 |
 | 2 | verify | 2026-08-14T19:19 | grounded | 0.9 | n/a | code:2,test:1 (3/3) | Y | 0.85 |
 | 3 | verify | 2026-08-14T19:28 | grounded | 0.9 | n/a | code:2,test:1 (3/3) | Y | 1.0 |
+| 4 | verify | 2026-08-14T20:08 | grounded | 0.9 | n/a | code:2,test:1 (3/3) | Y | 1.0 |
 
 **Next gap:** glance-approvable ✓ — no mechanical gap; promote as an exemplar.
 

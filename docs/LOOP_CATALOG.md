@@ -38,6 +38,30 @@ a script and/or runbook.
 - **Status:** ACTIVE. Requirements consumer complete (trio at 1.0); capability consumer surveyed +
   baselined (systemic finding: manifest carries **no** approve prompts → all nodes cap at 0.85).
 
+### 2. Node Content Improvement Loop  *(child of the Pilot loop)*
+
+- **What it does:** improves a navigator node's **authored content** (orthogonal to the Pilot loop's
+  *grounding*) — the deterministic **Name:** and its derived handle/canonical ref, behavior prose,
+  acceptance test, objective link, surface, and non-goals — one node at a time via the same
+  `baseline → diagnose → author → verify → record` cycle.
+- **Driver:** `scripts/navigator_content_loop.py`  ·  **Convention:** `docs/NAMING_CONVENTION.md`
+- **Moving number:** `content_score` (name 0.30 · real behavior 0.15 · verify 0.15 · serves 0.15 ·
+  touches 0.15 · wont 0.10). The Name signal is the headline — a node identified by its integer key
+  alone is the anti-pattern this loop closes; handle + canonical ref derive from the name.
+- **Relationship to the Pilot loop:** *sibling, orthogonal.* Both read one shared node→metrics pass
+  (`_metrics_of_node`), so grounding and content never re-derive each other. The **Pilot loop calls
+  this loop** for its content read and **hands off** when a node is grounding-complete
+  (`pilot_score=1.0`) but content-incomplete — e.g. FR-6 is fully grounded yet content_score 0.6
+  (no `Name:`).
+- **Run it:**
+  ```bash
+  python3 scripts/navigator_content_loop.py --survey            # rank nodes by content_score
+  python3 scripts/navigator_content_loop.py FR-2                # baseline (top gap: NAME)
+  python3 scripts/navigator_content_loop.py FR-2 --verify       # after authoring Name: → delta
+  ```
+- **State:** `docs/design/requirements-visualization/_pilot/ledger-content*.{json,md}`.
+- **Status:** ACTIVE. Requirements: FR-1 authored (content 0.9), FR-2…FR-10 need `Name:` (0.6).
+
 ---
 
 ## Related established loops in the repo (cross-reference)

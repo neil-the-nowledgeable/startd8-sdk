@@ -129,6 +129,18 @@ def _metrics_of_node(n) -> Dict[str, Any]:
         "lives_resolve": sum(1 for r in refs if _resolve_ref(r)),
         "approve_prompts": bool(a.get("approve_prompts")),
         "ships_when": bool(node["ships_when"]),
+        # Authored-CONTENT fields (read by the Node Content Improvement Loop, a sibling driver).
+        # Single extraction, two scores: pilot_score reads the grounding fields above; content_score
+        # reads these. Kept here so both loops share one node→metrics pass (no re-derivation).
+        "name": a.get("name", ""),
+        "handle": a.get("handle", ""),
+        "canonical": a.get("canonical", ""),
+        "title": a.get("title", ""),
+        "does": (n.does or "").strip(),
+        "verify": a.get("verify", ""),
+        "serves": a.get("serves", ""),
+        "touches": a.get("touches", ""),
+        "wont": list(getattr(n, "wont", ()) or ()),
     }
     m["pilot_score"] = _pilot_score(m)
     return m
@@ -303,6 +315,18 @@ def run_pilot(key: str, source: str, path, verify: bool, reset: bool) -> int:
     _print_metrics(m)
     print(f"  cruft_lint: {cruft}")
     print(f"  TOP GAP → {_top_gap(m, source)}")
+
+    # Call the child loop for its orthogonal read: grounding (this loop) vs authored content
+    # (Node Content Improvement Loop). Lazy import avoids a module cycle; absent child → skip.
+    try:
+        from navigator_content_loop import content_score, content_top_gap
+        cs = content_score(m)
+        print(f"  content_score={cs}  (child loop)")
+        if m["pilot_score"] >= 1.0 and cs < 1.0:
+            print(f"  → grounding complete; CONTENT gap remains → "
+                  f"navigator_content_loop.py {key} --source {source}: {content_top_gap(m, source)}")
+    except ImportError:
+        pass
 
     if phase == "verify":
         base = entries[0]["metrics"]
