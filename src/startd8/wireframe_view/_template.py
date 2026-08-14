@@ -80,6 +80,22 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .section-lead{font-family:var(--serif);font-size:13px;letter-spacing:.02em;color:var(--faint);
     text-transform:uppercase;margin:0 0 12px}
 
+  /* Structure-only view (profiled navigator): strip the descriptive layer, leaving just the
+     section groups + node labels — the underlying node structure with no other text. */
+  body.structure-only .meta, body.structure-only .whybox, body.structure-only .lead,
+  body.structure-only .glance, body.structure-only #legend, body.structure-only #signbar,
+  body.structure-only #warn, body.structure-only .det, body.structure-only .lives,
+  body.structure-only .was, body.structure-only .narr, body.structure-only .needlist,
+  body.structure-only .sec-one, body.structure-only .needs, body.structure-only .allset,
+  body.structure-only .badge, body.structure-only .signoff, body.structure-only .todos-box,
+  body.structure-only .item .row details, body.structure-only .sig-mark{display:none !important}
+  body.structure-only .item{padding:4px 0}
+  body.structure-only .sec-body{padding-top:6px}
+  /* structure-only shows the bare node key, not the full descriptive label */
+  .lbl-key{display:none}
+  body.structure-only .lbl{display:none}
+  body.structure-only .lbl-key{display:inline;font-weight:600;font-size:14px}
+
   /* ---------- sections (progressive disclosure) ---------- */
   details.sec{background:var(--card);border:1px solid var(--line);border-radius:13px;margin:11px 0;
     overflow:hidden;transition:border-color .15s, box-shadow .15s}
@@ -454,7 +470,9 @@ __PLAN_DATA__
     if(item.was&&item.was.length&&!EU){
       wasHtml='<div class="was"><span class="lk">Was</span>'+esc(item.was.join(" · "))+'</div>';
     }
-    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+badge(item.status)+'</div>'+det+livesHtml+wasHtml;
+    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
+      (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // structure-only: bare node key
+      badge(item.status)+'</div>'+det+livesHtml+wasHtml;
     if(mock||k==="pages"){
       var d=document.createElement("details");
       var sm=document.createElement("summary"); sm.className="drill"; sm.textContent="show a sketch";
@@ -574,6 +592,10 @@ __PLAN_DATA__
     '<label class="tg" id="tg-depth">Depth<select id="tg-flu">'+
       '<option value="beginner">Fuller</option><option value="intermediate">Standard</option>'+
       '<option value="advanced">Terser</option></select></label>'+
+    // Structure-only switch: a profiled (navigator) consumer can strip all prose and see just the
+    // node structure. Gated to profiled views so the app-scaffold path is byte-identical (FR-8).
+    (payload.profile ? '<label class="tg" id="tg-struct"><input type="checkbox" id="structOnly">'+
+      '<span style="margin-left:5px">Structure only</span></label>' : '')+
     '<span style="flex:1"></span>'+
     '<button id="ex">Open all</button><button id="co">Close all</button>';
   var selRole=document.getElementById("tg-role"), selFlu=document.getElementById("tg-flu");
@@ -587,6 +609,8 @@ __PLAN_DATA__
   selRole.onchange=onToggle; selFlu.onchange=onToggle; syncDepth();
   document.getElementById("ex").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=true;}); };
   document.getElementById("co").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=false;}); };
+  var struct=document.getElementById("structOnly");   // structure-only view toggle (profiled only)
+  if(struct) struct.onchange=function(){ document.body.classList.toggle("structure-only", struct.checked); };
 
   renderAll();
 })();
