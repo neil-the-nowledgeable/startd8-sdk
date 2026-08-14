@@ -6,8 +6,20 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Whitespace-normalized, ANSI- and box-stripped CLI output.
+
+    Rich renders the error panel with color and word-wraps it in a box; CI (no
+    TTY width, color forced) inserts SGR codes *between* words, so a raw
+    substring check is brittle. Strip both before asserting on the message."""
+    return " ".join(_ANSI.sub("", text).replace("│", " ").split())
 
 from startd8.observability import compare_live, live_standup
 from startd8.observability.compare import ComparisonReport
@@ -587,5 +599,5 @@ def test_cli_apply_profile_fix_conflicts_with_write_baseline(monkeypatch, tmp_pa
                         "--write-baseline", "--baseline", str(baseline))
     assert res.exit_code == 2                         # BadParameter (typer usage error)
     assert manifest.read_text() == "spec: {}\n"       # conflict blocked BOTH writes
-    # the message is present but Rich word-wraps it in a box; check whitespace-normalized
-    assert "separate authoring" in " ".join(res.output.replace("│", " ").split())
+    # the message is present but Rich word-wraps it in a colored box; normalize first
+    assert "separate authoring" in _plain(res.output)

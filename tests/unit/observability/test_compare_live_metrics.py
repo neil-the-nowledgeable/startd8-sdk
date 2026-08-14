@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("opentelemetry")  # optional 'all'/'otel' extra — skip on the dev-only CI install
+
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
