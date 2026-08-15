@@ -14,6 +14,7 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 | **REQ-02 N-level tree renderer** | `render_tree.py` ported from ContextCore live pair, XSS-safe, `--renderer tree` | **built, 235 tests** |
 | **REQ-03 a11y renderer + corpus index** | `render_a11y.py` + `render_index.py` ported standalone; `build --format a11y` + `navigator index --dir` | **built, +20 tests** (`d416fc38`) |
 | **REQ-04 lift lenses to shared transform** | `node_lenses.py` (`apply_node_lenses`/`apply_section_lenses`/`project_nodes`); compose is now a thin wrapper — byte-identity held | **built, 272 tests** (`5cb91c37`) |
+| **REQ-05 graph/network-topology renderer** | `graph_projection.py` (ported) + `render_graph.py` standalone SVG; deterministic layout, cycle-safe; `--renderer graph` + `--semantic-only/--full-graph` | **built, 284 tests** (`b39540bd`) — 1st Spec Delivery Loop delivery |
 | **Navigator debugging layer** | debug panel (structOnly / combined / hideScaffold / scaffold), provenance readout, layer legend, PF-1 status chips — all gated on `payload.profile` for byte-identity | built |
 | **5 loops + catalog** | pilot / content / origin-audit / cruft / inspect loops + `docs/LOOP_CATALOG.md` | built |
 | **Node-schema source (Kagami mirror)** | `sources_node_schema.py` introspects `Node` → Nodes | built |
@@ -27,8 +28,7 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 
 | Spec | What | Why open |
 |---|---|---|
-| **REQ-05 graph/network topology renderer** | 7 single-line FRs; ports CC `graph_projection.py` (Mottainai), new standalone HTML shell; inherits REQ-04 lenses | **specced, not built** |
-| **REQ-06 corpus governance** | 9 FRs; reuses `cruft_lint` + loop family (not a parallel mechanism); `navigator govern --dir`; LOOP_CATALOG #6 | **specced, not built** |
+| **REQ-06 corpus governance** | 9 FRs; reuses `cruft_lint` + loop family (not a parallel mechanism); `navigator govern --dir` | **specced, not built** |
 | **REQ-07 diff-audience view** | 10 FRs; `diff_nodes`/`NodeDiff` greenfield delta engine + standalone renderer; `navigator diff --before --after` | **specced, not built** |
 | **REQ-08 NL-programming pipeline provenance** | 8 FRs; `Stage`-as-Node (extend, don't fork), `Verify:`-as-oracle, extends `provenance.py` | **specced, not built** |
 
