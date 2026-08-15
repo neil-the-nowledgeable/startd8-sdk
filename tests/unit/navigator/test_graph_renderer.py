@@ -47,6 +47,24 @@ def _cycle() -> list:
     return [a, b, c]
 
 
+# ---- EB-1: validate_graph_model wired into the render path -------------------------
+
+def test_validate_graph_model_is_wired_and_warns(tmp_path, monkeypatch):
+    """EB-1: the ported validator runs in the render path; issues surface as a visible escaped banner."""
+    import startd8.navigator.render_graph as rg
+    monkeypatch.setattr(rg, "validate_graph_model", lambda g: ("dangling edge X->Y",))
+    out = rg.render_navigator_graph_html(_cycle(), tmp_path / "g.html", title="T")
+    doc = Path(out).read_text("utf-8")
+    assert 'class="graph-warn"' in doc and "integrity issue" in doc
+    assert "dangling edge X-&gt;Y" in doc  # escaped, not raw
+
+
+def test_valid_graph_has_no_warning_banner(tmp_path):
+    """EB-1: a valid graph (the projection self-heals) yields no banner — output stays clean."""
+    out = render_navigator_graph_html(_cycle(), tmp_path / "g.html", title="T")
+    assert "graph-warn" not in Path(out).read_text("utf-8")
+
+
 # ---- FR-2: standalone -------------------------------------------------------------
 
 def test_module_does_not_import_wireframe_plan():

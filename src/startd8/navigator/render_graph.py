@@ -28,7 +28,7 @@ import html
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .graph_projection import nodes_to_graph
+from .graph_projection import nodes_to_graph, validate_graph_model
 from .models import Node, NodeStatus
 from .render_tree import _safe_color, _safe_href  # reuse — do not re-copy (Kagami, D2)
 
@@ -328,6 +328,10 @@ def render_navigator_graph_html(
     Never imports ``wireframe_view`` (FR-6); no CDN / ``<script src>`` (NR-6). Returns the written path.
     """
     graph = nodes_to_graph(nodes)
+    # EB-1: run the ported validator in the real render path ("wired, not just built") — a dangling or
+    # duplicate edge is surfaced as a visible banner instead of drawn blind. The projection self-heals,
+    # so a valid graph yields no issues and no banner → its output stays byte-identical.
+    _issues = validate_graph_model(graph)
     graph_nodes: List[Dict[str, Any]] = list(graph["nodes"])
     edges: List[Dict[str, Any]] = list(graph["edges"])
 
@@ -438,6 +442,16 @@ def render_navigator_graph_html(
     node_count = len(graph_nodes)
     edge_count = len(edges)
 
+    # EB-1 banner: empty (byte-identical) for a valid graph; visible + escaped when issues exist.
+    warn_html = ""
+    if _issues:
+        _items = "".join(f"<li>{html.escape(str(i))}</li>" for i in _issues)
+        warn_html = (
+            '<div class="graph-warn" role="alert" style="margin:8px 12px;padding:8px 12px;'
+            'border:1px solid #b91c1c;background:#fef2f2;color:#7f1d1d;border-radius:6px">'
+            f"⚠ graph model has {len(_issues)} integrity issue(s):<ul>{_items}</ul></div>"
+        )
+
     doc = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -451,7 +465,7 @@ def render_navigator_graph_html(
     <span class="sub">{node_count} nodes · {edge_count} edges · drag to pan · scroll to zoom · hover to highlight</span>
     <div class="legend">{legend_html}</div>
   </div>
-</header>
+</header>{warn_html}
 <div id="stage">
 <svg viewBox="0 0 {_W} {_H}" preserveAspectRatio="xMidYMid meet">
   <defs>
