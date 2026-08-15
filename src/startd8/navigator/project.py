@@ -18,7 +18,7 @@ from startd8.wireframe import (
 )
 from startd8.wireframe.profile import RenderProfile
 
-from .models import Node, NodeStatus
+from .models import Node, NodeEvidence, NodeStatus
 
 _STATUS_MAP = {
     NodeStatus.BUILT: "planned",
@@ -215,25 +215,57 @@ def nodes_to_wireframe_plan(
     )
 
 
+def _node_to_json(n: Node) -> Dict[str, Any]:
+    """One Node → JSON dict, recursing ``children`` so the full tree round-trips (REQ-02 FR-4)."""
+    return {
+        "key": n.key,
+        "does": n.does,
+        "status": n.status,
+        "wont": list(n.wont),
+        "lives": [{"type": e.type, "ref": e.ref, "note": e.note} for e in n.lives],
+        "ships_when": n.ships_when,
+        "confidence": n.confidence,
+        "triggers": list(n.triggers),
+        "children": [_node_to_json(c) for c in n.children],  # FR-4: carry the tree
+        "child_keys": list(n.child_keys),
+        "category": n.category,
+        "orientation": n.orientation,
+        "route_state": n.route_state,
+        "attributes": dict(n.attributes),
+    }
+
+
 def nodes_to_json(nodes: Sequence[Node]) -> List[Dict[str, Any]]:
-    """JSON-safe Node list (for ``--format json``)."""
-    out: List[Dict[str, Any]] = []
-    for n in nodes:
+    """JSON-safe Node list (for ``--format json``) — carries ``children`` recursively (FR-4)."""
+    return [_node_to_json(n) for n in nodes]
+
+
+def nodes_from_json(data: Sequence[Dict[str, Any]]) -> List[Node]:
+    """Inverse of ``nodes_to_json``: reconstruct a Node tree from a pre-projected NODE-SCHEMA-JSON
+    graph (REQ-02 FR-2, ``--source nodes-json``). ``children`` recurse; unknown keys are ignored."""
+    out: List[Node] = []
+    for d in data:
         out.append(
-            {
-                "key": n.key,
-                "does": n.does,
-                "status": n.status,
-                "wont": list(n.wont),
-                "lives": [{"type": e.type, "ref": e.ref, "note": e.note} for e in n.lives],
-                "ships_when": n.ships_when,
-                "confidence": n.confidence,
-                "triggers": list(n.triggers),
-                "category": n.category,
-                "orientation": n.orientation,
-                "route_state": n.route_state,
-                "attributes": dict(n.attributes),
-            }
+            Node(
+                key=str(d.get("key", "")),
+                does=str(d.get("does", "")),
+                status=str(d.get("status", NodeStatus.SPEC)),
+                wont=tuple(d.get("wont") or ()),
+                lives=tuple(
+                    NodeEvidence(type=str(e.get("type", "")), ref=str(e.get("ref", "")),
+                                 note=str(e.get("note", "")))
+                    for e in (d.get("lives") or [])
+                ),
+                ships_when=str(d.get("ships_when", "")),
+                confidence=d.get("confidence"),
+                triggers=tuple(d.get("triggers") or ()),
+                children=tuple(nodes_from_json(d.get("children") or [])),  # recurse the tree
+                child_keys=tuple(d.get("child_keys") or ()),
+                category=str(d.get("category", "")),
+                orientation=str(d.get("orientation", "")),
+                route_state=str(d.get("route_state", "")),
+                attributes=dict(d.get("attributes") or {}),
+            )
         )
     return out
 

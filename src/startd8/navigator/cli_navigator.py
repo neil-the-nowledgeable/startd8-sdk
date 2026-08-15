@@ -14,7 +14,8 @@ import typer
 from rich.console import Console
 
 from .ground import write_grounding
-from .project import nodes_to_json, render_nodes_html
+from .project import nodes_from_json, nodes_to_json, render_nodes_html
+from .render_tree import render_navigator_tree_html
 from .sources_capability import (
     CAPABILITY_PROFILE,
     default_capability_index_path,
@@ -38,9 +39,13 @@ def build(
     source: str = typer.Option(
         ...,
         "--source",
-        help="Node source: capability-index | requirements | node-schema",
+        help="Node source: capability-index | requirements | node-schema | nodes-json",
     ),
     fmt: str = typer.Option("json", "--format", help="Output format: json | html"),
+    renderer: Optional[str] = typer.Option(
+        None, "--renderer",
+        help="HTML renderer: wireframe | tree (default: tree for nodes-json, else wireframe)",
+    ),
     out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
     requirements: Optional[Path] = typer.Option(
         None, "--requirements", help="det-req markdown path (source=requirements)"
@@ -48,7 +53,11 @@ def build(
     capability_index: Optional[Path] = typer.Option(
         None, "--capability-index", help="Override capability YAML path"
     ),
+    nodes_json: Optional[Path] = typer.Option(
+        None, "--nodes-json", help="pre-projected NODE-SCHEMA-JSON graph (source=nodes-json)"
+    ),
     group_by: str = typer.Option("category", "--group-by", help="Section grouping axis"),
+    open_depth: int = typer.Option(2, "--open-depth", help="tree renderer: levels open by default"),
 ) -> None:
     """Project a source into Nodes and write JSON or HTML."""
     source = source.strip().lower()
@@ -70,15 +79,27 @@ def build(
             nodes = nodes_from_node_schema()
             profile = NODE_SCHEMA_PROFILE
             project_root = "."
+        elif source == "nodes-json":
+            if nodes_json is None:
+                console.print("[red]error:[/red] --nodes-json is required for source=nodes-json")
+                raise typer.Exit(_EXIT_ERR)
+            data = json.loads(Path(nodes_json).read_text(encoding="utf-8"))
+            nodes = nodes_from_json(data.get("nodes", data) if isinstance(data, dict) else data)
+            profile = None  # a pre-projected graph brings its own domain; default to the tree renderer
+            project_root = str(Path(nodes_json).parent)
         else:
             console.print(
                 f"[red]error:[/red] unknown --source {source!r} "
-                "(expected capability-index|requirements|node-schema)"
+                "(expected capability-index|requirements|node-schema|nodes-json)"
             )
             raise typer.Exit(_EXIT_ERR)
     except (FileNotFoundError, ValueError, OSError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)
+
+    # Resolve the HTML renderer: explicit --renderer wins; else tree for a pre-projected graph
+    # (the adopter seam), wireframe for the flat 2-level sources (back-compat).
+    renderer = (renderer or ("tree" if source == "nodes-json" else "wireframe")).strip().lower()
 
     if fmt == "json":
         payload = {"source": source, "nodes": nodes_to_json(nodes)}
@@ -95,14 +116,24 @@ def build(
         if out is None:
             console.print("[red]error:[/red] --out is required for --format html")
             raise typer.Exit(_EXIT_ERR)
-        render_nodes_html(
-            nodes,
-            out,
-            project_root=project_root,
-            group_by=group_by,
-            profile=profile,
-        )
-        console.print(f"wrote {out} ({len(nodes)} nodes)")
+        if renderer == "tree":
+            render_navigator_tree_html(
+                list(nodes), out,
+                title=f"Node Navigator — {source}",
+                open_depth=open_depth,
+            )
+        elif renderer == "wireframe":
+            render_nodes_html(
+                nodes,
+                out,
+                project_root=project_root,
+                group_by=group_by,
+                profile=profile,
+            )
+        else:
+            console.print(f"[red]error:[/red] unknown --renderer {renderer!r} (expected wireframe|tree)")
+            raise typer.Exit(_EXIT_ERR)
+        console.print(f"wrote {out} ({len(nodes)} nodes, {renderer})")
         raise typer.Exit(_EXIT_OK)
 
     console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)")
