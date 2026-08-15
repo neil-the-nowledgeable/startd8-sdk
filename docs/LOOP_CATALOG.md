@@ -157,6 +157,39 @@ a script and/or runbook.
 - **State:** the gate is stateless (reads the spec live); outcomes recorded in `SESSION_LEDGER`.
 - **Status:** ACTIVE. Build-ready: REQ-02/03/04/05/06/07/08; blocked: REQ-01 (`frs-named`), seat-req.
 
+### 7. Corpus Governance Loop  *(the corpus-wide governor — the discipline REQ-06 formalizes)*
+
+- **What it does:** governs a whole DIRECTORY of `REQ-*.md` docs against the corpus contract, then
+  routes recurring drift to the metabolize skills. The corpus-wide generalization of loop #6's
+  stage-0 gate: where #6's `gate_spec` guards ONE spec's build-readiness, this runs a fixed 5-check
+  battery — **name-block presence · single-line-FR · dangling cross-ref · coverage · index-freshness**
+  — over the whole corpus and emits a pass/fail governance report (0=clean / 1=drift / 2=error).
+  Read-only (NR-2): a fix is a human edit or a downstream-skill hand-off, never an inline rewrite.
+- **Driver:** `startd8 navigator govern --dir <corpus> [--format text|json] [--out …]`
+  (`src/startd8/navigator/govern.py` · CLI in `cli_navigator.py`)  ·  **Spec:**
+  `docs/design/requirements-visualization/REQ-06-corpus-governance.md`
+- **Moving number:** `govern_score` = clean checks / total checks (5). 1.0 = the corpus obeys its
+  discipline; each fail-severity finding names the exact doc + FR + fix.
+- **Reuse (Kagami/Mottainai — FR-9):** every check reads through the ONE shared parser + health model
+  (`det_req.parse_fr_lines`, `render_a11y.ReqView`, `render_index._req_summary`, `naming.name_forms`).
+  `govern.py` owns no second parser, FR parser, or health model. The stage-0 `gate_spec` was **lifted**
+  from the loop-#6 driver into `govern.py` (one home) and re-exported there, so #6's gate and #7's
+  governor read a spec identically.
+- **Precision (FR-8):** a hard acceptance test — the current corpus (REQ-01..09) governs with **zero
+  fail-severity** findings; a check that can't reach zero false positives degrades to **advisory**
+  (reported, never fails the exit code) so the pass never cries wolf. Charter-bounded (NR-6): a new
+  check needs a demonstrated real drift + a rationale here.
+- **Run it:**
+  ```bash
+  startd8 navigator govern --dir docs/design/requirements-visualization           # text, exit 0/1/2
+  startd8 navigator govern --dir docs/design/requirements-visualization --format json
+  ```
+- **Drift routing:** cruft → `/audit-then-metabolize`; a finding-class recurring across ≥2 docs →
+  `/metabolize-finding` (make the class structurally impossible), surfaced by the CLI. Ledger under
+  `docs/design/requirements-visualization/_pilot/` when run as a loop.
+- **Status:** ACTIVE. REQ-01..09 clean (govern_score 1.0); seat-req is a legitimate real finding
+  (stage-0-blocked), not a false positive.
+
 ---
 
 ## Related established loops in the repo (cross-reference)

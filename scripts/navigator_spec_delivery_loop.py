@@ -34,74 +34,28 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from startd8.navigator.det_req import parse_fr_lines  # noqa: E402
+# Kagami (one home): the stage-0 build-readiness gate + its name-block regexes now LIVE in
+# startd8.navigator.govern (REQ-06 corpus governance — `gate_spec` is the single-doc precondition
+# `govern_corpus` generalizes). Import + re-export at module scope so `sdl.gate_spec` / `sdl._HANDLE`
+# / `sdl._SEMNAME` / `sdl._FR_MARKER` keep resolving for existing callers and tests.
+from startd8.navigator.govern import (  # noqa: E402,F401
+    _FR_MARKER,
+    _HANDLE,
+    _SEMNAME,
+    gate_spec,
+)
 
 SPEC_DIR = REPO / "docs/design/requirements-visualization"
 
-_HANDLE = re.compile(r"\*\*Readable handle:\*\*\s*`?([^\n`]+)`?")
-_SEMNAME = re.compile(r"\*\*Semantic name:\*\*\s*\*?(.+)")
-_FR_MARKER = re.compile(r"^- \*\*FR-", re.MULTILINE)
 # top-level (unindented) public def/class — the EB-3 reachability probe's subjects
 _PUBLIC_DEF = re.compile(r"^(?:def|class)\s+([A-Za-z][A-Za-z0-9_]*)\s*[\(:]", re.MULTILINE)
-
-
-# --------------------------------------------------------------------------- #
-# stage 0 — the build-readiness gate (deterministic)
-# --------------------------------------------------------------------------- #
-
-def gate_spec(path: Path) -> Dict[str, Any]:
-    """Run the deterministic build-readiness checks on one det-req spec.
-
-    Returns a verdict dict: {path, ok, checks: [(name, ok, detail)], frs, blocked}.
-    A spec passes iff it has a name block, at least one FR that parses, and every parsed FR
-    carries Name + Verify + Serves. The single-line integrity check compares the raw ``- **FR-``
-    marker count to the parsed count — a hard-wrapped bullet drops fields the parser can't see.
-    """
-    text = path.read_text(encoding="utf-8")
-    checks: List[Tuple[str, bool, str]] = []
-
-    handle = _HANDLE.search(text)
-    semname = _SEMNAME.search(text)
-    name_ok = bool(handle and semname)
-    checks.append(("name-block", name_ok,
-                   f"handle={handle.group(1).strip() if handle else 'MISSING'}"
-                   if name_ok else "no deterministic name block (Readable handle + Semantic name)"))
-
-    frs = parse_fr_lines(text)
-    marker_count = len(_FR_MARKER.findall(text))
-    parse_ok = len(frs) > 0 and len(frs) == marker_count
-    checks.append(("frs-parse", parse_ok,
-                   f"{len(frs)} FR(s) parse, {marker_count} bullet marker(s)"
-                   + ("" if parse_ok else " — MISMATCH: a hard-wrapped FR is dropping fields")))
-
-    missing_name = [f["id"] for f in frs if not f.get("name")]
-    named_ok = bool(frs) and not missing_name
-    checks.append(("frs-named", named_ok,
-                   "every FR has a deterministic Name:" if named_ok
-                   else f"FRs missing Name: {', '.join(missing_name) or '(no FRs)'}"))
-
-    missing_verify = [f["id"] for f in frs if not f.get("verify")]
-    verify_ok = bool(frs) and not missing_verify
-    checks.append(("frs-verify", verify_ok,
-                   "every FR has an acceptance Verify:" if verify_ok
-                   else f"FRs missing Verify: {', '.join(missing_verify) or '(no FRs)'}"))
-
-    missing_serves = [f["id"] for f in frs if not f.get("serves")]
-    serves_ok = bool(frs) and not missing_serves
-    checks.append(("frs-serves", serves_ok,
-                   "every FR links an objective Serves:" if serves_ok
-                   else f"FRs missing Serves: {', '.join(missing_serves) or '(no FRs)'}"))
-
-    ok = all(c[1] for c in checks)
-    return {"path": path, "ok": ok, "checks": checks, "frs": len(frs),
-            "blocked": [c[0] for c in checks if not c[1]]}
 
 
 # --------------------------------------------------------------------------- #

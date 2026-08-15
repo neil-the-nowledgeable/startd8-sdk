@@ -13,6 +13,12 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from .govern import (
+    govern_corpus,
+    recurring_finding_classes,
+    render_govern_json,
+    render_govern_text,
+)
 from .ground import write_grounding
 from .project import nodes_from_json, nodes_to_json, render_nodes_html
 from .render_a11y import render_a11y_to_file
@@ -35,6 +41,8 @@ console = Console()
 
 _EXIT_OK = 0
 _EXIT_ERR = 1
+_EXIT_DRIFT = 1  # govern: fail-severity drift (distinct name, same code as build errors by design)
+_EXIT_OPERATIONAL = 2  # govern: operational error (missing/not-a-dir)
 
 
 @navigator_app.command("build")
@@ -234,3 +242,57 @@ def index(
     n = len(sorted(directory.glob("REQ-*.md")))
     console.print(f"wrote {out} ({n} requirements indexed)")
     raise typer.Exit(_EXIT_OK)
+
+
+@navigator_app.command("govern")
+def govern(
+    directory: Path = typer.Option(
+        ..., "--dir", help="Directory of requirement docs (REQ-*.md) to govern"
+    ),
+    fmt: str = typer.Option("text", "--format", help="Report format: text | json"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Write the report to a path (default: stdout)"
+    ),
+) -> None:
+    """Govern a directory of requirement docs against the corpus contract (REQ-06, read-only).
+
+    Runs the fixed 5-check battery (name-block presence · single-line-FR · dangling cross-ref ·
+    coverage · index-freshness) and emits a pass/fail governance report. Read-only: never writes
+    into the corpus. Exit 0 = clean · 1 = drift (any fail-severity finding) · 2 = operational error.
+    """
+    directory = Path(directory)
+    if not directory.is_dir():
+        console.print(f"[red]error:[/red] --dir {directory} is not a directory")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+    fmt = fmt.strip().lower()
+    if fmt not in ("text", "json"):
+        console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected text|json)")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+    try:
+        report = govern_corpus(directory)
+        rendered = render_govern_json(report) if fmt == "json" else render_govern_text(report)
+    except OSError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+
+    if out is not None:
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(rendered, encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_OPERATIONAL)
+        console.print(f"wrote {out} (exit {report.exit_code})")
+    else:
+        sys.stdout.write(rendered if rendered.endswith("\n") else rendered + "\n")
+
+    # FR-7: a finding-class recurring across many docs is a class to metabolize, not to re-file.
+    recurring = recurring_finding_classes(report)
+    if recurring:
+        for check, n_docs in sorted(recurring.items()):
+            console.print(
+                f"[yellow]recurring:[/yellow] {check} fails across {n_docs} docs — "
+                f"route to /metabolize-finding to make the class structurally impossible."
+            )
+
+    raise typer.Exit(_EXIT_DRIFT if not report.clean else _EXIT_OK)
