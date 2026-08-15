@@ -33,6 +33,7 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 | Spec | What | Why open |
 |---|---|---|
 | **REQ-08 NL-programming pipeline provenance** | 8 FRs; `Stage`-as-Node (extend, don't fork), `Verify:`-as-oracle, extends `provenance.py` | **specced, not built** |
+| **REQ-11 Theme-token activation** (`feature/…-theme-ece95538`) | 6 FRs; architecture §7 step 2 ON the REQ-10 keystone — project resolved `theme` into `RenderProfile.theme_tokens` (empty-default guard) → renderer emits an additive `:root` CSS custom-property override → a base/domain theme change becomes *visible*. Reconciles base theme to the real `_template.py` `:root` values (byte-identity for app path + non-overriding domains); capability's `accent` override is the visible-teeth proof. Authored via `/reflective-requirements` (§0 caught the base-theme placeholder mismatch). **BUILD-READY** (stage-0 gate ✓, 6/6 named FRs) — next Spec Delivery Loop delivery | **specced, not built** |
 
 ---
 
