@@ -106,3 +106,20 @@ Spec Delivery Loop (Plan→Do, stages 0–6)              Stage 7 HARVEST — /h
   (closing Plan↔Check).
 - HTH is the reverse twin of the forward `reflective-then-crp` (Plan→Do) at the composition level;
   here stages 0–6 *are* the Do, so stage 7 is the specific Check→Act that pairs with them.
+
+## Named patterns this loop proved (Yokoten)
+
+Patterns a delivery *proved* and standardized (via stage-7 HARVEST retrospectives), for the next
+delivery to reuse:
+
+- **Derive-to-Prove refactor** (proved by REQ-10, `aa42795e`). To introduce a new authored structure
+  `S` that must be equivalent to an existing literal `L` on a **byte-identity-gated** path: replace
+  `L`'s definition with `L = project(resolve(S))`, constructed so it reproduces the old `L`
+  **byte-for-byte** (asserted by a frozen-copy equality test **and** the pre-existing byte-identity
+  gate left *unedited*). One move buys three things at once: (1) proves `S` is a faithful superset of
+  `L`; (2) wires `S`'s public transforms (`resolve`/`project`) into a **real consumer**, so the
+  reachability probe reads them *wired*, not DORMANT; (3) leaves renderers untouched. `S`'s *extra*
+  capacity rides **resolved-but-unprojected** as a deliberate, **inventoried** dormancy (Phase-2.5)
+  until a later step consumes it — dormancy by design, not by accident. Example: REQ-10 re-expressed
+  `REQUIREMENTS_PROFILE`/`CAPABILITY_PROFILE` as projections of new `ViewDefinition`s, reproducing
+  both literals exactly while giving `resolve`/`to_render_profile` real call sites.
