@@ -48,6 +48,8 @@ SPEC_DIR = REPO / "docs/design/requirements-visualization"
 _HANDLE = re.compile(r"\*\*Readable handle:\*\*\s*`?([^\n`]+)`?")
 _SEMNAME = re.compile(r"\*\*Semantic name:\*\*\s*\*?(.+)")
 _FR_MARKER = re.compile(r"^- \*\*FR-", re.MULTILINE)
+# top-level (unindented) public def/class — the EB-3 reachability probe's subjects
+_PUBLIC_DEF = re.compile(r"^(?:def|class)\s+([A-Za-z][A-Za-z0-9_]*)\s*[\(:]", re.MULTILINE)
 
 
 # --------------------------------------------------------------------------- #
@@ -103,6 +105,69 @@ def gate_spec(path: Path) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# stage 3 — the reachability probe (EB-3): "wired, not just built"
+# --------------------------------------------------------------------------- #
+
+def _public_symbols(path: Path) -> List[str]:
+    """Top-level public ``def``/``class`` names in a Python file (skip ``_``-prefixed)."""
+    text = path.read_text(encoding="utf-8")
+    return [m.group(1) for m in _PUBLIC_DEF.finditer(text) if not m.group(1).startswith("_")]
+
+
+def reachability(paths: List[Path]) -> List[Dict[str, Any]]:
+    """For each public symbol defined in ``paths``, find call sites elsewhere in ``src/``.
+
+    Grounds the HTH retro's clause 5 ("wired, not just built"): a ported/lifted symbol that is tested
+    but never *called* in the real tree is dormant (D-2 ``validate_graph_model`` was exactly this). A
+    reference only in an ``__init__.py`` re-export is ``export-only`` (wired to the surface, not a
+    consumer). Zero references outside the defining file → ``DORMANT``.
+    """
+    src_files = list((REPO / "src").rglob("*.py"))
+    cache = {f: f.read_text(encoding="utf-8", errors="replace") for f in src_files}
+    out: List[Dict[str, Any]] = []
+    for path in paths:
+        rp = path.resolve()
+        for sym in _public_symbols(path):
+            pat = re.compile(rf"\b{re.escape(sym)}\b")
+            real = export_only = 0
+            for f, text in cache.items():
+                if f.resolve() == rp:
+                    continue
+                if not pat.search(text):
+                    continue
+                if f.name == "__init__.py":
+                    export_only += 1
+                else:
+                    real += 1
+            status = "wired" if real else ("export-only" if export_only else "DORMANT")
+            out.append({"symbol": sym, "path": path, "real": real,
+                        "export_only": export_only, "status": status})
+    return out
+
+
+def run_reachability(paths: List[Path], strict: bool) -> int:
+    files = [p for p in paths if p.suffix == ".py" and p.is_file()]
+    missing = [p for p in paths if p not in files]
+    for p in missing:
+        print(f"skip (not a .py file): {p}", file=sys.stderr)
+    rows = reachability(files)
+    print(f"\n=== reachability probe — {len(rows)} public symbol(s) across {len(files)} file(s) ===")
+    print(f"{'SYMBOL':38}{'STATUS':13}refs (real/export-only)")
+    print("-" * 80)
+    dormant = 0
+    for r in sorted(rows, key=lambda r: (r["status"] != "DORMANT", r["symbol"])):
+        if r["status"] == "DORMANT":
+            dormant += 1
+        print(f"{r['symbol']:38}{r['status']:13}{r['real']}/{r['export_only']}")
+    if dormant:
+        print(f"\n⚠ {dormant} DORMANT symbol(s) — built/ported but no call site in src/ "
+              f"(wire it in the real path, or soft-label the claim).")
+    else:
+        print(f"\n✓ no dormant symbols — every public symbol has a call site.")
+    return 1 if (dormant and strict) else 0
+
+
+# --------------------------------------------------------------------------- #
 # resolution + rendering
 # --------------------------------------------------------------------------- #
 
@@ -135,6 +200,8 @@ Spec Delivery Loop — the 6 stages (runbook: docs/design/requirements-visualiza
   1. PREP      out-of-cast agent: name check + port-map/readiness; surface decisions to the human
   2. BUILD     agent in an ISOLATED git worktree (never the primary tree); locked decisions baked in
   3. GATE-2    PYTHONPATH=<wt>/src pytest <suites>  +  byte-identity UNEDITED  +  no-forbidden-import  +  ruff
+               + reachability probe: navigator_spec_delivery_loop.py --reachability <touched.py...>
+                 ("wired, not just built" — every new/ported public symbol needs a call site)
   4. REVIEW    the human reads the diff (fresh eyes) BEFORE anything lands
   5. LAND      branch → FF main → restore to main; stage OWN files only (file-disjoint from other agents)
   6. RECORD    refresh SESSION_LEDGER; register the outcome
@@ -149,11 +216,18 @@ def main(argv: List[str]) -> int:
     ap.add_argument("spec", nargs="?", help="REQ key (REQ-05 / 05) or path to a spec .md")
     ap.add_argument("--status", action="store_true", help="gate every REQ-*.md in the spec dir")
     ap.add_argument("--checklist", action="store_true", help="print the 6-stage delivery runbook")
+    ap.add_argument("--reachability", nargs="+", metavar="FILE.py", type=Path,
+                    help="GATE-2 reachability probe: flag public symbols in these files with no call site")
+    ap.add_argument("--strict", action="store_true",
+                    help="with --reachability: exit 1 if any symbol is dormant (default: advisory)")
     args = ap.parse_args(argv[1:])
 
     if args.checklist:
         print(CHECKLIST)
         return 0
+
+    if args.reachability:
+        return run_reachability(args.reachability, strict=args.strict)
 
     if args.status:
         specs = sorted(SPEC_DIR.glob("REQ-*.md"))

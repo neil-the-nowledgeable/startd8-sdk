@@ -59,6 +59,34 @@ def test_gate_blocks_hardwrapped_fr(tmp_path):
     assert v["ok"] is False
 
 
+def test_reachability_classifies_wired_dormant_export_only(tmp_path, monkeypatch):
+    """EB-3: a symbol with a real call site = wired; __init__-only = export-only; none = DORMANT."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "mod_a.py").write_text(
+        "def foo_wired():\n    pass\n\ndef bar_dormant():\n    pass\n\ndef baz_export():\n    pass\n",
+        encoding="utf-8",
+    )
+    (src / "consumer.py").write_text("from mod_a import foo_wired\nfoo_wired()\n", encoding="utf-8")
+    (src / "__init__.py").write_text("from .mod_a import baz_export\n", encoding="utf-8")
+    monkeypatch.setattr(sdl, "REPO", tmp_path)
+    rows = {r["symbol"]: r["status"] for r in sdl.reachability([src / "mod_a.py"])}
+    assert rows["foo_wired"] == "wired"
+    assert rows["bar_dormant"] == "DORMANT"
+    assert rows["baz_export"] == "export-only"
+
+
+def test_run_reachability_strict_flips_exit_on_dormant(tmp_path, monkeypatch, capsys):
+    """EB-3: advisory by default (exit 0); --strict exits 1 when a symbol is dormant."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "m.py").write_text("def only_dormant():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(sdl, "REPO", tmp_path)
+    assert sdl.run_reachability([src / "m.py"], strict=False) == 0
+    assert sdl.run_reachability([src / "m.py"], strict=True) == 1
+    assert "DORMANT" in capsys.readouterr().out
+
+
 def test_status_survives_one_unreadable_spec(tmp_path, monkeypatch, capsys):
     """HTH P2/R1: a non-UTF-8 spec must not abort the whole --status sweep."""
     (tmp_path / "REQ-good.md").write_text(_GOOD_SPEC, encoding="utf-8")

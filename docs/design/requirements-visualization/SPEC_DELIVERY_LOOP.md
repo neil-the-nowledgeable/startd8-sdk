@@ -26,7 +26,7 @@ is what makes it *semi*-autonomous rather than autonomous. Everything else the a
 | **0** | **GATE** | script | `navigator_spec_delivery_loop.py REQ-NN` — name block · single-line FRs that parse · every FR has Name/Verify/Serves | **FAIL → stop.** exit 0 = proceed |
 | **1** | **PREP** | out-of-cast agent | deterministic-name check + port-map / readiness report; **surface decisions** (spec/source drift, reuse-vs-add) to the human | readiness report; decisions logged |
 | **2** | **BUILD** | agent, **isolated git worktree** | never the primary tree; locked decisions baked in; follow the built precedents (REQ-02/03/04) | new/edited files in the worktree, uncommitted |
-| **3** | **GATE-2** | script | `PYTHONPATH=<wt>/src pytest <suites>` + **byte-identity UNEDITED** + no-forbidden-import + `ruff` | all green; goldens untouched |
+| **3** | **GATE-2** | script | `PYTHONPATH=<wt>/src pytest <suites>` + **byte-identity UNEDITED** + no-forbidden-import + `ruff` + **reachability probe** (`--reachability <touched.py>` — "wired, not just built") | all green; goldens untouched; no dormant symbols |
 | **4** | **REVIEW** | **the human** | read the diff (fresh eyes) BEFORE anything lands — the cruft/dismissal discipline | approval to land |
 | **5** | **LAND** | git cadence | branch → FF `main` → restore to `main`; **stage OWN files only** (file-disjoint from other agents) | commit on `main`, checkout restored |
 | **6** | **RECORD** | script/human | refresh `SESSION_LEDGER`; register the outcome (Mieruka) | ledger reflects new state |
@@ -45,6 +45,7 @@ python3 scripts/navigator_spec_delivery_loop.py --checklist       # print the 6 
 
 # stage 3 — the mechanical gate (run in the build worktree):
 PYTHONPATH=$(pwd)/src python3 -m pytest <touched-suites> -q       # + the byte-identity test, UNEDITED
+python3 scripts/navigator_spec_delivery_loop.py --reachability <touched.py...>  # dormant-symbol probe (EB-3)
 
 # stages 4–5 — human reviews the diff, then land per cadence (from primary, on main):
 git checkout -b feat/<handle> && <copy own files> && pytest && git commit
