@@ -1,0 +1,262 @@
+{
+  "detectability_floor": [
+    {
+      "id": "JAVA-OTEL-5.2-HTTP-METRICS",
+      "reason": "Metric emission is in call bodies (java_parser is resolution-blind); the http import/annotation is already claimed by 5.1-HTTP.",
+      "semconv_domain": "http",
+      "tier": "advisory"
+    },
+    {
+      "id": "JAVA-OTEL-5.7-CICD",
+      "reason": "Pipeline config + env, not a Java import/annotation — nothing to match.",
+      "semconv_domain": "cicd",
+      "tier": "advisory"
+    }
+  ],
+  "detector": "import + annotation (declaration-attached; no call graph)",
+  "invariant": "15 §5 keys key-for-key identical to python-capability-index/communication-crosswalk.json",
+  "pattern_ref": "dev-os/LANGUAGE-DOMAIN-COVERAGE-MAP.md",
+  "patterns": [
+    {
+      "annotation_signatures": [
+        "Path",
+        "GET",
+        "Get",
+        "POST",
+        "Post",
+        "PUT",
+        "DELETE",
+        "RestController",
+        "RequestMapping",
+        "GetMapping",
+        "PostMapping",
+        "Controller"
+      ],
+      "grounding": "corpus",
+      "id": "JAVA-OTEL-5.1-HTTP",
+      "import_signatures": [
+        "javax.ws.rs",
+        "jakarta.ws.rs",
+        "io.micronaut.http",
+        "org.springframework.web",
+        "io.javalin",
+        "spark"
+      ],
+      "otel_pattern": "HTTP",
+      "semconv_domain": "http",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "floor": true,
+      "id": "JAVA-OTEL-5.2-HTTP-METRICS",
+      "note": "Metric emission is in call bodies; not distinguishable from plain HTTP by import/annotation.",
+      "otel_pattern": "HTTP metrics",
+      "semconv_domain": "http"
+    },
+    {
+      "annotation_signatures": [
+        "GrpcService",
+        "GrpcClient"
+      ],
+      "grounding": "corpus",
+      "id": "JAVA-OTEL-5.3-RPC",
+      "import_signatures": [
+        "io.grpc"
+      ],
+      "otel_pattern": "gRPC",
+      "semconv_domain": "rpc",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.3-CONNECT",
+      "import_signatures": [
+        "com.connectrpc",
+        "build.buf.connect"
+      ],
+      "otel_pattern": "Connect RPC",
+      "semconv_domain": "rpc"
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.3-MCP",
+      "import_signatures": [
+        "io.modelcontextprotocol"
+      ],
+      "otel_pattern": "Model Context Protocol",
+      "semconv_domain": "mcp"
+    },
+    {
+      "annotation_signatures": [
+        "KafkaListener",
+        "JmsListener"
+      ],
+      "grounding": "corpus",
+      "id": "JAVA-OTEL-5.4-MESSAGING",
+      "import_signatures": [
+        "org.apache.kafka",
+        "org.springframework.kafka",
+        "javax.jms",
+        "jakarta.jms",
+        "io.nats"
+      ],
+      "otel_pattern": "Messaging",
+      "semconv_domain": "messaging",
+      "span_kinds": [
+        "PRODUCER",
+        "CONSUMER"
+      ]
+    },
+    {
+      "annotation_signatures": [
+        "Repository",
+        "Entity",
+        "Table",
+        "Query"
+      ],
+      "grounding": "corpus",
+      "id": "JAVA-OTEL-5.5-DATABASE",
+      "import_signatures": [
+        "java.sql",
+        "javax.sql",
+        "org.springframework.data",
+        "jakarta.persistence",
+        "javax.persistence",
+        "org.hibernate",
+        "com.mongodb",
+        "io.micronaut.data"
+      ],
+      "otel_pattern": "Database",
+      "semconv_domain": "db",
+      "span_kinds": [
+        "CLIENT"
+      ]
+    },
+    {
+      "annotation_signatures": [
+        "SchemaMapping",
+        "QueryMapping",
+        "MutationMapping"
+      ],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.6-GRAPHQL",
+      "import_signatures": [
+        "graphql",
+        "com.netflix.graphql",
+        "org.springframework.graphql"
+      ],
+      "otel_pattern": "GraphQL",
+      "semconv_domain": "graphql"
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.6-FAAS",
+      "import_signatures": [
+        "com.amazonaws.services.lambda"
+      ],
+      "otel_pattern": "FaaS",
+      "semconv_domain": "faas"
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.6-FEATURE-FLAGS",
+      "import_signatures": [
+        "dev.openfeature",
+        "com.launchdarkly"
+      ],
+      "otel_pattern": "Feature flags",
+      "semconv_domain": "feature-flags"
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.6-GENAI",
+      "import_signatures": [
+        "dev.langchain4j",
+        "com.theokanning.openai",
+        "com.azure.ai.openai",
+        "com.openai"
+      ],
+      "note": "Import-detectable (SDK import = domain hypothesis) — NOT floor.",
+      "otel_pattern": "GenAI",
+      "semconv_domain": "gen-ai"
+    },
+    {
+      "floor": true,
+      "id": "JAVA-OTEL-5.7-CICD",
+      "note": "Evidenced by pipeline config + env (CI/GITHUB_ACTIONS), not a Java import/annotation.",
+      "otel_pattern": "CI/CD",
+      "semconv_domain": "cicd"
+    },
+    {
+      "annotation_signatures": [
+        "Command"
+      ],
+      "grounding": "corpus",
+      "id": "JAVA-OTEL-5.7-CLI",
+      "import_signatures": [
+        "picocli",
+        "org.apache.commons.cli",
+        "com.beust.jcommander"
+      ],
+      "otel_pattern": "CLI",
+      "semconv_domain": "cli"
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.1-DNS",
+      "import_signatures": [
+        "org.xbill.DNS",
+        "io.netty.resolver.dns"
+      ],
+      "note": "stdlib java.net excluded (broad — collides with http); specific signal is a DNS lib.",
+      "otel_pattern": "DNS",
+      "semconv_domain": "dns"
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.1-OBJECT-STORE",
+      "import_signatures": [
+        "com.amazonaws.services.s3",
+        "software.amazon.awssdk.services.s3",
+        "com.google.cloud.storage",
+        "io.minio"
+      ],
+      "otel_pattern": "Object stores",
+      "registry": "derived",
+      "semconv_domain": "object-stores"
+    },
+    {
+      "annotation_signatures": [],
+      "grounding": "ecosystem",
+      "id": "JAVA-OTEL-5.1-CLOUD-SDK",
+      "import_signatures": [
+        "com.amazonaws",
+        "software.amazon.awssdk",
+        "com.google.cloud",
+        "com.azure"
+      ],
+      "otel_pattern": "Cloud SDK",
+      "semconv_domain": "cloud"
+    }
+  ],
+  "resolution_pending": {
+    "axis": "call-site",
+    "note": "No §5 domain currently depends on it — import+annotation covers all 13 achievable — so there are no per-pattern resolution-pending floor entries; this records the deferred capability.",
+    "status": "resolution-pending",
+    "unlock": "SCIP (scip-java) — CODE_KNOWLEDGE_GRAPH_DESIGN.md Phase 4"
+  },
+  "schema_version": "1.0"
+}

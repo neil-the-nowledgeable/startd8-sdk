@@ -1,0 +1,15 @@
+{
+  "counts": {
+    "achievable_patterns": 14,
+    "communication_patterns": 16,
+    "floor_patterns": 2,
+    "language_composites": 5,
+    "structure_forms": 7
+  },
+  "generator": "gen_go_structure_comm_index.py",
+  "pattern_ref": "dev-os/LANGUAGE-DOMAIN-COVERAGE-MAP.md",
+  "schema_version": "1.0",
+  "spec_ref": "docs/design/REQ-crosswalk-go-structure-to-otel-comm-domains.md",
+  "substrate": "go_parser.py (regex, advisory-tier; no call graph)",
+  "tier": "advisory"
+}

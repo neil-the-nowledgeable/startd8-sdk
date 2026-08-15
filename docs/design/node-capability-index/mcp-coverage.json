@@ -1,0 +1,597 @@
+{
+  "corpus": "/Users/neilyashinsky/Documents/dev/MCP",
+  "coverage": {
+    "achievable_coverage_percent": 21.4,
+    "achievable_patterns": 14,
+    "detected_patterns": 3,
+    "floor_patterns_excluded": [
+      "NODE-OTEL-5.2-HTTP-METRICS",
+      "NODE-OTEL-5.7-CICD"
+    ]
+  },
+  "detected": [
+    "NODE-OTEL-5.1-HTTP",
+    "NODE-OTEL-5.3-MCP",
+    "NODE-OTEL-5.6-GENAI"
+  ],
+  "detector": "import-only (ESM+CJS; advisory; call-site \u03c6 is scip-typescript-pending)",
+  "files_analyzed": 599,
+  "generator_index": "gen_node_structure_comm_index.py",
+  "not_evidenced_achievable": [
+    "NODE-OTEL-5.1-CLOUD-SDK",
+    "NODE-OTEL-5.1-DNS",
+    "NODE-OTEL-5.1-OBJECT-STORE",
+    "NODE-OTEL-5.3-CONNECT",
+    "NODE-OTEL-5.3-RPC",
+    "NODE-OTEL-5.4-MESSAGING",
+    "NODE-OTEL-5.5-DATABASE",
+    "NODE-OTEL-5.6-FAAS",
+    "NODE-OTEL-5.6-FEATURE-FLAGS",
+    "NODE-OTEL-5.6-GRAPHQL",
+    "NODE-OTEL-5.7-CLI"
+  ],
+  "parse_errors": 0,
+  "per_file_hyp": [
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/everything/everything.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/everything/sse.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/everything/stdio.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/everything/streamableHttp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/filesystem/__tests__/roots-utils.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/filesystem/__tests__/structured-content.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/filesystem/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/filesystem/roots-utils.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/memory/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Example_MCP_Server_project/src/servers/src/sequentialthinking/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "MCP_Framework_Project/templates/simple/src/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "MCP_Framework_Project/templates/standard/src/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Story_Scaffold_MCP/packages/cost-tracking-sdk/src/middleware/express.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Story_Scaffold_MCP/packages/cost-tracking-sdk/src/middleware/fastify.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.6-GENAI"
+      ],
+      "rel_path": "Story_Scaffold_MCP/packages/cost-tracking-sdk/src/middleware/wrappers/anthropic.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.6-GENAI"
+      ],
+      "rel_path": "Story_Scaffold_MCP/packages/cost-tracking-sdk/src/middleware/wrappers/openai.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.6-GENAI"
+      ],
+      "rel_path": "Story_Scaffold_MCP/src/generators/anthropic-client.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Story_Scaffold_MCP/src/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Story_Scaffold_MCP/src/server/error-middleware.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Story_Scaffold_MCP/src/server/http-server.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Story_Scaffold_MCP/src/tools/tool-registry.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/scripts/cli.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/demoInMemoryOAuthProvider.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/elicitationFormExample.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/elicitationUrlExample.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/jsonResponseStreamableHttp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/simpleSseServer.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/simpleStatelessStreamableHttp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/simpleStreamableHttp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/simpleTaskInteractive.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/sseAndStreamableHttpCompatibleServer.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/ssePollingExample.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/examples/server/standaloneSseWithGetStreamableHttp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/experimental/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/handlers/authorize.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/handlers/metadata.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/handlers/register.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/handlers/revoke.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/handlers/token.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/middleware/allowedMethods.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/middleware/bearerAuth.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/middleware/clientAuth.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/provider.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/providers/proxyProvider.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/auth/router.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/express.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/server/middleware/hostHeaderValidation.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/validation/ajv-provider.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/src/validation/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/examples/server/demoInMemoryOAuthProvider.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/helpers/http.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/handlers/authorize.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/handlers/metadata.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/handlers/register.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/handlers/revoke.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/handlers/token.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/middleware/allowedMethods.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/middleware/bearerAuth.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/middleware/clientAuth.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/providers/proxyProvider.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "Typescript_SDK_project/src/typescript-sdk/test/server/auth/router.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_MCP_remote_client_project/src/example-remote-client/src/components/MCPMessageMonitor.tsx"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_MCP_remote_client_project/src/example-remote-client/src/mcp/connection.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_MCP_remote_client_project/src/example-remote-client/src/mcp/debugTransport.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_MCP_remote_client_project/src/example-remote-client/src/mcp/servers/test/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_MCP_remote_client_project/src/example-remote-client/src/types/mcp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/examples/client.js"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/apps/hello-world/App.tsx"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/interfaces/auth-validator.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/auth/auth-core.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/auth/provider.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/auth/provider.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/handlers/mock-upstream-idp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/services/auth.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/services/auth.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/services/redis-auth.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/auth/types.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/handlers/shttp.integration.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/handlers/shttp.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/handlers/shttp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/handlers/sse.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/index.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/services/mcp.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/services/redisTransport.integration.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/services/redisTransport.test.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/mcp/services/redisTransport.ts"
+    },
+    {
+      "hyp": [
+        "NODE-OTEL-5.1-HTTP",
+        "NODE-OTEL-5.3-MCP"
+      ],
+      "rel_path": "example_mcp_remote_server_good_project/src/Untitled/example-remote-server/src/modules/shared/logger.ts"
+    }
+  ],
+  "per_pattern_file_counts": {
+    "NODE-OTEL-5.1-CLOUD-SDK": 0,
+    "NODE-OTEL-5.1-DNS": 0,
+    "NODE-OTEL-5.1-HTTP": 55,
+    "NODE-OTEL-5.1-OBJECT-STORE": 0,
+    "NODE-OTEL-5.3-CONNECT": 0,
+    "NODE-OTEL-5.3-MCP": 42,
+    "NODE-OTEL-5.3-RPC": 0,
+    "NODE-OTEL-5.4-MESSAGING": 0,
+    "NODE-OTEL-5.5-DATABASE": 0,
+    "NODE-OTEL-5.6-FAAS": 0,
+    "NODE-OTEL-5.6-FEATURE-FLAGS": 0,
+    "NODE-OTEL-5.6-GENAI": 3,
+    "NODE-OTEL-5.6-GRAPHQL": 0,
+    "NODE-OTEL-5.7-CLI": 0
+  }
+}

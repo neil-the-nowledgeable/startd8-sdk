@@ -1,0 +1,1417 @@
+{
+  "corpus": "/Users/neilyashinsky/Documents/dev/OSS/Thanos",
+  "coverage": {
+    "achievable_coverage_percent": 46.2,
+    "achievable_patterns": 13,
+    "detected_patterns": 6,
+    "floor_patterns_excluded": [
+      "GO-OTEL-5.2-HTTP-METRICS",
+      "GO-OTEL-5.7-CICD"
+    ]
+  },
+  "detected": [
+    "GO-OTEL-5.1-CLOUD-SDK",
+    "GO-OTEL-5.1-DNS",
+    "GO-OTEL-5.1-HTTP",
+    "GO-OTEL-5.1-OBJECT-STORE",
+    "GO-OTEL-5.3-RPC",
+    "GO-OTEL-5.7-CLI"
+  ],
+  "files_analyzed": 602,
+  "generator_index": "gen_go_structure_comm_index.py",
+  "not_evidenced_achievable": [
+    "GO-OTEL-5.3-CONNECT",
+    "GO-OTEL-5.4-MESSAGING",
+    "GO-OTEL-5.5-DATABASE",
+    "GO-OTEL-5.6-FAAS",
+    "GO-OTEL-5.6-FEATURE-FLAGS",
+    "GO-OTEL-5.6-GENAI",
+    "GO-OTEL-5.6-GRAPHQL"
+  ],
+  "parse_errors": 0,
+  "per_file_hyp": [
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/compact.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/cmd/thanos/config.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/downsample.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/cmd/thanos/endpointset.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/main_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/cmd/thanos/query.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/cmd/thanos/query_frontend.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/cmd/thanos/query_frontend_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/receive.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/rule.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/sidecar.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/store.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/cmd/thanos/tools_bucket.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/examples/interactive/interactive_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/chunk/cache/background.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/chunk/cache/cache.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/chunk/cache/fifo_cache.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/chunk/cache/memcached.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/chunk/cache/memcached_client.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/chunk/cache/redis_client.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/cortexpb/timeseries.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/frontend/downstream_roundtripper.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/frontend/transport/handler.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/frontend/transport/handler_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/limits.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/marshaling_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/query_range.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/query_range_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/results_cache.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/retry_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/roundtrip.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/roundtrip_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/split_by_interval.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/split_by_interval_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/queryrange/util.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/querier/stats/time_middleware.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/util/flagext/register.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/util/http.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/internal/cortex/util/time.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/util/validation/limits.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/internal/cortex/util/validation/notifications_limit_flag_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/alert/alert.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/alert/alert_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/api/api.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/api/api_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/api/blocks/v1.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/api/blocks/v1_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/api/query/grpc.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/api/query/querypb/query.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/api/query/v1.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/api/query/v1_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/api/rule/v1.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/api/status/v1.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/block.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/block_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/fetcher.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/fetcher_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/binary_reader.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/header_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/lazy_binary_reader.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/lazy_binary_reader_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/parallel_bucket.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/parallel_bucket_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/reader_pool.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/indexheader/reader_pool_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/metadata/markers.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/block/metadata/markers_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/cache/caching_bucket_config.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/cache/groupcache.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/cache/groupcache_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/clientconfig/http.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/blocks_cleaner.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/clean.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/clean_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/compact.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/compact_e2e_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/compact_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/downsample/downsample.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/planner.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/planner_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/retention.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/compact/retention_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/discovery/dns/grpc.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-DNS"
+      ],
+      "rel_path": "thanos/pkg/discovery/dns/miekgdns/lookup.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-DNS"
+      ],
+      "rel_path": "thanos/pkg/discovery/dns/miekgdns/resolver.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/exemplars/exemplarspb/rpc.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/exemplars/multitsdb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/exemplars/proxy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/exemplars/proxy_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/exemplars/tsdb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/extgrpc/client.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/extgrpc/client_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/extgrpc/codec_slicelabels.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/extgrpc/codec_stringlabels.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/extgrpc/snappy/snappy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/exthttp/hedging.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/exthttp/transport.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/extprom/http/instrument_client.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/extprom/http/instrument_server.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/extprom/http/instrument_tenant_server.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/info/info.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/info/infopb/rpc.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/logging/http.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/logging/http_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/logging/httputil.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/logging/options.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/metadata/metadatapb/rpc.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/metadata/prometheus_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/metadata/proxy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/metadata/proxy_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/prober/grpc.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/prober/http.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/prober/http_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/promclient/promclient.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/promclient/promclient_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/query/endpointset.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/query/endpointset_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/query/query_bench_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/query/remote_engine_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/labels_codec.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/labels_codec_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/queryinstant_codec.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/queryinstant_codec_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/queryrange_codec.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/queryrange_codec_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/roundtrip.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/roundtrip_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/queryfrontend/split_by_interval.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/receive/capnproto_server_bench_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/receive/capnproto_server_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/receive/handler.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/receive/handler_localwrite_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/receive/handler_otlp.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/receive/handler_otlp_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/receive/handler_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/receive/head_series_limiter.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/receive/multitsdb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/receive/multitsdb_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/receive/receive_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/receive/writecapnp/client.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/receive/writecapnp/client_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/reloader/example_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/reloader/reloader.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/reloader/reloader_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/reloader/tracker.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/replicate/replicator.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/replicate/scheme.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/replicate/scheme_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/rules/proxy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/rules/proxy_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/rules/rulespb/rpc.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/server/grpc/grpc.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/server/grpc/option.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/server/grpc/request_id.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/server/http/http.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/server/http/middleware/request_id.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/server/http/option.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/shipper/shipper.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/shipper/shipper_e2e_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/shipper/shipper_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/status/proxy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/status/status.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/status/statuspb/rpc.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/acceptance_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/bucket.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/bucket_e2e_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/bucket_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/cache/caching_bucket.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/cache/caching_bucket_factory.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/cache/caching_bucket_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/store/lazy_postings_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/local.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/prometheus.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/proxy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/proxy_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/storepb/custom.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/storepb/inprocess.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/storepb/rpc.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/store/tsdb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/targets/prometheus_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/targets/proxy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/targets/proxy_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/targets/targetspb/rpc.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tenancy/tenancy.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tenancy/tenancy_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/testutil/e2eutil/prometheus.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/grpc.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/tracing/http.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/interceptors/client.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/interceptors/reporter.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/interceptors/server.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/otlp/config_yaml.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/otlp/otlp.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/otlp/otlp_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-CLOUD-SDK"
+      ],
+      "rel_path": "thanos/pkg/tracing/stackdriver/tracer.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/tracing_middleware/client.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.7-CLI"
+      ],
+      "rel_path": "thanos/pkg/tracing/tracing_middleware/grpctesting/interceptor_suite.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/tracing_middleware/grpctesting/pingservice.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/tracing_middleware/grpctesting/testpb/test.pb.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/tracing_middleware/interceptors_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/tracing_middleware/metadata.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/tracing_middleware/server.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/util/metautils/nicemd.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/pkg/tracing/util/metautils/nicemd_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/pkg/ui/ui.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/verifier/index_issue.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/verifier/safe_delete.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/pkg/verifier/verify.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/scripts/cfggen/main.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/compact_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/test/e2e/compatibility_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/distributed_query_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/test/e2e/e2ethanos/helpers.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/e2ethanos/services.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/info_api_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/test/e2e/query_frontend_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.3-RPC",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/query_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/test/e2e/receive_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/rule_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/store_gateway_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.3-RPC"
+      ],
+      "rel_path": "thanos/test/e2e/tls_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP",
+        "GO-OTEL-5.1-OBJECT-STORE"
+      ],
+      "rel_path": "thanos/test/e2e/tools_bucket_web_test.go"
+    },
+    {
+      "hyp": [
+        "GO-OTEL-5.1-HTTP"
+      ],
+      "rel_path": "thanos/test/e2e/tracing_test.go"
+    }
+  ],
+  "per_pattern_file_counts": {
+    "GO-OTEL-5.1-CLOUD-SDK": 1,
+    "GO-OTEL-5.1-DNS": 2,
+    "GO-OTEL-5.1-HTTP": 89,
+    "GO-OTEL-5.1-OBJECT-STORE": 68,
+    "GO-OTEL-5.3-CONNECT": 0,
+    "GO-OTEL-5.3-RPC": 79,
+    "GO-OTEL-5.4-MESSAGING": 0,
+    "GO-OTEL-5.5-DATABASE": 0,
+    "GO-OTEL-5.6-FAAS": 0,
+    "GO-OTEL-5.6-FEATURE-FLAGS": 0,
+    "GO-OTEL-5.6-GENAI": 0,
+    "GO-OTEL-5.6-GRAPHQL": 0,
+    "GO-OTEL-5.7-CLI": 13
+  },
+  "tier": "advisory"
+}

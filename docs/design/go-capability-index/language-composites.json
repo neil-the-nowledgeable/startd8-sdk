@@ -1,0 +1,69 @@
+{
+  "composites": [
+    {
+      "go_forms": [
+        "GO-STRUCT-002"
+      ],
+      "id": "GO-LC-001",
+      "name": "receiver_method",
+      "note": "func (r T) M(): method bound to a receiver type (GoElement.parent_type)"
+    },
+    {
+      "go_forms": [
+        "GO-STRUCT-002"
+      ],
+      "id": "GO-LC-002",
+      "name": "pointer_receiver",
+      "note": "method with *T receiver (GoElement.is_pointer_receiver) — mutation/identity idiom"
+    },
+    {
+      "go_forms": [
+        "GO-STRUCT-003"
+      ],
+      "id": "GO-LC-003",
+      "name": "struct_embedding",
+      "note": "type X struct { Embedded }: composition via embedded types (GoElement.bases)"
+    },
+    {
+      "go_forms": [
+        "GO-STRUCT-004"
+      ],
+      "id": "GO-LC-004",
+      "name": "interface_contract",
+      "note": "interface declaring a method set (GoElement.interface_methods)"
+    },
+    {
+      "go_forms": [
+        "GO-STRUCT-001",
+        "GO-STRUCT-002",
+        "GO-STRUCT-003",
+        "GO-STRUCT-004",
+        "GO-STRUCT-005",
+        "GO-STRUCT-006",
+        "GO-STRUCT-007"
+      ],
+      "id": "GO-LC-005",
+      "name": "exported_api",
+      "note": "Capitalized identifier = package-exported public surface (GoElement.is_exported)"
+    }
+  ],
+  "not_witnessable": [
+    {
+      "name": "goroutine",
+      "reason": "go <expr> is a body statement; go_parser does not parse bodies"
+    },
+    {
+      "name": "channel",
+      "reason": "chan types / <- ops live in bodies + signatures the parser doesn't decompose"
+    },
+    {
+      "name": "defer",
+      "reason": "defer <call> is a body statement; not a declaration form"
+    },
+    {
+      "name": "interface_satisfaction",
+      "reason": "requires cross-element method-set matching (Hitsuzen-derivable), not a single-element form"
+    }
+  ],
+  "schema_version": "1.0"
+}

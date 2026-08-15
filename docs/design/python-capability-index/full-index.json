@@ -1234,11 +1234,17 @@
         "starlette",
         "flask",
         "django.http",
-        "uvicorn"
+        "uvicorn",
+        "falcon",
+        "pyramid",
+        "tornado",
+        "asgi",
+        "wsgi"
       ],
       "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
       "otel_pattern": "HTTP",
       "semconv_domain": "http",
+      "signature_provenance": "opentelemetry-python-contrib instrumentation/ (registry-derived)",
       "span_kinds": [
         "CLIENT",
         "SERVER"
@@ -1307,6 +1313,20 @@
     },
     {
       "ast_nodes": [
+        "Import",
+        "ImportFrom",
+        "Call"
+      ],
+      "id": "PY-OTEL-5.3-MCP",
+      "import_signatures": [
+        "mcp"
+      ],
+      "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#53-rpc-including-grpc",
+      "otel_pattern": "Model Context Protocol",
+      "semconv_domain": "mcp"
+    },
+    {
+      "ast_nodes": [
         "Call",
         "With",
         "AsyncWith",
@@ -1334,11 +1354,14 @@
         "redis",
         "boto3",
         "google.cloud.pubsub_v1",
-        "azure.servicebus"
+        "azure.servicebus",
+        "aio_pika",
+        "remoulade"
       ],
       "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#54-messaging-async--event-driven",
       "otel_pattern": "Messaging",
       "semconv_domain": "messaging",
+      "signature_provenance": "opentelemetry-python-contrib instrumentation/ (registry-derived)",
       "span_kinds": [
         "PRODUCER",
         "CONSUMER"
@@ -1374,11 +1397,18 @@
         "pymongo",
         "redis",
         "elasticsearch",
-        "boto3.dynamodb"
+        "boto3.dynamodb",
+        "aiopg",
+        "cassandra",
+        "pymemcache",
+        "pymssql",
+        "mysqlclient",
+        "tortoise"
       ],
       "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#55-database-sync-data-access",
       "otel_pattern": "Database",
       "semconv_domain": "db",
+      "signature_provenance": "opentelemetry-python-contrib instrumentation/ (registry-derived)",
       "span_kinds": [
         "CLIENT"
       ]
@@ -1529,6 +1559,7 @@
       ],
       "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
       "otel_pattern": "Object stores",
+      "registry": "derived",
       "semconv_domain": "object-stores"
     },
     {
@@ -1546,12 +1577,12 @@
       ],
       "landscape_ref": "docs/design/OTEL_PROGRAMMING_LANDSCAPE_CATALOG.md#51-pattern-overview",
       "otel_pattern": "Cloud provider SDKs",
-      "semconv_domain": "cloud-providers"
+      "semconv_domain": "cloud"
     }
   ],
   "counts": {
     "ast_nodes": 132,
-    "communication_patterns": 15,
+    "communication_patterns": 16,
     "language_composites": 10,
     "manifest_kinds": 9
   },
@@ -1735,6 +1766,6 @@
       "landscape_role": "Typing only; no runtime signal"
     }
   ],
-  "python_version": "3.14.5",
+  "python_version": "3.14.6",
   "schema_version": "1.0"
 }

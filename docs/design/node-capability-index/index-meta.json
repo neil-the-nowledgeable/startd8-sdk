@@ -1,0 +1,15 @@
+{
+  "counts": {
+    "achievable_patterns": 14,
+    "communication_patterns": 16,
+    "floor_patterns": 2,
+    "language_composites": 5,
+    "structure_forms": 6
+  },
+  "generator": "gen_node_structure_comm_index.py",
+  "pattern_ref": "dev-os/LANGUAGE-DOMAIN-COVERAGE-MAP.md",
+  "schema_version": "1.0",
+  "spec_ref": "docs/design/REQ-crosswalk-node-structure-to-otel-comm-domains.md",
+  "substrate": "nodejs_parser.py (regex, advisory-tier; imports-only φ; decorators not extracted)",
+  "tier": "advisory"
+}

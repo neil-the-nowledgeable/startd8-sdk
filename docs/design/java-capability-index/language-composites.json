@@ -1,0 +1,74 @@
+{
+  "composites": [
+    {
+      "field": "annotations",
+      "id": "JAVA-LC-001",
+      "java_forms": [
+        "JAVA-STRUCT-001",
+        "JAVA-STRUCT-002",
+        "JAVA-STRUCT-003"
+      ],
+      "name": "annotated_type",
+      "note": "type carrying annotations — the framework surface (@Path, @Entity …)"
+    },
+    {
+      "field": "annotations",
+      "id": "JAVA-LC-002",
+      "java_forms": [
+        "JAVA-STRUCT-004"
+      ],
+      "name": "annotation_bearing_method",
+      "note": "method carrying annotations (@GET, @KafkaListener …)"
+    },
+    {
+      "field": "implements",
+      "id": "JAVA-LC-003",
+      "java_forms": [
+        "JAVA-STRUCT-001"
+      ],
+      "name": "interface_impl",
+      "note": "class implements interface(s) (JavaElement.implements)"
+    },
+    {
+      "field": "extends",
+      "id": "JAVA-LC-004",
+      "java_forms": [
+        "JAVA-STRUCT-001"
+      ],
+      "name": "subclass",
+      "note": "class extends a base (JavaElement.extends)"
+    },
+    {
+      "field": "kind",
+      "id": "JAVA-LC-005",
+      "java_forms": [
+        "JAVA-STRUCT-003"
+      ],
+      "name": "enum_type",
+      "note": "enumerated type"
+    }
+  ],
+  "not_witnessable": [
+    {
+      "name": "lambda_expression",
+      "reason": "body-level; java_parser does not parse method bodies"
+    },
+    {
+      "name": "try_with_resources",
+      "reason": "body-level statement"
+    },
+    {
+      "name": "stream_pipeline",
+      "reason": "body-level call chain (resolution-pending)"
+    },
+    {
+      "name": "generic_type_params",
+      "reason": "java_parser does not expose type parameters"
+    },
+    {
+      "name": "nested_class_relation",
+      "reason": "the regex path flattens nesting (no parent link)"
+    }
+  ],
+  "schema_version": "1.0"
+}

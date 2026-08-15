@@ -173,7 +173,10 @@ def _communication_crosswalk() -> list[dict[str, Any]]:
             "import_signatures": [
                 "urllib.request", "urllib3", "http.client", "httpx", "requests", "aiohttp",
                 "fastapi", "starlette", "flask", "django.http", "uvicorn",
+                # derived from OpenTelemetryPythonContrib instrumentation/ (2026-08-15):
+                "falcon", "pyramid", "tornado", "asgi", "wsgi",
             ],
+            "signature_provenance": "opentelemetry-python-contrib instrumentation/ (registry-derived)",
             "call_signatures": [".get(", ".post(", ".put(", ".delete(", ".request(", "urlopen("],
             "ast_nodes": ["Import", "ImportFrom", "Call", "FunctionDef", "AsyncFunctionDef"],
             "decorator_signatures": ["route", "get", "post", "api_view"],
@@ -207,6 +210,14 @@ def _communication_crosswalk() -> list[dict[str, Any]]:
             "ast_nodes": ["Import", "ImportFrom", "Call"],
         },
         {
+            "id": "PY-OTEL-5.3-MCP",
+            "landscape_ref": f"{LANDSCAPE_REF}#53-rpc-including-grpc",
+            "otel_pattern": "Model Context Protocol",
+            "semconv_domain": "mcp",
+            "import_signatures": ["mcp"],
+            "ast_nodes": ["Import", "ImportFrom", "Call"],
+        },
+        {
             "id": "PY-OTEL-5.4-MESSAGING",
             "landscape_ref": f"{LANDSCAPE_REF}#54-messaging-async--event-driven",
             "otel_pattern": "Messaging",
@@ -215,7 +226,9 @@ def _communication_crosswalk() -> list[dict[str, Any]]:
             "import_signatures": [
                 "kafka", "aiokafka", "confluent_kafka", "pika", "celery", "redis",
                 "boto3", "google.cloud.pubsub_v1", "azure.servicebus",
+                "aio_pika", "remoulade",  # derived from opentelemetry-python-contrib
             ],
+            "signature_provenance": "opentelemetry-python-contrib instrumentation/ (registry-derived)",
             "call_signatures": ["send(", "publish(", "produce(", "consume(", "basic_publish"],
             "ast_nodes": ["Call", "With", "AsyncWith", "FunctionDef", "AsyncFunctionDef"],
             "attribute_hints": ["messaging.system", "messaging.destination.name"],
@@ -229,7 +242,10 @@ def _communication_crosswalk() -> list[dict[str, Any]]:
             "import_signatures": [
                 "sqlite3", "psycopg2", "psycopg", "asyncpg", "pymysql", "mysql.connector",
                 "sqlalchemy", "django.db", "pymongo", "redis", "elasticsearch", "boto3.dynamodb",
+                # derived from opentelemetry-python-contrib instrumentation/ (2026-08-15):
+                "aiopg", "cassandra", "pymemcache", "pymssql", "mysqlclient", "tortoise",
             ],
+            "signature_provenance": "opentelemetry-python-contrib instrumentation/ (registry-derived)",
             "call_signatures": ["execute(", "executemany(", "cursor(", "connect(", "from_url("],
             "ast_nodes": ["Call", "With", "AsyncWith"],
             "attribute_hints": ["db.system", "db.statement"],
@@ -301,7 +317,7 @@ def _communication_crosswalk() -> list[dict[str, Any]]:
             "id": "PY-OTEL-5.1-OBJECT-STORE",
             "landscape_ref": f"{LANDSCAPE_REF}#51-pattern-overview",
             "otel_pattern": "Object stores",
-            "semconv_domain": "object-stores",
+            "semconv_domain": "object-stores", "registry": "derived",
             "import_signatures": ["boto3", "google.cloud.storage", "azure.storage.blob"],
             "call_signatures": ["upload_file", "download_file", "put_object", "get_object"],
             "ast_nodes": ["Call"],
@@ -310,7 +326,7 @@ def _communication_crosswalk() -> list[dict[str, Any]]:
             "id": "PY-OTEL-5.1-CLOUD-SDK",
             "landscape_ref": f"{LANDSCAPE_REF}#51-pattern-overview",
             "otel_pattern": "Cloud provider SDKs",
-            "semconv_domain": "cloud-providers",
+            "semconv_domain": "cloud",
             "import_signatures": ["boto3", "botocore", "google.cloud", "azure.identity"],
             "ast_nodes": ["Import", "ImportFrom", "Call"],
         },

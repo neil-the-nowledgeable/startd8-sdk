@@ -1,0 +1,15 @@
+{
+  "counts": {
+    "achievable_patterns": 14,
+    "communication_patterns": 16,
+    "floor_patterns": 2,
+    "language_composites": 5,
+    "structure_forms": 7
+  },
+  "generator": "gen_java_structure_comm_index.py",
+  "pattern_ref": "dev-os/LANGUAGE-DOMAIN-COVERAGE-MAP.md",
+  "schema_version": "1.0",
+  "spec_ref": "docs/design/REQ-crosswalk-java-structure-to-otel-comm-domains.md",
+  "substrate": "java_parser.py (javalang when available, regex fallback; declaration-depth; annotations)",
+  "tier": "authoritative-fidelity (per-parse: advisory when javalang absent)"
+}
