@@ -10,12 +10,18 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from startd8.wireframe.profile import RenderProfile, StatusStyle
+from startd8.wireframe.profile import RenderProfile
 
 from .det_req import fr_health, parse_fr_lines_prefer_kit
 from .git_lives import prefer_git_ref
 from .models import Node, NodeEvidence, NodeStatus, default_confidence, derive_status
 from .naming import name_forms
+from .view_definition import (
+    DEFINITION_REGISTRY,
+    REQUIREMENTS_DEFINITION,
+    resolve,
+    to_render_profile,
+)
 
 # A Touches path is test evidence when it lives under a tests/ tree or is a test_/_test file.
 _TEST_PATH = re.compile(r"(?:^|/)tests?(?:/|_)|(?:^|/)test_|_test\.")
@@ -56,32 +62,12 @@ def _lives_from_touches(
         out.append(NodeEvidence(type=etype, ref=ref, note="from Touches"))
     return out
 
-REQUIREMENTS_PROFILE = RenderProfile(
-    statuses=(
-        StatusStyle("grounded", "Grounded", "#3d7a57", "reuses existing code", 0),
-        StatusStyle("spec", "Spec", "#6b6252", "written, not built", 2),
-        StatusStyle("awaiting", "Awaiting", "#a9781a", "needs a decision", 3, True),
-        StatusStyle("excluded", "Excluded", "#948b78", "out of scope", 2),
-        StatusStyle("unknown", "Unknown", "#ab473a", "done-claim without Lives", 4, True),
-    ),
-    title="This spec — a first look",
-    eyebrow="This spec",
-    section_lead="What this spec defines",
-    headline="A first look at this spec",
-    gap_noun="requirement",
-    summary_meta=(
-        "A glance-approvable view of every requirement in this spec — each grounded in code, "
-        "or flagged as still-spec.",
-    ),
-    why=(
-        "Each requirement is a Node: what it does, where it Lives (code/test refs), and "
-        "whether evidence grounds it."
-    ),
-    do=(
-        "Read top-down — grounded (green) reuses existing code; spec/awaiting needs a "
-        "decision. Approve or flag each requirement below."
-    ),
-)
+# FR-4/FR-7: the requirements masthead vocabulary/chrome is now OWNED by ``REQUIREMENTS_DEFINITION``
+# (``extends: base`` + a thin delta) and PROJECTED to the existing ``RenderProfile``. The projection
+# reproduces the former standalone literal byte-for-byte, so renderers and the app-scaffold path are
+# unchanged (guarded by ``test_no_profile_is_byte_identical`` + the equality test). Per-doc masthead
+# derivation (``requirements_profile_for``) still layers on top of this base via ``dataclasses.replace``.
+REQUIREMENTS_PROFILE = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
 
 
 _H1_RE = re.compile(r"^#\s+(.+?)(?:\s+—\s+Requirements)?\s*$")

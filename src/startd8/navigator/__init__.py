@@ -16,6 +16,13 @@ from .models import (
     default_confidence,
     derive_status,
 )
+from .view_definition import (
+    BASE_NAVIG8R_DEFINITION,
+    ResolvedDefinition,
+    ViewDefinition,
+    resolve,
+    to_render_profile,
+)
 
 __all__ = [
     "NODE_SHARED_FIELDS",
@@ -25,4 +32,9 @@ __all__ = [
     "StatusFacet",
     "default_confidence",
     "derive_status",
+    "BASE_NAVIG8R_DEFINITION",
+    "ResolvedDefinition",
+    "ViewDefinition",
+    "resolve",
+    "to_render_profile",
 ]

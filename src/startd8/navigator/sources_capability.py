@@ -11,10 +11,14 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from startd8.wireframe.profile import RenderProfile, StatusStyle
-
 from .models import Node, NodeEvidence, default_confidence, derive_status
 from .git_lives import prefer_git_ref
+from .view_definition import (
+    CAPABILITY_DEFINITION,
+    DEFINITION_REGISTRY,
+    resolve,
+    to_render_profile,
+)
 
 DEFAULT_CAPABILITY_INDEX = Path("docs/capability-index/startd8.sdk.capabilities.yaml")
 _ROUTE_STATES = {
@@ -24,32 +28,10 @@ _ROUTE_STATES = {
     "external_convention",
 }
 
-# Domain chrome for capability-index HTML (mirrors REQUIREMENTS_PROFILE — no "Your app" bleed).
-CAPABILITY_PROFILE = RenderProfile(
-    statuses=(
-        StatusStyle("built", "Built", "#3d7a57", "code leaf present", 0),
-        StatusStyle("thin", "Thin", "#a9781a", "early / incomplete evidence", 2, True),
-        StatusStyle("spec", "Spec", "#6b6252", "declared, not built", 3, True),
-        StatusStyle("deprecated", "Deprecated", "#ab473a", "do not use", 4, True),
-    ),
-    title="Capabilities — a first look",
-    eyebrow="Capability index",
-    section_lead="What the SDK ships",
-    headline="A first look at SDK capabilities",
-    gap_noun="capability",
-    summary_meta=(
-        "A glance-approvable view of what the SDK ships — each capability grounded in a code "
-        "leaf, or flagged as thin/spec.",
-    ),
-    why=(
-        "Each capability is a Node: what it does, where it Lives (code refs), and whether a "
-        "code leaf grounds it."
-    ),
-    do=(
-        "Read top-down — built (green) has a code leaf; thin/spec needs evidence or is "
-        "declared-only. Approve or flag each capability below."
-    ),
-)
+# FR-5: the capability-index domain is a thin ``CAPABILITY_DEFINITION`` delta over the SAME base as the
+# requirements domain (the cross-domain reuse proof), PROJECTED to the existing RenderProfile. Byte-for-
+# byte equal to the former standalone literal — no "Your app" bleed, renderers unchanged.
+CAPABILITY_PROFILE = to_render_profile(resolve(CAPABILITY_DEFINITION, DEFINITION_REGISTRY))
 
 
 def default_capability_index_path() -> Path:
