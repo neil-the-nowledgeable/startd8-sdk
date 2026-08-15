@@ -21,22 +21,16 @@ from ..wireframe.plan import WireframePlan
 from ..wireframe.profile import RenderProfile
 from ..wireframe.render import SCHEMA_VERSION, WIREFRAME_META, footer_lines
 
-# FR-AUD-C1 banned register (R1-F7), word-boundary matched so domain names ("identity", "AiCall") don't
-# false-trip. A plan item whose LABEL carries this jargon (e.g. "FastAPI app", "export endpoints") is
-# infrastructure the non-technical reader shouldn't see — it is flagged `technical` and hidden from the
-# end_user render (the datum still rides in the embed for the architect voice). SINGLE SOURCE for the
-# ban — the acceptance test imports this same matcher.
-_JARGON_RE = re.compile(
-    r"\b(?:entit(?:y|ies)|cruds?|schemas?|prisma|manifests?|cascades?|fastapi|"
-    r"endpoints?|openapi|htmx|foreign[- ]keys?|ai pass(?:es)?)\b",
-    re.IGNORECASE,
+# REQ-04: the audience × fluency data-layer lenses live in one shared module now (node_lenses.py) so
+# every renderer inherits them without forking. compose delegates — no copy remains here (Kagami / FR-5).
+from .node_lenses import (  # noqa: F401  (re-exported names read by the template/tests)
+    GAP_STATUSES,
+    HONEST_SKIP_ROUTES,
+    _display_label,
+    _is_gap_item,
+    apply_section_lenses,
+    has_jargon,
 )
-
-
-def has_jargon(text: str) -> bool:
-    """True if *text* contains an FR-AUD-C1 banned term (word-boundary). The one ban matcher (R1-F7)."""
-    return bool(_JARGON_RE.search(text or ""))
-
 
 # AR-3: which form fields are drawn as a multi-line text area (vs a single-line box). This was a regex
 # living inside the HTML renderer; lifting it into the composer makes the mockup view-model self-sufficient
@@ -99,72 +93,6 @@ def _form_entity(label: str) -> str:
         if label.endswith(suffix):
             return label[: -len(suffix)]
     return label
-
-
-# Tool-structural items are scaffolding, not user data — so (unlike entity/form names, which we KEEP
-# verbatim, FR-AUD-C5) they get plain, path-free wording for the end_user. Fixed structural labels →
-# plain; patterned labels (signal:/view:/prompt:/page body:/route/kind/form) → generic rules below.
-_END_USER_ITEM_LABELS = {
-    "AI service": "What the app writes for you",
-    "AI boundary": "What you keep in your control",
-    "default top nav": "The menu bar",
-    "nav live-toggle admin": "Menu editor",
-    "pages router": "Page navigation",
-    "authoring UI": "Content editor",
-    "home / index page": "Home page",
-    "views package": "The overviews",
-    "contract models": "The full list",
-    "relation graph": "How they connect",
-    "excluded": "Filled in automatically",
-    "mode": "Setup type",
-    "persistence": "Where your data is kept",
-    "bind": "Who can reach it",
-    "secrets-default": "Security keys",
-    "observability": "Monitoring",
-    "identity": "Sign-in",
-    "run: local": "Runs on your computer",
-    "container: Dockerfile": "Ready to run anywhere",
-    "migrations: alembic": "Automatic database updates",
-}
-
-
-def _humanize(token: str) -> str:
-    """A path/underscore token → plain Title-ish words: 'app/pages/how_it_works.md' → 'How it works'."""
-    token = token.rsplit("/", 1)[-1]
-    if token.endswith(".md"):
-        token = token[:-3]
-    token = token.replace("_", " ").replace("-", " ").strip()
-    return (token[:1].upper() + token[1:]) if token else token
-
-
-def _plain_item_label(label: str) -> str:
-    """Plain, path-free end_user wording for a structural item label (FR-AUD-C1/C1b). Real data names
-    (entities/forms) fall through unchanged (FR-AUD-C5)."""
-    if label in _END_USER_ITEM_LABELS:
-        return _END_USER_ITEM_LABELS[label]
-    if label.startswith("signal: "):
-        return label[len("signal: "):]                                  # keep the record name
-    if label.startswith("view: "):
-        return _humanize(label[len("view: "):])
-    if label.startswith("prompt: "):
-        return "Instructions: " + _humanize(label[len("prompt: "):])
-    if label.startswith("page body: "):
-        return _humanize(label[len("page body: "):]) + " page"
-    if label.startswith("app: "):
-        return "App name: " + label[len("app: "):]
-    if label.endswith(" create/edit form"):
-        return label[: -len(" create/edit form")] + " — add or edit"
-    m = re.match(r"^/\S*\s+—\s+(.+)$", label)                            # "/jobs — Jobs" → "Jobs"
-    if m:
-        return m.group(1)
-    m = re.match(r"^(.+?)\s+\([a-z0-9-]+\)$", label)                     # "value_map (detail-compose)" → "Value map"
-    if m:
-        return _humanize(m.group(1))
-    return label
-
-
-def _display_label(label: str, role: str) -> str:
-    return _plain_item_label(label) if role == "end_user" else label
 
 
 def _entity_columns(plan: WireframePlan) -> dict:
@@ -266,30 +194,6 @@ def _plain_shape(shape: dict) -> str:
         _plural(shape.get("views", 0), "combined view"),
         _plural(shape.get("ai_passes", 0), "automatic helper"),
     ))
-
-
-# Item statuses that mean "this still needs the author's input" — the computed floor under NEED (R1-F1).
-GAP_STATUSES = {"not_defined", "placeholder", "invalid"}
-
-# NODE-SCHEMA inv. 7 honest-skips — excluded from need_items even if status looks gappy (FR-3).
-HONEST_SKIP_ROUTES = frozenset({"owned_elsewhere", "declared_unimplemented"})
-
-
-def _is_gap_item(item) -> bool:
-    """True when the item counts toward attention/gap (SV-10 floor + honest-skip exclusion)."""
-    route = getattr(item, "route_state", "") or ""
-    if route in HONEST_SKIP_ROUTES:
-        return False
-    return item.status in GAP_STATUSES
-
-
-# End-user section order: lead with what the author experiences (screens → forms → content they must
-# write → the things tracked), then the supporting/technical sections. Presentation only — the section
-# SET, statuses, and items are unchanged (FR-AUD-4); the architect keeps the plan's data-model order.
-_END_USER_ORDER = [
-    "pages", "forms", "content", "entities", "views",
-    "services", "display", "completeness", "deployment", "scaffold",
-]
 
 
 def _plain_status(counts: dict) -> str:
@@ -402,9 +306,9 @@ def compose(
             sec_view["approve_prompts"] = approve_prompts
         sections.append(sec_view)
 
-    if voice == "end_user":  # lead with the author-facing sections (presentation only — FR-AUD-4)
-        rank = {k: i for i, k in enumerate(_END_USER_ORDER)}
-        sections.sort(key=lambda sec: rank.get(sec["key"], len(rank)))
+    # REQ-04: the end-user section ordering lens is owned by node_lenses now (presentation only —
+    # FR-AUD-4); compose delegates so any renderer gets the same order from one place.
+    sections = apply_section_lenses(sections, voice=voice)
 
     # QW-3: the consolidated "before launch" to-do — every plan-flagged gap across sections, in one list.
     todos = [{"section": sec["title"], "item": it} for sec in sections for it in sec["need_items"]]
