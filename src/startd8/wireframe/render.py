@@ -287,19 +287,17 @@ def _content_line(plan: WireframePlan) -> str:
 
 
 def footer_lines(plan: WireframePlan) -> Tuple[str, str, str, str]:
-    """The four footer lines (FR-W9, FR-WCI-2): counts, shape summary, content coverage, cascade."""
-    c = plan.status_counts
-    counts = (
-        f"{c.get(Status.PLANNED, 0)} planned / {c.get(Status.DEFAULTS, 0)} defaults / "
-        f"{c.get(Status.PLACEHOLDER, 0)} placeholder / {c.get(Status.NOT_DEFINED, 0)} not defined / "
-        f"{c.get(Status.INVALID, 0)} invalid"
-    )
-    s = plan.shape
-    shape = (
-        f"Entities: {s['entities']} | CRUD routes: {s['crud_routes']} | Pages: {s['pages']} | "
-        f"Views: {s['views']} | AI passes: {s['ai_passes']}"
-    )
-    content = _content_line(plan)
+    """The four footer lines (FR-W9, FR-WCI-2): counts, shape summary, content coverage, cascade.
+
+    Shape/status dialect follows the plan: app cascade keys → app chrome; node-domain
+    shape (``nodes``/``sections``) → Nodes/Sections + actual status_counts keys
+    (ATM metabolize: no zero-padded Entities/CRUD on Node consumers).
+    """
+    from .shape_dialect import format_shape_line, format_status_counts_line, is_app_cascade_shape
+
+    counts = format_status_counts_line(plan.status_counts)
+    shape = format_shape_line(plan.shape)
+    content = _content_line(plan) if is_app_cascade_shape(plan.shape) else ""
     readiness = " | ".join(f"{k}: {v}" for k, v in plan.readiness.items())
     return counts, shape, content, readiness
 

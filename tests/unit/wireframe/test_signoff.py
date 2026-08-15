@@ -55,9 +55,16 @@ def test_load_normalizes_and_tolerates_missing_fields(tmp_path: Path) -> None:
     ]))
     so = load_signoff(p)
     assert so["app"] == "wfdemo" and so["audience"]["role"] == "end_user"
-    assert so["sections"][0] == {"key": "pages", "title": "Screens & menus", "status": "ok", "note": ""}
+    assert so["sections"][0] == {
+        "key": "pages",
+        "title": "Screens & menus",
+        "status": "ok",
+        "note": "",
+        "approve_prompts": [],
+    }
     assert so["sections"][1]["status"] == "unreviewed"       # bogus status degraded, never fabricated
     assert so["sections"][1]["title"] == "forms"             # missing title falls back to the key
+    assert so["sections"][1]["approve_prompts"] == []
 
 
 def test_open_flags_and_report(tmp_path: Path) -> None:

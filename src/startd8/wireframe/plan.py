@@ -119,11 +119,31 @@ def _cap_error(message: str) -> Tuple[str, bool]:
 # --------------------------------------------------------------------------- #
 
 @dataclass(frozen=True)
+class EvidenceRef:
+    """Typed ``lives`` leaf carried on a wireframe item (navigator Node grounding)."""
+
+    type: str
+    ref: str
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class WireframeItem:
     label: str
     status: str
     detail: str = ""
     paths: Tuple[str, ...] = ()
+    # Optional Node grounding (FR-2) — defaults empty; compose omits when unset.
+    key: str = ""
+    lives: Tuple[EvidenceRef, ...] = ()
+    confidence: Optional[float] = None
+    ships_when: str = ""
+    was: Tuple[str, ...] = ()
+    route_state: str = ""
+    # Kickoff-navigator APPROVE? questions → signoff export (Phase 2).
+    approve_prompts: Tuple[str, ...] = ()
+    # Compact structural metadata (type · default · provenance · ← origin) — revealed in structure-only.
+    meta: str = ""
 
 
 @dataclass(frozen=True)
