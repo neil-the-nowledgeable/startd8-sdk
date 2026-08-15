@@ -10,6 +10,14 @@ and the RENDERER (``Gⱼ: Node → View``): a visualization is now ``Gⱼ ∘ ap
 The scope is a pure factoring — **no new lens behaviour** (NR-1). The app-scaffold wireframe path stays
 byte-identical (FR-6): the extracted logic is unchanged, only the call site moved.
 
+Adoption status (HTH value-path audit, 2026-08-15 — the ``Gⱼ ∘ apply_node_lenses`` above is the
+*target*, not yet universal): today ``compose()`` routes through the shared low-level helpers
+(``_display_label`` / ``_is_gap_item`` / ``apply_section_lenses``) directly, and the **graph** renderer
+(REQ-05) is the only consumer of the ``apply_node_lenses`` / ``project_nodes`` aggregate. The **tree**
+(REQ-02) and **a11y** (REQ-03) renderers do **not** yet apply the audience × fluency lenses. Wiring
+tree + a11y through ``project_nodes`` — and routing ``compose`` through ``apply_node_lenses`` so the
+aggregate is the single chokepoint — is tracked as a cumulative-enhancement backlog item, not a defect.
+
 Independence constraint (FR-3): this module imports **only** ``wireframe.delivery_roles`` (for
 ``effective_voice``) and — lazily, inside ``project_nodes`` — ``navigator.models.Node``. It never
 imports ``WireframePlan`` / ``WireframeItem`` / ``compose`` / ``view``, so a renderer can pull the
