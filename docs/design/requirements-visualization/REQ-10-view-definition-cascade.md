@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + authored definitions; no LLM; no network
 **Data classification:** internal
 
-> **Readable handle:** `feature/sdk-navigator-defines-presentation-as-a-cf0c33ad`
+> **Readable handle:** `feature/sdk-navigator-defines-presentation-as-a-a458d6d7`
 > **Semantic name:** *SDK navigator defines presentation as a serializable View Definition that inherits from a shared base via a per-leaf cascade so a base design change propagates atomically to every domain while each keeps its own overrides and renderers stay byte-identical by projecting the resolved definition to the existing RenderProfile.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-10`
 
