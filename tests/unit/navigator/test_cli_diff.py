@@ -6,9 +6,49 @@ import json
 
 from typer.testing import CliRunner
 
-from startd8.navigator.cli_navigator import navigator_app
+import pytest
+
+from startd8.navigator.cli_navigator import _load_state, navigator_app
 
 _RUNNER = CliRunner()
+
+
+# --------------------------------------------------------------------------- #
+# _load_state structural guard (Phase-2 robustness) — direct, CLI-runner-free
+# --------------------------------------------------------------------------- #
+def test_load_state_valid_nodes_json_ok(tmp_path):
+    p = tmp_path / "ok.json"
+    p.write_text(
+        json.dumps({"nodes": [{"key": "A", "does": "x", "children": [{"key": "A.1"}]}]}),
+        encoding="utf-8",
+    )
+    nodes = _load_state(p)
+    assert [n.key for n in nodes] == ["A"]
+    assert nodes[0].children[0].key == "A.1"  # nested children still load (byte-identical path)
+
+
+def test_load_state_bare_list_ok(tmp_path):
+    p = tmp_path / "bare.json"
+    p.write_text(json.dumps([{"key": "A"}]), encoding="utf-8")  # no {"nodes": ...} wrapper
+    assert [n.key for n in _load_state(p)] == ["A"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "42",  # bare scalar
+        '"hello"',  # bare string
+        json.dumps({"nodes": ["str", 1]}),  # non-object entries
+        json.dumps({"nodes": [{"key": "A", "lives": ["x"]}]}),  # non-object lives element
+        json.dumps({"nodes": [{"key": "A", "lives": "notalist"}]}),  # lives not a list
+        json.dumps({"nodes": [{"key": "A", "children": [9]}]}),  # non-object child
+    ],
+)
+def test_load_state_malformed_raises_valueerror(tmp_path, payload):
+    p = tmp_path / "bad.json"
+    p.write_text(payload, encoding="utf-8")
+    with pytest.raises(ValueError):
+        _load_state(p)
 
 
 def _write_nodes_json(path, nodes):
@@ -97,6 +137,66 @@ def test_diff_max_detail_counts_only(tmp_path):
     )
     assert res.exit_code == 0, res.stdout
     assert "diff too large" in out.read_text(encoding="utf-8")
+
+
+def test_diff_malformed_json_exit_1_no_traceback(tmp_path):
+    """A well-formed-JSON-but-not-an-array payload → clean exit 1, not a raw traceback."""
+    before = tmp_path / "b.json"
+    after = tmp_path / "a.json"
+    before.write_text("42", encoding="utf-8")  # valid JSON, wrong shape
+    _write_nodes_json(after, [{"key": "A", "does": "x"}])
+    res = _RUNNER.invoke(
+        navigator_app,
+        ["diff", "--before", str(before), "--after", str(after), "--json"],
+    )
+    assert res.exit_code == 1
+    assert res.exception is None or isinstance(res.exception, SystemExit)
+
+
+def test_diff_non_object_node_entry_exit_1(tmp_path):
+    """A JSON array whose entries are not objects → clean ValueError-backed exit 1."""
+    before = tmp_path / "b.json"
+    after = tmp_path / "a.json"
+    before.write_text(json.dumps({"nodes": ["not-an-object", 3]}), encoding="utf-8")
+    _write_nodes_json(after, [{"key": "A", "does": "x"}])
+    res = _RUNNER.invoke(
+        navigator_app,
+        ["diff", "--before", str(before), "--after", str(after), "--json"],
+    )
+    assert res.exit_code == 1
+    assert res.exception is None or isinstance(res.exception, SystemExit)
+
+
+def test_diff_non_object_lives_entry_exit_1(tmp_path):
+    """A node whose ``lives`` list carries a non-object element → clean exit 1 (no AttributeError)."""
+    before = tmp_path / "b.json"
+    after = tmp_path / "a.json"
+    before.write_text(
+        json.dumps({"nodes": [{"key": "A", "lives": ["bare-string"]}]}), encoding="utf-8"
+    )
+    _write_nodes_json(after, [{"key": "A", "does": "x"}])
+    res = _RUNNER.invoke(
+        navigator_app,
+        ["diff", "--before", str(before), "--after", str(after), "--json"],
+    )
+    assert res.exit_code == 1
+    assert res.exception is None or isinstance(res.exception, SystemExit)
+
+
+def test_diff_non_object_child_entry_exit_1(tmp_path):
+    """A malformed nested ``children`` entry is caught recursively → clean exit 1."""
+    before = tmp_path / "b.json"
+    after = tmp_path / "a.json"
+    before.write_text(
+        json.dumps({"nodes": [{"key": "A", "children": [7]}]}), encoding="utf-8"
+    )
+    _write_nodes_json(after, [{"key": "A", "does": "x"}])
+    res = _RUNNER.invoke(
+        navigator_app,
+        ["diff", "--before", str(before), "--after", str(after), "--json"],
+    )
+    assert res.exit_code == 1
+    assert res.exception is None or isinstance(res.exception, SystemExit)
 
 
 def test_build_still_works(tmp_path):

@@ -197,15 +197,49 @@ def build(
     raise typer.Exit(_EXIT_ERR)
 
 
+def _validate_node_json(node_list, path: Path, where: str) -> None:
+    """Structurally validate a decoded nodes-json payload BEFORE handing it to ``nodes_from_json``.
+
+    ``nodes_from_json`` assumes each entry is a ``dict`` (and each ``lives`` element a ``dict``) and
+    recurses into ``children``; a structurally-wrong-but-valid-JSON payload would otherwise leak an
+    ``AttributeError``/``TypeError`` as a raw traceback out of the CLI. Raises ``ValueError`` (which
+    the ``diff`` guard catches) with a path-qualified message. Recurses into ``children``."""
+    if not isinstance(node_list, list):
+        raise ValueError(
+            f"{path}: expected a JSON array of node objects (or a {{'nodes': [...]}} object) "
+            f"for {where}, got {type(node_list).__name__}"
+        )
+    for i, entry in enumerate(node_list):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"{path}: {where} entry #{i} is a {type(entry).__name__}, expected an object"
+            )
+        lives = entry.get("lives")
+        if lives is not None and (
+            not isinstance(lives, list) or any(not isinstance(ev, dict) for ev in lives)
+        ):
+            raise ValueError(f"{path}: {where} entry #{i} ('lives') must be a list of objects")
+        children = entry.get("children")
+        if children is not None:
+            _validate_node_json(children, path, "children")
+
+
 def _load_state(path: Path) -> list:
     """Load one diff side: sniff ``.json`` → ``nodes_from_json`` (unwrapping ``{"nodes":[...]}``
     exactly as ``build`` does), else treat as a det-req markdown → ``nodes_from_requirements``.
 
-    Raises the same (FileNotFoundError | ValueError | OSError) the ``build`` guard already catches."""
+    Raises the same (FileNotFoundError | ValueError | OSError) the ``build`` guard already catches.
+    A well-formed-JSON-but-structurally-wrong payload (a bare scalar, a non-object node entry, a
+    non-object ``lives`` element) is normalized to a ``ValueError`` here — ``nodes_from_json`` itself
+    assumes ``dict``-shaped entries and would otherwise leak an ``AttributeError``/``TypeError`` as a
+    raw traceback out of the CLI."""
     path = Path(path)
     if path.suffix.lower() == ".json":
+        # JSONDecodeError / UnicodeDecodeError are ValueError subclasses (caught by the caller).
         data = json.loads(path.read_text(encoding="utf-8"))
-        return nodes_from_json(data.get("nodes", data) if isinstance(data, dict) else data)
+        node_list = data.get("nodes", data) if isinstance(data, dict) else data
+        _validate_node_json(node_list, path, "node list")
+        return nodes_from_json(node_list)
     return nodes_from_requirements(path)
 
 
