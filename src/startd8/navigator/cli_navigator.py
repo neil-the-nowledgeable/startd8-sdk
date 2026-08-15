@@ -15,6 +15,8 @@ from rich.console import Console
 
 from .ground import write_grounding
 from .project import nodes_from_json, nodes_to_json, render_nodes_html
+from .render_a11y import render_a11y_to_file
+from .render_index import render_index_to_file
 from .render_tree import render_navigator_tree_html
 from .sources_capability import (
     CAPABILITY_PROFILE,
@@ -41,7 +43,7 @@ def build(
         "--source",
         help="Node source: capability-index | requirements | node-schema | nodes-json",
     ),
-    fmt: str = typer.Option("json", "--format", help="Output format: json | html"),
+    fmt: str = typer.Option("json", "--format", help="Output format: json | html | a11y"),
     renderer: Optional[str] = typer.Option(
         None, "--renderer",
         help="HTML renderer: wireframe | tree (default: tree for nodes-json, else wireframe)",
@@ -136,7 +138,16 @@ def build(
         console.print(f"wrote {out} ({len(nodes)} nodes, {renderer})")
         raise typer.Exit(_EXIT_OK)
 
-    console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)")
+    if fmt == "a11y":
+        # Standalone semantic accessible view (REQ-03 FR-1). Requires --out, like html.
+        if out is None:
+            console.print("[red]error:[/red] --out is required for --format a11y")
+            raise typer.Exit(_EXIT_ERR)
+        render_a11y_to_file(list(nodes), out, title=f"{source}")
+        console.print(f"wrote {out} ({len(nodes)} nodes, a11y)")
+        raise typer.Exit(_EXIT_OK)
+
+    console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html|a11y)")
     raise typer.Exit(_EXIT_ERR)
 
 
@@ -161,4 +172,31 @@ def ground(
     console.print(
         f"wrote {out} ({payload['key_count']} keys, grounded {payload['grounded']})"
     )
+    raise typer.Exit(_EXIT_OK)
+
+
+@navigator_app.command("index")
+def index(
+    directory: Path = typer.Option(
+        ..., "--dir", help="Directory of requirement docs (REQ-*.md) to index"
+    ),
+    out: Path = typer.Option(..., "--out", help="Corpus index HTML output path"),
+    title: str = typer.Option("Requirements", "--title", help="Corpus index title"),
+) -> None:
+    """Render a directory of requirement docs as a drill-to-leaf corpus index (REQ-03 FR-2).
+
+    Writes an index page + one a11y leaf per parseable doc (each via `--format a11y`), with
+    resolving relative hrefs. An unparseable doc degrades to a non-linked row.
+    """
+    directory = Path(directory)
+    if not directory.is_dir():
+        console.print(f"[red]error:[/red] --dir {directory} is not a directory")
+        raise typer.Exit(_EXIT_ERR)
+    try:
+        render_index_to_file(directory, out, title=title)
+    except OSError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+    n = len(sorted(directory.glob("REQ-*.md")))
+    console.print(f"wrote {out} ({n} requirements indexed)")
     raise typer.Exit(_EXIT_OK)
