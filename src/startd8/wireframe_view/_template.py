@@ -129,18 +129,23 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   /* Scaffold mode — the template's anatomy: outline every region carrying a data-scaffold role and
      float its label + data source, so an adopter (legal · benchmark · dev-os) can read the template
      itself from a debugging standpoint. Overlay only; no layout shift beyond the outline. */
-  body.scaffold [data-scaffold]{outline:1.5px dashed var(--accent2);outline-offset:2px;position:relative}
-  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:-8px;left:8px;
-    z-index:5;background:var(--accent);color:#fff;font-family:var(--mono);font-size:9.5px;font-weight:600;
-    letter-spacing:.02em;padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;opacity:.92}
-  /* layer-aware colouring — the region role is coloured by which LAYER it belongs to (the three-layer
-     standard: control · descriptive · computed · node-driven), so scaffold mode teaches the taxonomy. */
+  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative}
+  /* blueprint-annotation label: a solid dark chip (white on --ink ≈ 13:1 contrast — legible over ANY
+     underlying content, unlike the old 9.5px semi-transparent colour-on-colour chip) with a
+     layer-coloured left stripe. 11px, full opacity, high z-index + shadow so it lifts off the content. */
+  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:-11px;left:8px;
+    z-index:10;background:var(--ink);color:#f7f3ea;font-family:var(--mono);font-size:11px;font-weight:600;
+    letter-spacing:.02em;padding:2px 8px;border-radius:4px;white-space:nowrap;pointer-events:none;
+    border-left:4px solid var(--accent);box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  /* layer-aware colouring — the dark chip is constant (legibility); the left stripe + dashed outline
+     carry the LAYER (control · descriptive · computed · node-driven), so scaffold mode still teaches
+     the taxonomy without the failed white-on-ochre / white-on-green contrast. */
   body.scaffold [data-layer="control"]{outline-color:var(--accent2)}
-  body.scaffold [data-layer="control"]::before{background:var(--accent2)}
+  body.scaffold [data-layer="control"]::before{border-left-color:var(--accent2)}
   body.scaffold [data-layer="computed"]{outline-color:var(--ochre)}
-  body.scaffold [data-layer="computed"]::before{background:var(--ochre)}
+  body.scaffold [data-layer="computed"]::before{border-left-color:var(--ochre)}
   body.scaffold [data-layer="node"]{outline-color:var(--planned)}
-  body.scaffold [data-layer="node"]::before{background:var(--planned)}
+  body.scaffold [data-layer="node"]::before{border-left-color:var(--planned)}
   /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
   #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
     font-size:10px;font-family:var(--mono);line-height:1.7}
