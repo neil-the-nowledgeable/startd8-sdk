@@ -163,7 +163,7 @@ def run_reachability(paths: List[Path], strict: bool) -> int:
         print(f"\n⚠ {dormant} DORMANT symbol(s) — built/ported but no call site in src/ "
               f"(wire it in the real path, or soft-label the claim).")
     else:
-        print(f"\n✓ no dormant symbols — every public symbol has a call site.")
+        print("\n✓ no dormant symbols — every public symbol has a call site.")
     return 1 if (dormant and strict) else 0
 
 
