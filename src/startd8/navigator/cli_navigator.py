@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -16,6 +16,7 @@ from rich.console import Console
 from .ground import write_grounding
 from .project import nodes_from_json, nodes_to_json, render_nodes_html
 from .render_a11y import render_a11y_to_file
+from .render_graph import render_navigator_graph_html
 from .render_index import render_index_to_file
 from .render_tree import render_navigator_tree_html
 from .sources_capability import (
@@ -46,7 +47,13 @@ def build(
     fmt: str = typer.Option("json", "--format", help="Output format: json | html | a11y"),
     renderer: Optional[str] = typer.Option(
         None, "--renderer",
-        help="HTML renderer: wireframe | tree (default: tree for nodes-json, else wireframe)",
+        help="HTML renderer: wireframe | tree | graph (default: tree for nodes-json, else wireframe)",
+    ),
+    semantic_only: bool = typer.Option(
+        True,
+        "--semantic-only/--full-graph",
+        help="graph renderer: show only source nodes + semantic edges (default), "
+        "or --full-graph to include the visual-editor view-markers",
     ),
     out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
     requirements: Optional[Path] = typer.Option(
@@ -124,6 +131,12 @@ def build(
                 title=f"Node Navigator — {source}",
                 open_depth=open_depth,
             )
+        elif renderer == "graph":
+            render_navigator_graph_html(
+                list(nodes), out,
+                title=f"Node Graph — {source}",
+                semantic_only=semantic_only,
+            )
         elif renderer == "wireframe":
             render_nodes_html(
                 nodes,
@@ -133,7 +146,9 @@ def build(
                 profile=profile,
             )
         else:
-            console.print(f"[red]error:[/red] unknown --renderer {renderer!r} (expected wireframe|tree)")
+            console.print(
+                f"[red]error:[/red] unknown --renderer {renderer!r} (expected wireframe|tree|graph)"
+            )
             raise typer.Exit(_EXIT_ERR)
         console.print(f"wrote {out} ({len(nodes)} nodes, {renderer})")
         raise typer.Exit(_EXIT_OK)
