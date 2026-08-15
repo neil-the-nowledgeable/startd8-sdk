@@ -128,6 +128,32 @@ a script and/or runbook.
 
 ---
 
+### 6. Spec Delivery Loop  *(the forward loop — spec → merged implementation)*
+
+- **What it does:** turns a build-ready det-req SPEC into a landed IMPLEMENTATION under engineering
+  discipline, semi-autonomously. Six stages: **0 GATE** (deterministic build-readiness) → **1 PREP**
+  (out-of-cast readiness + decisions) → **2 BUILD** (agent in an isolated worktree) → **3 GATE-2**
+  (full suite + byte-identity UNEDITED + no-forbidden-import + ruff) → **4 REVIEW** (human reads the
+  diff) → **5 LAND** (git cadence, own files only) → **6 RECORD** (ledger). The human stays in the
+  loop at stages 1 and 4 — that is what makes it *semi*-autonomous. Proven on REQ-03/04 before naming.
+- **Driver (gate):** `scripts/navigator_spec_delivery_loop.py`  ·  **Runbook:**
+  `docs/design/requirements-visualization/SPEC_DELIVERY_LOOP.md`
+- **Moving number:** specs delivered (build-ready → merged) with byte-identity preserved. Stage-0
+  readiness is the guard: name block · single-line FRs that parse · every FR has Name/Verify/Serves.
+- **Reuse (Kagami/Mottainai):** the gate calls the SDK's own `det_req.parse_fr_lines` — the same parser
+  the corpus is governed by, not a second one. Stage 0 **is REQ-06 corpus governance in embryo**
+  (scoped to the one precondition that guards a build); when REQ-06 lands, stage 0 should call it.
+- **Run it:**
+  ```bash
+  python3 scripts/navigator_spec_delivery_loop.py --status     # readiness of every REQ-*.md
+  python3 scripts/navigator_spec_delivery_loop.py REQ-05       # gate one (exit 1 if blocked)
+  python3 scripts/navigator_spec_delivery_loop.py --checklist  # the 6-stage runbook
+  ```
+- **State:** the gate is stateless (reads the spec live); outcomes recorded in `SESSION_LEDGER`.
+- **Status:** ACTIVE. Build-ready: REQ-02/03/04/05/06/07/08; blocked: REQ-01 (`frs-named`), seat-req.
+
+---
+
 ## Related established loops in the repo (cross-reference)
 
 These predate this catalog; listed so the registry is a complete map. See CLAUDE.md for detail.
