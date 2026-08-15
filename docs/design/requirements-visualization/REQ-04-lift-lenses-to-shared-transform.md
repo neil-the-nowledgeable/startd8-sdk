@@ -85,8 +85,8 @@ golden tests pass without edits.**
 
 | Type | Description | Mitigation | Priority |
 |------|-------------|------------|----------|
-| quality | Byte-identity breaks because the extraction subtly changes argument evaluation order or default-value handling | FR-6 Verify: run `test_no_profile_is_byte_identical` + `test_visual_html` against the refactored code before merging; any failure is a blocking gate | critical |
-| quality | `apply_node_lenses` duplicates instead of replaces the lens logic in `compose.py` (Kagami violation) | FR-1 Verify: `grep -c "_display_label\|_is_gap_item\|_END_USER_ORDER\|GAP_STATUSES"` in `compose.py` after the refactor must output `0` for each (all moved to `node_lenses.py`); FR-6 Verify catches any behavioural divergence | high |
+| quality | Byte-identity breaks because the extraction subtly changes argument evaluation order or default-value handling | FR-6 Verify: run `test_no_profile_is_byte_identical` + `test_visual_html` against the refactored code before merging; any failure is a blocking gate | high |
+| quality | `apply_node_lenses` duplicates instead of replaces the lens logic in `compose.py` (Kagami violation) | FR-1 Verify: grep `compose.py` after the refactor for each of `_display_label` / `_is_gap_item` / `_END_USER_ORDER` / `GAP_STATUSES` — each must output 0 (all moved to `node_lenses.py`); FR-6 Verify catches any behavioural divergence | high |
 | scope-creep | Adding new lens behaviour (a new debug mode, a new audience tier) during the refactor buries a behaviour change inside a factoring | NR-6: new lens capabilities are explicitly out of scope; any new behaviour must be a follow-on FR | medium |
 | architecture | Circular import: `node_lenses.py` imports from `wireframe/plan.py` to type-check items, which imports back | `node_lenses.py` accepts plain `dict` item-views (already produced by `_item_view`); it does NOT import `WireframePlan` or `WireframeItem`; `from __future__ import annotations` for forward refs if needed | high |
 | quality | `project_nodes` bridge (FR-2) invents a new projection path that diverges from `compose.py`'s projection | FR-2 Verify: `project_nodes(nodes_from_plan, role=r, fluency=f)` must produce the same `items` list as `compose(plan, role=r, fluency=f)["sections"][i]["items"]` for each section `i`; a parity test guards this | high |
@@ -142,18 +142,18 @@ Only the factored implementation controls: the internal call routing inside `com
 - **Backend:** python-cli-surface
 - **Vocabulary home (cite):** `~/Documents/dev/dev-os/det-req-kit/SCHEMA.md` §8 `python-cli-surface` · living homes `~/Documents/dev/startd8-sdk/pyproject.toml`, `~/Documents/dev/startd8-sdk/src/startd8/wireframe_view/` · grammar cite `~/Documents/dev/dev-os/NODE-SCHEMA.md`
 
-Library seams (not CLI kinds — cited as file paths in Touches):
+This REQ is a library/module refactor: its seams are Python modules, functions, and constants — not
+CLI surfaces. Those seams are carried as **file-path `Touches:` / `Lives:` evidence on the FRs above**,
+not as `python-cli-surface` projection entries (declaring library symbols as CLI kinds would invent a
+CLI structure this REQ does not add). For reference, the library seams the FRs deliver are:
 
-| Entry (name) | Kind | Notes |
-|---|---|---|
-| `node_lenses.py` | new module | the shared lens transform (FR-1, FR-2, FR-3) |
-| `apply_node_lenses` | function | item-view list → lens-filtered list (FR-1) |
-| `project_nodes` | function | `List[Node]` → lens-filtered item-view list (FR-2) |
-| `has_jargon` | function | moved from `compose.py`; re-exported from `wireframe_view/__init__.py` (FR-4) |
-| `GAP_STATUSES` | constant | moved from `compose.py`; re-exported (FR-4) |
-| `HONEST_SKIP_ROUTES` | constant | moved from `compose.py`; re-exported (FR-4) |
-| `compose.py` | modified module | delegates lens logic; signature unchanged (FR-5) |
-| `wireframe_view/__init__.py` | modified | new exports for the moved symbols (FR-4) |
+- `node_lenses.py` (new module) — the shared lens transform (FR-1, FR-2, FR-3)
+- `apply_node_lenses` (function) — item-view list → lens-filtered list (FR-1)
+- `project_nodes` (function) — `List[Node]` → lens-filtered item-view list (FR-2)
+- `has_jargon` (function) — moved from `compose.py`; re-exported from `wireframe_view/__init__.py` (FR-4)
+- `GAP_STATUSES`, `HONEST_SKIP_ROUTES` (constants) — moved from `compose.py`; re-exported (FR-4)
+- `compose.py` (modified module) — delegates lens logic; signature unchanged (FR-5)
+- `wireframe_view/__init__.py` (modified) — new exports for the moved symbols (FR-4)
 
 ---
 

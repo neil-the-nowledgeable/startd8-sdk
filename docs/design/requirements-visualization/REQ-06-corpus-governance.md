@@ -113,7 +113,7 @@ first-class member of the catalog (`docs/LOOP_CATALOG.md` #6), not a parallel me
 |--------------|------|-----------------|-------|
 | navigator-govern | command | structure | new: `startd8 navigator govern --dir … [--format text\|json] [--out …]` |
 | format-govern | option | structure | `--format text\|json` (report shape) |
-| govern-verdict | output | structure | exit 0=clean / 1=drift / 2=error; per-check pass/fail |
+| govern-verdict | exit-class | structure | exit 0=clean / 1=drift / 2=error; per-check pass/fail |
 
 Library seams (Touches file paths): `src/startd8/navigator/govern.py` (new),
 `src/startd8/navigator/cli_navigator.py`, `tests/unit/navigator/test_govern.py`,

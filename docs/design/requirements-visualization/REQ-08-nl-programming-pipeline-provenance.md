@@ -7,7 +7,7 @@
 **Pairs with:** the source thesis `~/Documents/craft/THE_NATURAL_LANGUAGE_PROGRAMMING_SYSTEM.md` (a `/reflective-analogy` instance)
 **Inherits standards:** NODE-SCHEMA · NAMING_CONVENTION · REQ-01 (SDK Node home) · REQ-02 (N-level tree renderer) · REQ-03 (a11y renderer + corpus index) · REQ-04 (lift lenses to shared transform) · REQ-05 (graph/network topology renderer) · REQ-06 (corpus governance) · REQ-07 (diff audience)
 **Audience:** operator / adopter
-**Trust boundary:** local filesystem + authored req/plan docs + read-only repo; **no network fetch**; the `Verify:`-oracle path runs authored acceptance checks and MUST default to inert (no execution unless explicitly opted in — see FR-4 / Risks)
+**Trust boundary:** local filesystem + authored req/plan docs + read-only repo; no network fetch; the `Verify:`-oracle path runs authored acceptance checks and MUST default to inert (no execution unless explicitly opted in — see FR-4 / Risks)
 **Data classification:** internal
 
 > **Readable handle:** `feature/sdk-navigator-models-each-pipeline-stage-as-a-558d6fc7`
