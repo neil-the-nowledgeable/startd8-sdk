@@ -13,6 +13,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from .diff import diff_nodes, node_diff_to_json
 from .govern import (
     govern_corpus,
     recurring_finding_classes,
@@ -22,6 +23,7 @@ from .govern import (
 from .ground import write_grounding
 from .project import nodes_from_json, nodes_to_json, render_nodes_html
 from .render_a11y import render_a11y_to_file
+from .render_diff import render_navigator_diff_html
 from .render_graph import render_navigator_graph_html
 from .render_index import render_index_to_file
 from .render_tree import render_navigator_tree_html
@@ -191,6 +193,94 @@ def build(
 
     console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html|a11y)")
     raise typer.Exit(_EXIT_ERR)
+
+
+def _load_state(path: Path) -> list:
+    """Load one diff side: sniff ``.json`` → ``nodes_from_json`` (unwrapping ``{"nodes":[...]}``
+    exactly as ``build`` does), else treat as a det-req markdown → ``nodes_from_requirements``.
+
+    Raises the same (FileNotFoundError | ValueError | OSError) the ``build`` guard already catches."""
+    path = Path(path)
+    if path.suffix.lower() == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return nodes_from_json(data.get("nodes", data) if isinstance(data, dict) else data)
+    return nodes_from_requirements(path)
+
+
+@navigator_app.command("diff")
+def diff(
+    before: Path = typer.Option(
+        ..., "--before", help="Before state: a det-req markdown OR a nodes-json file"
+    ),
+    after: Path = typer.Option(
+        ..., "--after", help="After state: a det-req markdown OR a nodes-json file"
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Delta HTML output path (required unless --json)"
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the machine-readable NodeDiff (for CI) instead of HTML"
+    ),
+    max_detail: Optional[int] = typer.Option(
+        None, "--max-detail", help="Altitude cap: past N changed keys, render Changed counts-only"
+    ),
+    role: Optional[str] = typer.Option(
+        None, "--role", help="audience lens for labels (e.g. end_user); default None = raw labels"
+    ),
+    fluency: str = typer.Option(
+        "intermediate", "--fluency", help="fluency lens for labels (with --role)"
+    ),
+) -> None:
+    """Diff two states of the Node corpus and render the delta (REQ-07).
+
+    ``--before``/``--after`` each accept a requirements doc OR a nodes-json file. Writes a standalone
+    delta HTML (added/removed/changed + status transitions + new dangling refs) to ``--out``, or the
+    machine-readable NodeDiff to stdout with ``--json``. Additive: leaves build/ground/index/govern
+    untouched. Exit 0 = ok · 1 = error (bad input / missing --out).
+    """
+    try:
+        before_nodes = _load_state(before)
+        after_nodes = _load_state(after)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+
+    delta = diff_nodes(before_nodes, after_nodes)
+
+    if as_json:
+        text = json.dumps(node_diff_to_json(delta), indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+        if out is None:
+            sys.stdout.write(text)
+        else:
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                console.print(f"[red]error:[/red] {exc}")
+                raise typer.Exit(_EXIT_ERR)
+            console.print(f"wrote {out} (NodeDiff json)")
+        raise typer.Exit(_EXIT_OK)
+
+    if out is None:
+        console.print("[red]error:[/red] --out is required (unless --json)")
+        raise typer.Exit(_EXIT_ERR)
+    try:
+        render_navigator_diff_html(
+            delta, out,
+            title=f"Node Corpus Delta — {before.name} → {after.name}",
+            max_detail=max_detail,
+            role=role,
+            fluency=fluency,
+        )
+    except OSError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+    r = delta.rollup
+    console.print(
+        f"wrote {out} (+{r['added']} / -{r['removed']} / ~{r['changed']}, "
+        f"{r['unchanged']} unchanged)"
+    )
+    raise typer.Exit(_EXIT_OK)
 
 
 @navigator_app.command("ground")
