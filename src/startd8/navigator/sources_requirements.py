@@ -84,6 +84,50 @@ REQUIREMENTS_PROFILE = RenderProfile(
 )
 
 
+_H1_RE = re.compile(r"^#\s+(.+?)(?:\s+—\s+Requirements)?\s*$")
+_SEMNAME_RE = re.compile(r"^>\s*\*\*Semantic name:\*\*\s*\*(.+?)\*\s*$", re.M)
+_KEY_RE = re.compile(r"(REQ-\d+)")
+_CANON_INIT_RE = re.compile(r"cc:intent:([a-z0-9-]+):")
+
+
+def requirement_identity(path: Path, text: Optional[str] = None) -> dict:
+    """THIS requirement's own identity, for deterministic masthead generation (FR-17): its key (from
+    the filename), its H1 title, its DIDL semantic name, and its initiative (from the canonical ref).
+    All authored-deterministic — read from the doc, never machine-invented; each field falls back
+    gracefully when absent."""
+    path = Path(path)
+    text = text if text is not None else path.read_text(encoding="utf-8")
+    first = text.splitlines()[0].strip() if text.strip() else ""
+    m = _H1_RE.match(first)
+    title = m.group(1).strip() if m else path.stem
+    km = _KEY_RE.search(path.name)
+    sm = _SEMNAME_RE.search(text)
+    im = _CANON_INIT_RE.search(text)
+    return {
+        "key": km.group(1) if km else "",
+        "title": title,
+        "semantic_name": sm.group(1).strip() if sm else "",
+        "initiative": im.group(1) if im else path.parent.name,
+    }
+
+
+def requirements_profile_for(path: Path, text: Optional[str] = None) -> RenderProfile:
+    """A per-doc RenderProfile whose masthead identity is DERIVED from the requirement itself (FR-17):
+    eyebrow = key, headline = H1 title, sub-headline = the DIDL semantic name — replacing
+    ``REQUIREMENTS_PROFILE``'s static 'This spec' / 'A first look at this spec' domain copy so the
+    masthead speaks about *this* requirement. Falls back to the static base per-field when a field
+    can't be extracted (byte-safe: the base profile is unchanged; only the CLI's per-render copy differs)."""
+    from dataclasses import replace
+
+    idy = requirement_identity(path, text)
+    return replace(
+        REQUIREMENTS_PROFILE,
+        eyebrow=idy["key"] or REQUIREMENTS_PROFILE.eyebrow,
+        headline=idy["title"] or REQUIREMENTS_PROFILE.headline,
+        summary_meta=(idy["semantic_name"],) if idy["semantic_name"] else REQUIREMENTS_PROFILE.summary_meta,
+    )
+
+
 def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Node]:
     """Project a det-req markdown file into FR Nodes."""
     path = Path(path)

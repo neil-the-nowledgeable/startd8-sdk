@@ -33,7 +33,7 @@ from .sources_capability import (
     nodes_from_capability_index,
 )
 from .sources_node_schema import NODE_SCHEMA_PROFILE, nodes_from_node_schema
-from .sources_requirements import REQUIREMENTS_PROFILE, nodes_from_requirements
+from .sources_requirements import nodes_from_requirements, requirements_profile_for
 
 navigator_app = typer.Typer(
     help="NODE-SCHEMA navigator — render requirements / capability-index as Nodes.",
@@ -100,7 +100,9 @@ def build(
                 console.print("[red]error:[/red] --requirements is required for source=requirements")
                 raise typer.Exit(_EXIT_ERR)
             nodes = nodes_from_requirements(requirements)
-            profile = REQUIREMENTS_PROFILE
+            # FR-17: masthead identity (eyebrow=key · headline=H1 title · sub=semantic name) derived
+            # from THIS requirement, not the static 'This spec' / 'A first look at this spec' copy.
+            profile = requirements_profile_for(requirements)
             project_root = str(requirements.parent)
         elif source == "node-schema":
             nodes = nodes_from_node_schema()

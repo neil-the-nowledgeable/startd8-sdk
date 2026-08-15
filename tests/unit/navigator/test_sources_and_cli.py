@@ -13,10 +13,43 @@ from startd8.cli import app
 from startd8.navigator.det_req import parse_fr_lines
 from startd8.navigator.ground import ground_tree
 from startd8.navigator.sources_capability import nodes_from_capability_index
-from startd8.navigator.sources_requirements import nodes_from_requirements
+from startd8.navigator.sources_requirements import (
+    REQUIREMENTS_PROFILE,
+    nodes_from_requirements,
+    requirement_identity,
+    requirements_profile_for,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "REQ-fixture-minimal.md"
+_REQ01 = Path("docs/design/requirements-visualization/REQ-01-sdk-node-home.md")
 RUNNER = CliRunner()
+
+
+# ---- FR-17: deterministic masthead identity (derived, not static profile copy) ----
+def test_requirement_identity_extracts_key_title_semantic():
+    idy = requirement_identity(_REQ01)
+    assert idy["key"] == "REQ-01"
+    assert idy["title"] == "SDK Node Home"              # H1 with '— Requirements' stripped
+    assert idy["semantic_name"].startswith("The SDK is the forward home")
+    assert idy["initiative"] == "requirements-visualization"  # from the canonical ref
+
+
+def test_requirements_profile_for_overrides_static_masthead():
+    prof = requirements_profile_for(_REQ01)
+    assert prof.eyebrow == "REQ-01"                     # was static 'This spec'
+    assert prof.headline == "SDK Node Home"             # was static 'A first look at this spec'
+    assert prof.summary_meta and prof.summary_meta[0].startswith("The SDK is the forward home")
+    # the static base profile is unchanged (per-render copy only)
+    assert REQUIREMENTS_PROFILE.eyebrow == "This spec"
+    assert REQUIREMENTS_PROFILE.headline == "A first look at this spec"
+
+
+def test_requirements_profile_for_falls_back_when_unextractable(tmp_path):
+    bare = tmp_path / "notes.md"                        # no key, no H1, no name block
+    bare.write_text("just some prose, no header\n", encoding="utf-8")
+    prof = requirements_profile_for(bare)
+    assert prof.eyebrow == REQUIREMENTS_PROFILE.eyebrow          # graceful fallback to the base
+    assert prof.summary_meta == REQUIREMENTS_PROFILE.summary_meta
 
 
 def test_capability_index_emits_live_keys():
