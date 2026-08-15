@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + pre-projected NODE-SCHEMA-JSON; no LLM
 **Data classification:** internal
 
-> **Readable handle:** `feature/navigator-n-level-tree-renderer`
+> **Readable handle:** `feature/navigator-renders-node-trees-to-arbitrary-depth-63555859`
 > **Semantic name:** *Navigator renders Node trees to arbitrary depth via a dedicated tree renderer, reusing the existing wireframe path for 2-level projections and serving the three adopting consumers.*
 
 ---

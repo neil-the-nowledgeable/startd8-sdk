@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + pre-projected NODE-SCHEMA-JSON; no LLM, no network
 **Data classification:** internal
 
-> **Readable handle:** `feature/navigator-graph-topology-renderer`
+> **Readable handle:** `feature/navigator-renders-node-relationships-as-a-graph-24a7343d`
 > **Semantic name:** *Navigator renders Node relationships as a graph/network topology (dependency and cross-reference edges, not just the child tree) via a standalone force-directed graph renderer that never imports wireframe and inherits the shared lenses.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-05`
 

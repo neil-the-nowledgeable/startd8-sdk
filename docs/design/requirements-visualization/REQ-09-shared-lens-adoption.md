@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + authored manifests only; no LLM, no network
 **Data classification:** internal
 
-> **Readable handle:** `feature/navigator-shared-lens-adoption`
+> **Readable handle:** `feature/navigator-wires-the-tree-and-a11y-renderers-e2dc8017`
 > **Semantic name:** *Navigator wires the tree and a11y renderers through the shared node-lens transform and gives apply_node_lenses a direct consumer, so every renderer can inherit audience×fluency lenses without forking and no lens path stays dormant — while default (no-role) rendering stays byte-identical.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-09`
 

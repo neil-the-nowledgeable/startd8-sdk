@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + authored manifests only; no network fetch of evidence
 **Data classification:** internal
 
-> **Readable handle:** `feature/navigator-sdk-node-home`
+> **Readable handle:** `feature/the-sdk-is-the-forward-home-for-the-node-model-18ff88ef`
 > **Semantic name:** *The SDK is the forward home for the Node model and the requirements-as-Nodes navigator, porting ContextCore's field-complete Node/derive_status surface and rendering a requirements doc as its dogfood without a second renderer, grammar, or store.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-01`
 

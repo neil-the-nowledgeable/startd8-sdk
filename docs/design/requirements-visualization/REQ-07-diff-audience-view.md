@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + two pre-projected/authored Node states; no LLM; no network fetch of evidence
 **Data classification:** internal
 
-> **Readable handle:** `feature/navigator-diff-audience-view`
+> **Readable handle:** `feature/sdk-navigator-diffs-two-states-of-the-node-125a3a9c`
 > **Semantic name:** *SDK navigator diffs two states of the Node corpus and renders the delta — added/removed/changed FRs, status transitions, new dangling refs — as reviewer-audience Nodes/rows via a standalone diff renderer that never imports wireframe.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-07`
 

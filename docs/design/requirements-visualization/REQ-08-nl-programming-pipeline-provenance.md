@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + authored req/plan docs + read-only repo; **no network fetch**; the `Verify:`-oracle path runs authored acceptance checks and MUST default to inert (no execution unless explicitly opted in — see FR-4 / Risks)
 **Data classification:** internal
 
-> **Readable handle:** `feature/navigator-nl-programming-pipeline-provenance`
+> **Readable handle:** `feature/sdk-navigator-models-each-pipeline-stage-as-a-558d6fc7`
 > **Semantic name:** *SDK navigator models each pipeline stage as a Node, promotes a requirement's `Verify:` clause to a checkable acceptance oracle, and traces a delivered artifact back through the stages to the originating requirement — the prose→product compiler made observable end to end.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-08`
 

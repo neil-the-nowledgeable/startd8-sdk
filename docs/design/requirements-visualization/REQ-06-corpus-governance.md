@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + authored req docs; no network fetch; no LLM
 **Data classification:** internal
 
-> **Readable handle:** `feature/navigator-corpus-governance`
+> **Readable handle:** `feature/sdk-navigator-governs-a-directory-of-6b37edab`
 > **Semantic name:** *SDK navigator governs a DIRECTORY of requirement docs — asserting name-block presence, single-line-FR conformance, no dangling cross-refs, index freshness, and per-doc coverage — emitting a pass/fail governance report that plugs into the existing loop family rather than a parallel mechanism.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-06`
 
