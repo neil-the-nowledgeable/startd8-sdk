@@ -181,7 +181,14 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
                 "lives": [{"type": e.type, "ref": e.ref} for e in lives],
             }
         )
-        has_code = any(ev.type == "code" for ev in lives)
+        # A code Lives grounds the FR only if it RESOLVES — a git-anchored ref (exists at a commit)
+        # or a plain path that exists on disk. A `code` Lives to a not-yet-created file (an unbuilt
+        # spec, e.g. a new module named in Touches) must NOT read as grounded/green: honest status is
+        # spec ("written, not built"), not built. Fixes the false-GROUNDED on pre-build specs.
+        has_code = any(
+            ev.type == "code" and (ev.ref.startswith("git:") or (repo_root / ev.ref).exists())
+            for ev in lives
+        )
         # Done-claim without strong lives stays SPEC / awaiting — never grounded green.
         if health == "unknown":
             status = NodeStatus.SPEC

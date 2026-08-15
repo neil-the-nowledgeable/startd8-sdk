@@ -44,6 +44,23 @@ def test_requirements_profile_for_overrides_static_masthead():
     assert REQUIREMENTS_PROFILE.headline == "A first look at this spec"
 
 
+def test_code_lives_to_absent_file_is_spec_not_grounded(tmp_path):
+    """False-GROUNDED fix: a `Lives: code <path>` to a non-existent file → spec ('written, not built'),
+    NOT grounded/built. A code Lives to an EXISTING file → built. An unbuilt spec must not read green."""
+    doc = tmp_path / "REQ-99-fixture.md"
+    doc.write_text(
+        "# Fixture — Requirements\n\n**Format:** det-req/0.1\n\n"
+        "- **FR-1 — Absent target.** Builds a new module. Name: absent target. "
+        "Lives: code src/startd8/navigator/nonexistent_xyz.py. Verify: `x` exits 0. Serves: O-1\n"
+        "- **FR-2 — Existing target.** Edits an existing module. Name: existing target. "
+        "Lives: code src/startd8/navigator/models.py. Verify: `y` exits 0. Serves: O-1\n",
+        encoding="utf-8",
+    )
+    status = {n.key: n.status for n in nodes_from_requirements(doc, repo=Path.cwd())}
+    assert status["FR-1"] == "spec"    # code Lives to an ABSENT file → not grounded
+    assert status["FR-2"] == "built"   # code Lives to an EXISTING file → grounded
+
+
 def test_requirements_profile_for_falls_back_when_unextractable(tmp_path):
     bare = tmp_path / "notes.md"                        # no key, no H1, no name block
     bare.write_text("just some prose, no header\n", encoding="utf-8")
