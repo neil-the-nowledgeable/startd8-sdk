@@ -261,3 +261,33 @@ def test_resolved_definition_is_a_distinct_flattened_type():
     assert isinstance(resolved, ResolvedDefinition)
     # a resolved definition carries no extends pointer (it is flattened)
     assert not hasattr(resolved, "extends")
+
+
+# ── Definition-integrity guard (CEP EC-3) ────────────────────────────────────────────────────────
+# A registry-parametrized gate so a FUTURE domain added to DEFINITION_REGISTRY is automatically
+# covered — no silent drift between a definition, its JSON serialization, and its projected profile.
+
+# Every registry domain that has a module-level RenderProfile the CLI consumes, keyed by its
+# definition name → the projection must equal the constant (drift guard). Extend this map when a
+# new domain is folded into a definition (EC-2).
+_PROFILE_BY_DOMAIN = {
+    "requirements": REQUIREMENTS_PROFILE,
+    "capability": CAPABILITY_PROFILE,
+}
+
+
+@pytest.mark.parametrize("name", sorted(DEFINITION_REGISTRY))
+def test_every_registry_definition_resolves_and_round_trips(name):
+    d = DEFINITION_REGISTRY[name]
+    # (a) resolves without a cycle / dangling-extends error
+    assert isinstance(resolve(d, DEFINITION_REGISTRY), ResolvedDefinition)
+    # (b) the REAL authored definition (not a synthetic one) survives a JSON round-trip unchanged
+    assert ViewDefinition.from_dict(json.loads(json.dumps(d.to_dict()))) == d
+
+
+@pytest.mark.parametrize("name", sorted(_PROFILE_BY_DOMAIN))
+def test_domain_profile_equals_its_projected_definition(name):
+    projected = to_render_profile(resolve(DEFINITION_REGISTRY[name], DEFINITION_REGISTRY))
+    assert projected == _PROFILE_BY_DOMAIN[name], (
+        f"{name!r} RenderProfile drifted from its ViewDefinition projection"
+    )
