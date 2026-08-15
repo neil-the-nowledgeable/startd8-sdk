@@ -137,7 +137,11 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   /* Scaffold mode — the template's anatomy: outline every region carrying a data-scaffold role and
      float its label + data source, so an adopter (legal · benchmark · dev-os) can read the template
      itself from a debugging standpoint. Overlay only; no layout shift beyond the outline. */
-  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative}
+  /* scaffold mode needs a top gap so the floated label of the FIRST region isn't clipped off the page,
+     and each region's label sits in clear space above its own box instead of overlapping the region
+     above it. Applied only in scaffold mode (app path unaffected). */
+  body.scaffold{padding-top:18px}
+  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative;margin-top:15px}
   /* blueprint-annotation label: a solid dark chip (white on --ink ≈ 13:1 contrast — legible over ANY
      underlying content, unlike the old 9.5px semi-transparent colour-on-colour chip) with a
      layer-coloured left stripe. 11px, full opacity, high z-index + shadow so it lifts off the content. */
