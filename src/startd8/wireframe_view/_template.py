@@ -133,6 +133,21 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:-8px;left:8px;
     z-index:5;background:var(--accent);color:#fff;font-family:var(--mono);font-size:9.5px;font-weight:600;
     letter-spacing:.02em;padding:1px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;opacity:.92}
+  /* layer-aware colouring — the region role is coloured by which LAYER it belongs to (the three-layer
+     standard: control · descriptive · computed · node-driven), so scaffold mode teaches the taxonomy. */
+  body.scaffold [data-layer="control"]{outline-color:var(--accent2)}
+  body.scaffold [data-layer="control"]::before{background:var(--accent2)}
+  body.scaffold [data-layer="computed"]{outline-color:var(--ochre)}
+  body.scaffold [data-layer="computed"]::before{background:var(--ochre)}
+  body.scaffold [data-layer="node"]{outline-color:var(--planned)}
+  body.scaffold [data-layer="node"]::before{background:var(--planned)}
+  /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
+  #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
+    font-size:10px;font-family:var(--mono);line-height:1.7}
+  body.scaffold #debug .dbg-layers{display:block}
+  #debug .dbg-layers .ll{display:inline-block;color:#fff;border-radius:3px;padding:0 5px;margin:0 3px 3px 0}
+  #debug .ll.control{background:var(--accent2)} #debug .ll.descriptive{background:var(--accent)}
+  #debug .ll.computed{background:var(--ochre)} #debug .ll.node{background:var(--planned)}
 
   /* ---------- sections (progressive disclosure) ---------- */
   details.sec{background:var(--card);border:1px solid var(--line);border-radius:13px;margin:11px 0;
@@ -299,16 +314,16 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
 <body>
 <div id="debug" role="group" aria-label="View mode"></div>
 <div class="wrap">
-  <header class="mast" id="mast" data-scaffold="masthead — profile chrome (eyebrow · headline · why/do)"></header>
+  <header class="mast" id="mast" data-layer="descriptive" data-scaffold="masthead — profile chrome (eyebrow · headline · why/do)"></header>
   <div id="warn" role="status"></div>
-  <section class="glance" id="glance" aria-label="At a glance" data-scaffold="glance band — computed summary (status_counts · plan.shape)"></section>
+  <section class="glance" id="glance" aria-label="At a glance" data-layer="computed" data-scaffold="glance band — computed summary (status_counts · plan.shape)"></section>
   <div id="todos"></div>
-  <div class="toolbar" id="toolbar" data-scaffold="control layer — audience × fluency lenses"></div>
-  <div class="legend" id="legend" data-scaffold="status legend — profile.statuses[].meaning"></div>
+  <div class="toolbar" id="toolbar" data-layer="control" data-scaffold="control layer — audience × fluency lenses"></div>
+  <div class="legend" id="legend" data-layer="descriptive" data-scaffold="status legend — profile.statuses[].meaning"></div>
   <div class="lens-banner" id="lens" hidden></div>
   <hr class="rule">
-  <p class="section-lead" id="seclead" data-scaffold="section lead — profile.section_lead">What your app includes</p>
-  <main id="outline" data-scaffold="outline — node sections + cards (the node-driven layer)"></main>
+  <p class="section-lead" id="seclead" data-layer="descriptive" data-scaffold="section lead — profile.section_lead">What your app includes</p>
+  <main id="outline" data-layer="node" data-scaffold="outline — node sections + cards (the node-driven layer)"></main>
   <div class="signbar" id="signbar"></div>
   <footer class="closing" id="closing" hidden></footer>
 </div>
@@ -442,7 +457,7 @@ __PLAN_DATA__
       h.innerHTML=
         '<div class="eyebrow">'+esc(eyebrow)+' <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
         '<h1 class="headline">'+esc(headline)+'</h1>'+ meta +
-        ((why||doo)?'<div class="whybox" data-scaffold="reading guidance — profile.why / profile.do">'+
+        ((why||doo)?'<div class="whybox" data-layer="descriptive" data-scaffold="reading guidance — profile.why / profile.do">'+
           '<div><b>Why </b>'+esc(why)+'</div>'+
           '<div><b>Do </b>'+esc(doo)+'</div></div>':'');
     }
@@ -493,7 +508,7 @@ __PLAN_DATA__
     // plain text with interactive chips — the status roll-up becomes a live grounding filter.
     if(!EU && payload.profile && s.status_counts && Object.keys(s.status_counts).length){
       g.innerHTML=rows.map(function(r){
-        var sc=(r[0]==="Shape")?' data-scaffold="shape — plan.shape (dialect-aware)"':(r[0]==="Content"||r[0]==="Cascade")?'':'';
+        var sc=(r[0]==="Shape")?' data-layer="computed" data-scaffold="shape — plan.shape (dialect-aware)"':'';
         if(r[0] !== "Status") return '<div class="cell"'+sc+'><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
         var chips = Object.keys(s.status_counts).map(function(key){
           var cnt=s.status_counts[key], p=profStatus(key), bg=p?p.color:"#888", lbl=p?p.label:key;
@@ -501,7 +516,7 @@ __PLAN_DATA__
             ' style="background:'+esc(bg)+'" title="Filter to '+esc(lbl)+' items">'+
             esc(lbl)+' ('+esc(String(cnt))+')</button>';
         }).join("");
-        return '<div class="cell" id="glance-status-cell" data-scaffold="status roll-up — status_counts (+ PF-1 grounding filter)"><div class="k">'+esc(r[0])+'</div>'+
+        return '<div class="cell" id="glance-status-cell" data-layer="computed" data-scaffold="status roll-up — status_counts (+ PF-1 grounding filter)"><div class="k">'+esc(r[0])+'</div>'+
           '<div class="status-chips" id="status-chips">'+chips+'</div></div>';
       }).join("");
       g.querySelectorAll(".status-chip").forEach(function(btn){
@@ -737,6 +752,9 @@ __PLAN_DATA__
       // an adopter needs to see the template's anatomy — each region labelled with its scaffold role +
       // data source (data-scaffold). Orthogonal overlay, not a view mode.
       '<label class="dbg-opt"><input type="checkbox" id="scaffold"><span>Scaffold mode (template anatomy)</span></label>'+
+      '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
+        '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
+        '<span class="ll node">node-driven</span></div>'+
       prov;
     var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
     var hide=document.getElementById("hideScaffold"), scaf=document.getElementById("scaffold");
