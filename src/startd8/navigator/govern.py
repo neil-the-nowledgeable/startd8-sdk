@@ -427,7 +427,14 @@ def _check_orphans(spec_dir: Path, docs: List[Path]) -> List[Finding]:
     Orphan = a doc whose local key (REQ-0N) appears in no OTHER doc's text. Lower-severity advisory.
     """
     findings: List[Finding] = []
-    texts = {p.name: p.read_text(encoding="utf-8", errors="replace") for p in docs}
+    # Guard each read (robustness parity with govern_corpus) — an unreadable doc must not abort the
+    # orphan scan; govern_corpus already flags it, so skipping it here for the reference-scan is safe.
+    texts: Dict[str, str] = {}
+    for p in docs:
+        try:
+            texts[p.name] = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
     for p in docs:
         m = re.match(r"(REQ-0[1-9])\b", p.stem)
         if not m:

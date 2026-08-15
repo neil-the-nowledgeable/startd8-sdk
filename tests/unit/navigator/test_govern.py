@@ -88,6 +88,22 @@ def test_clean_fixture_corpus_passes():
     assert {"REQ-01-alpha.md", "REQ-02-beta.md"}.issubset(set(report.docs))
 
 
+def test_govern_survives_unreadable_corpus_doc(tmp_path):
+    """HTH-P2: an unreadable corpus doc must not abort the battery (orphan-scan OSError guard)."""
+    import os
+
+    if os.geteuid() == 0:  # pragma: no cover - root ignores chmod perms
+        return
+    _write_req(tmp_path, "alpha", key="REQ-01")
+    bad = _write_req(tmp_path, "beta", key="REQ-02")
+    os.chmod(bad, 0o000)
+    try:
+        report = govern_corpus(tmp_path)  # must NOT raise despite the unreadable doc
+    finally:
+        os.chmod(bad, 0o644)  # restore so tmp cleanup can remove it
+    assert report is not None  # battery completed
+
+
 # ------------------------------------------------------------------------------------------------ #
 # (b) per-FR unit tests
 # ------------------------------------------------------------------------------------------------ #
