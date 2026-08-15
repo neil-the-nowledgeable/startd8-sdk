@@ -10,6 +10,12 @@
 **Trust boundary:** local filesystem + authored req docs; no network fetch of evidence
 **Data classification:** internal
 
+> **Readable handle:** `feature/navigator-a11y-renderer-and-corpus-index`
+> **Semantic name:** *SDK navigator renders a requirements doc as a semantic accessible view and a directory of docs as a drill-to-leaf corpus index, as standalone renderers that never import wireframe.*
+> **Canonical ref:** `cc:intent:requirements-visualization:feature:req-03`
+
+---
+
 ## 0. Why this exists — the mujo recovery
 
 > *Mujo* (無常, impermanence): the deep-drill / **a11y renderer** and **corpus index** capabilities were

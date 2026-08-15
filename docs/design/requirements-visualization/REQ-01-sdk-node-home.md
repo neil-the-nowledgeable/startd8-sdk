@@ -10,6 +10,12 @@
 **Trust boundary:** local filesystem + authored manifests only; no network fetch of evidence
 **Data classification:** internal
 
+> **Readable handle:** `feature/navigator-sdk-node-home`
+> **Semantic name:** *The SDK is the forward home for the Node model and the requirements-as-Nodes navigator, porting ContextCore's field-complete Node/derive_status surface and rendering a requirements doc as its dogfood without a second renderer, grammar, or store.*
+> **Canonical ref:** `cc:intent:requirements-visualization:feature:req-01`
+
+---
+
 ## 0. Planning Insights (Self-Reflective Update)
 
 > What changed between v0.1 (pre-planning) and v0.2 (post-planning). Planning against
