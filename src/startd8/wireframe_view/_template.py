@@ -146,6 +146,12 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.scaffold [data-layer="computed"]::before{border-left-color:var(--ochre)}
   body.scaffold [data-layer="node"]{outline-color:var(--planned)}
   body.scaffold [data-layer="node"]::before{border-left-color:var(--planned)}
+  /* Scaffold-only (FR-16): isolate the anatomy — hide the node-driven CONTENT filling the node layer
+     while keeping the region's outline + label (an empty labelled skeleton). Non-node regions keep
+     their content; only the node layer's descendants are hidden. Pairs with scaffold mode. */
+  body.scaffold-only [data-layer="node"] *{visibility:hidden}
+  body.scaffold-only [data-layer="node"]{visibility:visible}
+  #debug .dbg-opt.dbg-sub{margin-left:16px}
   /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
   #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
     font-size:10px;font-family:var(--mono);line-height:1.7}
@@ -757,6 +763,9 @@ __PLAN_DATA__
       // an adopter needs to see the template's anatomy — each region labelled with its scaffold role +
       // data source (data-scaffold). Orthogonal overlay, not a view mode.
       '<label class="dbg-opt"><input type="checkbox" id="scaffold"><span>Scaffold mode (template anatomy)</span></label>'+
+      // FR-16: scaffold-only — a sub-option of scaffold mode that empties the node-driven content so
+      // the adopter sees just the labelled template skeleton. Checking it also turns scaffold mode on.
+      '<label class="dbg-opt dbg-sub"><input type="checkbox" id="scaffoldOnly"><span>Scaffold only (hide node content)</span></label>'+
       '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
         '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
         '<span class="ll node">node-driven</span></div>'+
@@ -770,7 +779,16 @@ __PLAN_DATA__
     struct.onchange=function(){ if(struct.checked) comb.checked=false; syncModes(); };
     comb.onchange=function(){ if(comb.checked) struct.checked=false; syncModes(); };
     hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
-    scaf.onchange=function(){ document.body.classList.toggle("scaffold", scaf.checked); };
+    var scafOnly=document.getElementById("scaffoldOnly");
+    scaf.onchange=function(){
+      document.body.classList.toggle("scaffold", scaf.checked);
+      if(!scaf.checked){ scafOnly.checked=false; document.body.classList.remove("scaffold-only"); }
+    };
+    scafOnly.onchange=function(){
+      var on=scafOnly.checked;
+      document.body.classList.toggle("scaffold-only", on);
+      if(on){ scaf.checked=true; document.body.classList.add("scaffold"); }  // labels/outlines need scaffold
+    };
   }
 
   renderAll();

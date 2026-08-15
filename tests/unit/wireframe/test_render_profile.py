@@ -79,6 +79,8 @@ def test_debug_view_mode_panel_is_profiled_and_byte_safe():
     assert 'data-layer=' in profiled                     # regions carry their layer classification
     assert 'class="dbg-layers"' in profiled              # the scaffold-mode layer legend
     assert 'body.scaffold [data-layer="computed"]' in profiled  # layer-aware colouring
+    assert 'id="scaffoldOnly"' in profiled               # FR-16 scaffold-only (anatomy isolation) toggle
+    assert 'body.scaffold-only [data-layer="node"]' in profiled  # FR-16 hides node content, keeps skeleton
     assert "if(payload.profile)" in profiled             # the panel is gated on a profile
     # Byte-safe: the app path is byte-identical with/without an explicit None (FR-8 preserved).
     assert render_html(_plan()) == render_html(_plan(), profile=None)
