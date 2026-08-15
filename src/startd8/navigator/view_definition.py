@@ -127,11 +127,34 @@ def resolve(
 
     Recursive over ``extends`` (looked up by name in ``registry``); later-wins per leaf key; keyed
     collections merged by id. A definition with ``extends=None`` resolves to itself (idempotent).
+
+    Fails loud on a malformed chain — an ``extends`` naming a definition absent from ``registry``, or a
+    cycle — with a :class:`ValueError` naming the offender, rather than a bare ``KeyError`` /
+    ``RecursionError`` (an ``extends`` graph assembled from authored or ``from_dict``-deserialized JSON
+    is not guaranteed acyclic).
     """
+    return _resolve(definition, registry, ())
+
+
+def _resolve(
+    definition: ViewDefinition,
+    registry: Mapping[str, ViewDefinition],
+    seen: tuple,
+) -> ResolvedDefinition:
+    """Recursion core carrying the ``seen`` chain (root→…→current) for cycle detection."""
+    if definition.name in seen:
+        chain = " → ".join((*seen, definition.name))
+        raise ValueError(f"cyclic 'extends' chain: {chain}")
     merged: Dict[str, Any] = {}
     if definition.extends is not None:
-        parent = registry[definition.extends]
-        merged = resolve(parent, registry).to_dict()
+        try:
+            parent = registry[definition.extends]
+        except KeyError:
+            raise ValueError(
+                f"{definition.name!r} extends unknown definition {definition.extends!r} "
+                f"(known: {sorted(registry)})"
+            ) from None
+        merged = _resolve(parent, registry, (*seen, definition.name)).to_dict()
     merged = _deep_merge(merged, definition._sections())
     return ResolvedDefinition(**merged)
 

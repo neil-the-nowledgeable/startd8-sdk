@@ -9,6 +9,8 @@ import copy
 import json
 from dataclasses import replace
 
+import pytest
+
 from startd8.navigator.sources_capability import CAPABILITY_PROFILE
 from startd8.navigator.sources_requirements import REQUIREMENTS_PROFILE
 from startd8.navigator.view_definition import (
@@ -75,6 +77,19 @@ def test_resolve_merges_keyed_collections_by_id_not_positional():
     assert statuses["a"]["color"] == "#999"      # overridden leaf wins
     assert statuses["a"]["label"] == "A"         # sibling leaf of the same entry preserved
     assert statuses["b"] == {"label": "B", "color": "#222", "meaning": "bb"}  # other entry untouched
+
+
+def test_resolve_raises_clear_error_on_unknown_extends_target():
+    orphan = ViewDefinition(name="orphan", extends="nope")
+    with pytest.raises(ValueError, match=r"extends unknown definition 'nope'"):
+        resolve(orphan, {"orphan": orphan})
+
+
+def test_resolve_raises_clear_error_on_cyclic_extends():
+    a = ViewDefinition(name="a", extends="b")
+    b = ViewDefinition(name="b", extends="a")
+    with pytest.raises(ValueError, match=r"cyclic 'extends' chain"):
+        resolve(a, {"a": a, "b": b})
 
 
 def test_resolve_of_root_is_idempotent():
