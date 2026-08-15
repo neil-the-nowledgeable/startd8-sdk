@@ -1,0 +1,55 @@
+{
+  "forms": [
+    {
+      "form": "class",
+      "id": "JAVA-STRUCT-001",
+      "note": "class Name { ... }",
+      "parser_kind": "class",
+      "witnessable_at": "both"
+    },
+    {
+      "form": "interface",
+      "id": "JAVA-STRUCT-002",
+      "note": "interface Name { ... }",
+      "parser_kind": "interface",
+      "witnessable_at": "both"
+    },
+    {
+      "form": "enum",
+      "id": "JAVA-STRUCT-003",
+      "note": "enum Name { ... }",
+      "parser_kind": "enum",
+      "witnessable_at": "both"
+    },
+    {
+      "form": "method",
+      "id": "JAVA-STRUCT-004",
+      "note": "returnType name(params); annotations attach here",
+      "parser_kind": "method",
+      "witnessable_at": "both"
+    },
+    {
+      "form": "constructor",
+      "id": "JAVA-STRUCT-005",
+      "note": "Name(params) {}; the regex path emits it as kind='method'",
+      "parser_kind": "constructor",
+      "witnessable_at": "authoritative"
+    },
+    {
+      "form": "field",
+      "id": "JAVA-STRUCT-006",
+      "note": "instance field; dropped on the regex path",
+      "parser_kind": "field",
+      "witnessable_at": "authoritative"
+    },
+    {
+      "form": "constant",
+      "id": "JAVA-STRUCT-007",
+      "note": "static final field; dropped on the regex path",
+      "parser_kind": "constant",
+      "witnessable_at": "authoritative"
+    }
+  ],
+  "schema_version": "1.0",
+  "substrate": "java_parser.py (javalang when available, regex fallback; declaration-depth; annotations)"
+}

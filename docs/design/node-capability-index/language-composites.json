@@ -1,0 +1,65 @@
+{
+  "composites": [
+    {
+      "id": "NODE-LC-001",
+      "name": "arrow_function_export",
+      "node_forms": [
+        "NODE-STRUCT-004"
+      ],
+      "note": "export const f = () => {} — the dominant JS/TS handler shape"
+    },
+    {
+      "id": "NODE-LC-002",
+      "name": "async_function",
+      "node_forms": [
+        "NODE-STRUCT-001",
+        "NODE-STRUCT-004"
+      ],
+      "note": "async function / async arrow — concurrent I/O"
+    },
+    {
+      "id": "NODE-LC-003",
+      "name": "interface_decl",
+      "node_forms": [
+        "NODE-STRUCT-005"
+      ],
+      "note": "TS interface — contract surface"
+    },
+    {
+      "id": "NODE-LC-004",
+      "name": "type_alias",
+      "node_forms": [
+        "NODE-STRUCT-006"
+      ],
+      "note": "TS type alias"
+    },
+    {
+      "id": "NODE-LC-005",
+      "name": "class_method",
+      "node_forms": [
+        "NODE-STRUCT-002",
+        "NODE-STRUCT-003"
+      ],
+      "note": "class with methods — service/handler class"
+    }
+  ],
+  "not_witnessable": [
+    {
+      "name": "promise_chain",
+      "reason": "body-level .then()/await chains; parser doesn't parse bodies"
+    },
+    {
+      "name": "dynamic_import",
+      "reason": "import('x') is a body-level call expression"
+    },
+    {
+      "name": "callback",
+      "reason": "callback passing is body-level"
+    },
+    {
+      "name": "decorator",
+      "reason": "TS decorators are dropped by nodejs_parser AND add 0 domain coverage (Java IT-5)"
+    }
+  ],
+  "schema_version": "1.0"
+}

@@ -1,0 +1,57 @@
+{
+  "forms": [
+    {
+      "form": "function",
+      "go_element": "kind='function'",
+      "id": "GO-STRUCT-001",
+      "note": "Top-level func Name(params) ret",
+      "parser_kind": "function"
+    },
+    {
+      "form": "method",
+      "go_element": "kind='method' (parent_type=receiver)",
+      "id": "GO-STRUCT-002",
+      "note": "func (r *T) Name(...); receiver in parent_type",
+      "parser_kind": "method"
+    },
+    {
+      "discriminator": "is_interface=False",
+      "form": "struct",
+      "go_element": "kind='class', is_interface=False",
+      "id": "GO-STRUCT-003",
+      "note": "type X struct { ... }; embedded types in bases[]",
+      "parser_kind": "class"
+    },
+    {
+      "discriminator": "is_interface=True",
+      "form": "interface",
+      "go_element": "kind='class', is_interface=True",
+      "id": "GO-STRUCT-004",
+      "note": "type X interface { ... }; methods in interface_methods[]",
+      "parser_kind": "class"
+    },
+    {
+      "form": "type_alias",
+      "go_element": "kind='type_alias'",
+      "id": "GO-STRUCT-005",
+      "note": "type X = Y / type X Y",
+      "parser_kind": "type_alias"
+    },
+    {
+      "form": "constant",
+      "go_element": "kind='constant'",
+      "id": "GO-STRUCT-006",
+      "note": "const X = ...",
+      "parser_kind": "constant"
+    },
+    {
+      "form": "variable",
+      "go_element": "kind='variable'",
+      "id": "GO-STRUCT-007",
+      "note": "var X ...",
+      "parser_kind": "variable"
+    }
+  ],
+  "schema_version": "1.0",
+  "substrate": "go_parser.py (regex, advisory-tier; no call graph)"
+}

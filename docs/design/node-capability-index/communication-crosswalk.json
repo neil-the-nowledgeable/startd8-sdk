@@ -1,0 +1,232 @@
+{
+  "detectability_floor": [
+    {
+      "id": "NODE-OTEL-5.2-HTTP-METRICS",
+      "reason": "Metric emission is in call bodies; the http import is already claimed by 5.1-HTTP.",
+      "semconv_domain": "http",
+      "tier": "advisory"
+    },
+    {
+      "id": "NODE-OTEL-5.7-CICD",
+      "reason": "Pipeline config + env, not an npm import.",
+      "semconv_domain": "cicd",
+      "tier": "advisory"
+    }
+  ],
+  "detector": "import-only (advisory; no annotation axis, no call graph)",
+  "invariant": "15 §5 keys key-for-key identical to python-capability-index/communication-crosswalk.json",
+  "pattern_ref": "dev-os/LANGUAGE-DOMAIN-COVERAGE-MAP.md",
+  "patterns": [
+    {
+      "grounding": "corpus",
+      "id": "NODE-OTEL-5.1-HTTP",
+      "import_signatures": [
+        "express",
+        "fastify",
+        "@nestjs/common",
+        "koa",
+        "http",
+        "https",
+        "node-fetch",
+        "axios",
+        "got",
+        "undici"
+      ],
+      "otel_pattern": "HTTP",
+      "semconv_domain": "http",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "floor": true,
+      "id": "NODE-OTEL-5.2-HTTP-METRICS",
+      "note": "Metric emission is in call bodies; not distinguishable from plain HTTP by import.",
+      "otel_pattern": "HTTP metrics",
+      "semconv_domain": "http"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.3-RPC",
+      "import_signatures": [
+        "@grpc/grpc-js",
+        "grpc"
+      ],
+      "otel_pattern": "gRPC",
+      "semconv_domain": "rpc",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.3-CONNECT",
+      "import_signatures": [
+        "@connectrpc/connect",
+        "@bufbuild/connect"
+      ],
+      "otel_pattern": "Connect RPC",
+      "semconv_domain": "rpc"
+    },
+    {
+      "grounding": "corpus",
+      "id": "NODE-OTEL-5.3-MCP",
+      "import_signatures": [
+        "@modelcontextprotocol/sdk"
+      ],
+      "note": "MCP is a first-class OTel semconv namespace (JSON-RPC family); reclassified out of rpc (2026-08-15 calibration).",
+      "otel_pattern": "Model Context Protocol",
+      "semconv_domain": "mcp"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.4-MESSAGING",
+      "import_signatures": [
+        "kafkajs",
+        "amqplib",
+        "nats",
+        "@google-cloud/pubsub",
+        "bullmq",
+        "bull"
+      ],
+      "otel_pattern": "Messaging",
+      "semconv_domain": "messaging",
+      "span_kinds": [
+        "PRODUCER",
+        "CONSUMER"
+      ]
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.5-DATABASE",
+      "import_signatures": [
+        "pg",
+        "mysql2",
+        "mysql",
+        "ioredis",
+        "redis",
+        "mongodb",
+        "mongoose",
+        "typeorm",
+        "@prisma/client",
+        "knex",
+        "sqlite3"
+      ],
+      "otel_pattern": "Database",
+      "semconv_domain": "db",
+      "span_kinds": [
+        "CLIENT"
+      ]
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.6-GRAPHQL",
+      "import_signatures": [
+        "graphql",
+        "@apollo/server",
+        "apollo-server",
+        "type-graphql"
+      ],
+      "otel_pattern": "GraphQL",
+      "semconv_domain": "graphql"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.6-FAAS",
+      "import_signatures": [
+        "aws-lambda",
+        "@vercel/node"
+      ],
+      "otel_pattern": "FaaS",
+      "semconv_domain": "faas"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.6-FEATURE-FLAGS",
+      "import_signatures": [
+        "@openfeature/server-sdk",
+        "launchdarkly-node-server-sdk",
+        "unleash-client"
+      ],
+      "otel_pattern": "Feature flags",
+      "semconv_domain": "feature-flags"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.6-GENAI",
+      "import_signatures": [
+        "openai",
+        "@anthropic-ai/sdk",
+        "@google/generative-ai",
+        "langchain",
+        "@langchain/core"
+      ],
+      "otel_pattern": "GenAI",
+      "semconv_domain": "gen-ai"
+    },
+    {
+      "floor": true,
+      "id": "NODE-OTEL-5.7-CICD",
+      "note": "Evidenced by pipeline config + env, not an npm import.",
+      "otel_pattern": "CI/CD",
+      "semconv_domain": "cicd"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.7-CLI",
+      "import_signatures": [
+        "commander",
+        "yargs",
+        "inquirer",
+        "@oclif/core",
+        "cac"
+      ],
+      "otel_pattern": "CLI",
+      "semconv_domain": "cli"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.1-DNS",
+      "import_signatures": [
+        "dns",
+        "dns/promises",
+        "native-dns"
+      ],
+      "otel_pattern": "DNS",
+      "semconv_domain": "dns"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.1-OBJECT-STORE",
+      "import_signatures": [
+        "@aws-sdk/client-s3",
+        "@google-cloud/storage",
+        "minio"
+      ],
+      "otel_pattern": "Object stores",
+      "registry": "derived",
+      "semconv_domain": "object-stores"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "NODE-OTEL-5.1-CLOUD-SDK",
+      "import_signatures": [
+        "aws-sdk",
+        "@aws-sdk",
+        "@google-cloud",
+        "@azure"
+      ],
+      "otel_pattern": "Cloud SDK",
+      "semconv_domain": "cloud"
+    }
+  ],
+  "resolution_pending": {
+    "axis": "call-site",
+    "note": "TS is the first SCIP indexer in the CKG roadmap, so Node's call-site φ is closest to landing.",
+    "status": "resolution-pending",
+    "unlock": "SCIP (scip-typescript) — CODE_KNOWLEDGE_GRAPH_DESIGN.md Phase 1 (the NEAREST unlock of any language)"
+  },
+  "schema_version": "1.0"
+}

@@ -1,0 +1,1663 @@
+{
+  "annotation_axis": {
+    "detected_via_annotation_only": [],
+    "marginal_patterns": 0,
+    "note": "patterns that would be MISSED by imports alone \u2014 the annotation axis's marginal contribution"
+  },
+  "corpus": "/Users/neilyashinsky/Documents/dev/OSS/kestra",
+  "coverage": {
+    "achievable_coverage_percent": 38.5,
+    "achievable_patterns": 13,
+    "detected_patterns": 5,
+    "floor_patterns_excluded": [
+      "JAVA-OTEL-5.2-HTTP-METRICS",
+      "JAVA-OTEL-5.7-CICD"
+    ]
+  },
+  "detected": [
+    "JAVA-OTEL-5.1-HTTP",
+    "JAVA-OTEL-5.3-RPC",
+    "JAVA-OTEL-5.5-DATABASE",
+    "JAVA-OTEL-5.6-GENAI",
+    "JAVA-OTEL-5.7-CLI"
+  ],
+  "detector": "import + annotation (resolution-blind; call-site \u03c6 is SCIP-pending)",
+  "files_analyzed": 2106,
+  "generator_index": "gen_java_structure_comm_index.py",
+  "not_evidenced_achievable": [
+    "JAVA-OTEL-5.1-CLOUD-SDK",
+    "JAVA-OTEL-5.1-DNS",
+    "JAVA-OTEL-5.1-OBJECT-STORE",
+    "JAVA-OTEL-5.3-CONNECT",
+    "JAVA-OTEL-5.4-MESSAGING",
+    "JAVA-OTEL-5.6-FAAS",
+    "JAVA-OTEL-5.6-FEATURE-FLAGS",
+    "JAVA-OTEL-5.6-GRAPHQL"
+  ],
+  "parse_errors": 0,
+  "per_file_hyp": [
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/AbstractApiCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/AbstractCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/AbstractValidateCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/BaseCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/Kestra.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/VersionProvider.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/AbstractServiceNamespaceUpdateCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/configs/sys/ConfigCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/configs/sys/ConfigPropertiesCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/flows/FlowCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/flows/FlowDeleteCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/flows/FlowDotCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/flows/FlowExportCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/flows/FlowTestCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/flows/FlowsSyncFromSourceCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/migrations/MigrationCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/migrations/V2TriggerMigrationCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/migrations/metadata/KvMetadataMigrationCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/migrations/metadata/MetadataMigrationCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/migrations/metadata/NsFilesMetadataMigrationCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/migrations/metadata/SecretsMetadataMigrationCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/namespaces/NamespaceCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/namespaces/kv/KvCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/namespaces/kv/KvUpdateCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/plugins/PluginCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/plugins/PluginDocCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/plugins/PluginInstallCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/plugins/PluginListCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/plugins/PluginSearchCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/plugins/PluginUninstallCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/AbstractServerCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "both"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/ControllerCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/ExecutorCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/IndexerCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/LocalCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/SchedulerCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/ServerCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/StandAloneCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/WebServerCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/servers/WorkerCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/sys/ReindexCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/sys/SubmitQueuedCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/sys/SysCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/sys/database/DatabaseCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/main/java/io/kestra/cli/commands/sys/database/DatabaseMigrateCommand.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.7-CLI": "import"
+      },
+      "rel_path": "kestra/cli/src/test/java/io/kestra/cli/commands/plugins/PluginInstallCommandTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/contextcore-pilot/.cap-dev-pipe/pipeline-output/Kestra/run-004-20260423T1450/plan-ingestion/generated/jdbc/src/main/java/io/kestra/repository/h2/JdbcLogRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/contextcore-pilot/.cap-dev-pipe/pipeline-output/Kestra/run-004-20260423T1450/plan-ingestion/generated/webserver/src/main/java/io/kestra/webserver/controllers/FlowTemplateController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/contextcore-pilot/.cap-dev-pipe/pipeline-output/Kestra/run-004-20260423T1450/plan-ingestion/generated/webserver/src/main/java/io/kestra/webserver/controllers/LogController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/contextcore-pilot/.cap-dev-pipe/pipeline-output/Kestra/run-004-20260423T1450/plan-ingestion/generated/webserver/src/test/java/io/kestra/webserver/controllers/FlowTemplateControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/contextcore-pilot/.cap-dev-pipe/pipeline-output/Kestra/run-004-20260423T1450/plan-ingestion/generated/webserver/src/test/java/io/kestra/webserver/controllers/LogControllerBulkDeleteTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/contexts/KestraBeansFactory.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/endpoints/BasicAuthEndpointsFilter.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/events/CrudEvent.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/http/client/HttpClient.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/models/HasSource.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/models/dashboards/TimeWindow.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/namespace/DefaultNamespaceFileMetadataStateStore.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/namespace/NamespaceFileService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/plugins/PluginCatalogService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/reporter/ServerEventSender.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/ArrayListTotal.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/DashboardRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/ExecutionRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/FlowRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/KvMetadataRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/LogRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/MetricRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/NamespaceFileMetadataRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/QueryBuilderInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/ServiceInstanceRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/repositories/TriggerRepositoryInterface.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/runners/DefaultExecutionLogMetaStore.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/runners/DefaultKVMetadataStateStore.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/runners/FlowInputOutput.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/runners/pebble/functions/HttpFunction.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/secret/SecretService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/services/ExecutionService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/services/ExecutionStreamingService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/services/GraphService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/services/KVStoreService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/services/LogStreamingService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/services/WebhookService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/storages/kv/KVPurgeCleaner.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/validations/factory/CustomValidatorFactoryProvider.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/core/validations/validator/WebhookValidator.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/plugin/core/http/Trigger.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/plugin/core/kv/Version.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/plugin/core/namespace/Version.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/main/java/io/kestra/plugin/core/trigger/Webhook.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/endpoints/BasicAuthEndpointsFilterTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/http/client/HttpClientTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/plugins/PluginCatalogServiceTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractExecutionRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractFlowRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractKvMetadataRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractLogRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractMetricRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractNamespaceFileMetadataRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractServiceInstanceRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/repositories/AbstractTriggerRepositoryTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/core/runners/FlowInputOutputTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/flow/ForEachItemCaseTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/flow/LoopCaseTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/flow/PauseTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/flow/RetryCaseTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/http/DownloadTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/http/RequestTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/http/SseRequestTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/kv/PurgeKVTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/namespace/PurgeFilesTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/core/src/test/java/io/kestra/plugin/core/trigger/WebhookTestPlugin.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/AbstractJdbcRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/JooqDSLContextWrapper.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/JooqExecuteListenerFactory.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcCrudRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcDashboardRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcExecutionRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcFlowRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcKvMetadataRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcLogRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcMetricRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcNamespaceFileMetadataRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcServiceInstanceRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/repository/AbstractJdbcTriggerRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/jdbc/runner/AbstractJdbcMultipleStateStore.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/main/java/io/kestra/repository/h2/JdbcLogRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/test/java/io/kestra/jdbc/JdbcTestUtils.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc/src/test/java/io/kestra/jdbc/repository/AbstractSQLInjectionTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc-h2/src/main/java/io/kestra/repository/h2/H2Repository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc-mysql/src/main/java/io/kestra/repository/mysql/MysqlExecutionRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc-mysql/src/main/java/io/kestra/repository/mysql/MysqlMetricRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc-mysql/src/main/java/io/kestra/repository/mysql/MysqlRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/jdbc-postgres/src/main/java/io/kestra/repository/postgres/PostgresRepository.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/tests/src/main/java/io/kestra/core/junit/extensions/AbstractLoaderExtension.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/tests/src/main/java/io/kestra/core/runners/TestRunnerUtils.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/ErrorController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/FlowTemplateController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/LogController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/RootController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/AiController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/ApiController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/BlueprintController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/ClusterController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/ConcurrencyLimitController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/DashboardController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/ExecutionController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/FlowController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/KVController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/LogController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/MetricController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/MiscController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/NamespaceController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/NamespaceFileController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/NamespaceSecretController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/OutputController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/PluginController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/RedirectController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/SecretController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/StaticFilter.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/TenantController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/controllers/api/TriggerController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/converters/QueryFilterFormatBinder.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/exceptions/IllegalArgumentExceptionHandler.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/exceptions/IllegalStateExceptionHandler.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/filter/AuthenticationFilter.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/listeners/OssAuthListener.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/models/api/ApiErrorResponse.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/rooting/TenantAliasingRooter.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ExecutionDependenciesStreamingService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/FlowAutoLoaderService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/MicronautHttpService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/SharedServiceInstanceMetricService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/AiService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/AiServiceManager.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/MetadataAppenderChatModelListener.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/MetricChatModelListener.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/NamespaceContextTool.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/PosthogChatModelListener.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/api/ApiAiService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/gemini/GeminiAiService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/ai/spi/PebbleSafeTemplateFactory.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/services/posthog/PosthogService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/tenants/TenantValidationFilter.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/utils/AutocompleteUtils.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/utils/PageableUtils.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/utils/RequestUtils.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/main/java/io/kestra/webserver/utils/Searcheable.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/FlowTemplateControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/LogControllerBulkDeleteTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/AiControllerQuotaTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/AiControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/AiDisabledTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/BlueprintControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/ClusterControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/ConcurrencyLimitControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/DashboardControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/ErrorControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/ExecutionControllerRunnerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/ExecutionControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/FlowControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import",
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/KVControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/LogControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/MetricControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/MiscControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/MiscUsageControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/NamespaceControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/NamespaceFileControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/OutputControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/PluginControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/SecretControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/TaskRunControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "both"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/TestUtilsController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/TriggerControllerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/WebhookPluginTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/controllers/api/WebhookRoutingTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/converters/QueryFilterFormatBinderTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/filter/AuthenticationFilterTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/filter/TestAuthFilter.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/otel/TracesTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/services/SharedServiceInstanceMetricServiceTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/services/ai/AiServiceManagerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/services/ai/MetadataAppenderChatModelListenerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.6-GENAI": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/services/ai/PosthogChatModelListenerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/services/ai/api/ApiAiServiceTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/services/posthog/PosthogServiceTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/tenants/TenantValidationFilterTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.5-DATABASE": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/utils/PageableUtilsTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.1-HTTP": "import"
+      },
+      "rel_path": "kestra/webserver/src/test/java/io/kestra/webserver/utils/RequestUtilsTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker/src/main/java/io/kestra/worker/GrpcStubFactory.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker/src/main/java/io/kestra/worker/fetchers/WorkerJobFetcher.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker/src/main/java/io/kestra/worker/senders/GrpcWorkerIOSender.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker/src/main/java/io/kestra/worker/services/GrpcWorkerConnectionService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker/src/test/java/io/kestra/worker/senders/GrpcWorkerIOSenderTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/DefaultController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/GrpcChannelManager.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/WorkerControllerService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/resolver/StaticNameResolver.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/resolver/StaticNameResolverProvider.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/resolver/StorageNameResolver.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/resolver/StorageNameResolverProvider.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcConnectControllerService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcExecutionLogController.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcFlowMetaStoreWorkerControllerService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcKVMetadataControllerService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcLivenessControllerService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcNSMetadataControllerService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcWorkerControllerService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/GrpcWorkerReportingService.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/main/java/io/kestra/controller/grpc/services/WorkerStreamContext.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/test/java/io/kestra/controller/GrpcChannelManagerStorageTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/test/java/io/kestra/controller/GrpcChannelManagerTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/test/java/io/kestra/controller/grpc/services/WorkerJobDispatcherTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/test/java/io/kestra/controller/resolver/StaticNameResolverTest.java"
+    },
+    {
+      "hyp": {
+        "JAVA-OTEL-5.3-RPC": "import"
+      },
+      "rel_path": "kestra/worker-controller/src/test/java/io/kestra/controller/resolver/StorageNameResolverTest.java"
+    }
+  ],
+  "per_pattern_signal_counts": {
+    "JAVA-OTEL-5.1-CLOUD-SDK": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.1-DNS": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.1-HTTP": {
+      "annotation": 0,
+      "both": 30,
+      "import": 88
+    },
+    "JAVA-OTEL-5.1-OBJECT-STORE": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.3-CONNECT": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.3-RPC": {
+      "annotation": 0,
+      "both": 0,
+      "import": 26
+    },
+    "JAVA-OTEL-5.4-MESSAGING": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.5-DATABASE": {
+      "annotation": 0,
+      "both": 0,
+      "import": 77
+    },
+    "JAVA-OTEL-5.6-FAAS": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.6-FEATURE-FLAGS": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.6-GENAI": {
+      "annotation": 0,
+      "both": 0,
+      "import": 9
+    },
+    "JAVA-OTEL-5.6-GRAPHQL": {
+      "annotation": 0,
+      "both": 0,
+      "import": 0
+    },
+    "JAVA-OTEL-5.7-CLI": {
+      "annotation": 0,
+      "both": 8,
+      "import": 38
+    }
+  }
+}

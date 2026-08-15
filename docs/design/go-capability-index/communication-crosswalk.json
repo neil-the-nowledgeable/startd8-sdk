@@ -1,0 +1,209 @@
+{
+  "detectability_floor": [
+    {
+      "id": "GO-OTEL-5.2-HTTP-METRICS",
+      "reason": "Metric emission lives in instrumentation call bodies; go_parser.py does not parse bodies, and the http import alone is already claimed by 5.1-HTTP.",
+      "semconv_domain": "http",
+      "tier": "advisory"
+    },
+    {
+      "id": "GO-OTEL-5.7-CICD",
+      "reason": "Evidenced by pipeline config + env vars (CI/GITHUB_ACTIONS), not a Go library import — nothing for an import-only detector to match.",
+      "semconv_domain": "cicd",
+      "tier": "advisory"
+    }
+  ],
+  "detector": "import-only (advisory tier; no call graph)",
+  "invariant": "15 §5 keys key-for-key identical to python-capability-index/communication-crosswalk.json",
+  "pattern_ref": "dev-os/LANGUAGE-DOMAIN-COVERAGE-MAP.md",
+  "patterns": [
+    {
+      "grounding": "corpus",
+      "id": "GO-OTEL-5.1-HTTP",
+      "import_signatures": [
+        "net/http",
+        "github.com/gin-gonic/gin",
+        "github.com/gorilla/mux",
+        "github.com/go-chi/chi",
+        "github.com/labstack/echo"
+      ],
+      "otel_pattern": "HTTP",
+      "semconv_domain": "http",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "floor": true,
+      "id": "GO-OTEL-5.2-HTTP-METRICS",
+      "note": "Metric emission (http.server.request.duration) lives in instrumentation call bodies; not distinguishable from plain HTTP by import. See detectability_floor.",
+      "otel_pattern": "HTTP metrics",
+      "semconv_domain": "http"
+    },
+    {
+      "grounding": "corpus",
+      "id": "GO-OTEL-5.3-RPC",
+      "import_signatures": [
+        "google.golang.org/grpc"
+      ],
+      "otel_pattern": "gRPC",
+      "semconv_domain": "rpc",
+      "span_kinds": [
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.3-CONNECT",
+      "import_signatures": [
+        "connectrpc.com/connect",
+        "github.com/bufbuild/connect-go"
+      ],
+      "otel_pattern": "Connect RPC",
+      "semconv_domain": "rpc"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.3-MCP",
+      "import_signatures": [
+        "github.com/mark3labs/mcp-go"
+      ],
+      "otel_pattern": "Model Context Protocol",
+      "semconv_domain": "mcp"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.4-MESSAGING",
+      "import_signatures": [
+        "github.com/Shopify/sarama",
+        "github.com/IBM/sarama",
+        "github.com/segmentio/kafka-go",
+        "github.com/nats-io/nats.go",
+        "github.com/rabbitmq/amqp091-go"
+      ],
+      "otel_pattern": "Messaging",
+      "semconv_domain": "messaging",
+      "span_kinds": [
+        "PRODUCER",
+        "CONSUMER"
+      ]
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.5-DATABASE",
+      "import_signatures": [
+        "database/sql",
+        "github.com/jackc/pgx/v5",
+        "github.com/redis/go-redis/v9",
+        "github.com/go-redis/redis",
+        "gorm.io/gorm",
+        "go.mongodb.org/mongo-driver"
+      ],
+      "otel_pattern": "Database",
+      "semconv_domain": "db",
+      "span_kinds": [
+        "CLIENT"
+      ]
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.6-GRAPHQL",
+      "import_signatures": [
+        "github.com/graph-gophers/graphql-go",
+        "github.com/99designs/gqlgen"
+      ],
+      "otel_pattern": "GraphQL",
+      "semconv_domain": "graphql"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.6-FAAS",
+      "import_signatures": [
+        "github.com/aws/aws-lambda-go/lambda"
+      ],
+      "otel_pattern": "FaaS",
+      "semconv_domain": "faas"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.6-FEATURE-FLAGS",
+      "import_signatures": [
+        "github.com/open-feature/go-sdk",
+        "github.com/launchdarkly/go-server-sdk",
+        "github.com/open-feature/go-sdk-contrib/providers/flagd"
+      ],
+      "otel_pattern": "Feature flags",
+      "semconv_domain": "feature-flags"
+    },
+    {
+      "grounding": "ecosystem",
+      "id": "GO-OTEL-5.6-GENAI",
+      "import_signatures": [
+        "github.com/sashabaranov/go-openai",
+        "github.com/anthropics/anthropic-sdk-go",
+        "github.com/google/generative-ai-go"
+      ],
+      "note": "Import-detectable at advisory tier by the SAME standard as every other domain (SDK import = domain hypothesis); NOT a floor pattern (reclassified from the REQ).",
+      "otel_pattern": "GenAI",
+      "semconv_domain": "gen-ai"
+    },
+    {
+      "floor": true,
+      "id": "GO-OTEL-5.7-CICD",
+      "note": "CI/CD context is evidenced by pipeline config + env (CI, GITHUB_ACTIONS), not a Go library import. Advisory tier cannot witness it. See detectability_floor.",
+      "otel_pattern": "CI/CD",
+      "semconv_domain": "cicd"
+    },
+    {
+      "grounding": "corpus",
+      "id": "GO-OTEL-5.7-CLI",
+      "import_signatures": [
+        "github.com/spf13/cobra",
+        "github.com/spf13/pflag",
+        "github.com/urfave/cli",
+        "flag"
+      ],
+      "otel_pattern": "CLI",
+      "semconv_domain": "cli"
+    },
+    {
+      "grounding": "corpus",
+      "id": "GO-OTEL-5.1-DNS",
+      "import_signatures": [
+        "github.com/miekg/dns"
+      ],
+      "note": "stdlib 'net' is intentionally EXCLUDED — under prefix matching it collides with net/http (5.1-HTTP); github.com/miekg/dns is the specific, non-colliding signal.",
+      "otel_pattern": "DNS",
+      "semconv_domain": "dns"
+    },
+    {
+      "grounding": "corpus",
+      "id": "GO-OTEL-5.1-OBJECT-STORE",
+      "import_signatures": [
+        "github.com/thanos-io/objstore",
+        "github.com/aws/aws-sdk-go/service/s3",
+        "github.com/aws/aws-sdk-go-v2/service/s3",
+        "cloud.google.com/go/storage",
+        "github.com/minio/minio-go"
+      ],
+      "otel_pattern": "Object stores",
+      "registry": "derived",
+      "semconv_domain": "object-stores"
+    },
+    {
+      "grounding": "corpus",
+      "id": "GO-OTEL-5.1-CLOUD-SDK",
+      "import_signatures": [
+        "github.com/aws/aws-sdk-go",
+        "github.com/aws/aws-sdk-go-v2",
+        "cloud.google.com/go",
+        "github.com/Azure/azure-sdk-for-go"
+      ],
+      "otel_pattern": "Cloud SDK",
+      "semconv_domain": "cloud"
+    }
+  ],
+  "schema_version": "1.0"
+}

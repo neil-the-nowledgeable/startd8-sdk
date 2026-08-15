@@ -1,0 +1,216 @@
+{
+  "communication_filter": [
+    "aws",
+    "azure",
+    "cassandra",
+    "cicd",
+    "cli",
+    "cloud",
+    "cloudevents",
+    "cloudfoundry",
+    "db",
+    "dns",
+    "elasticsearch",
+    "faas",
+    "feature-flags",
+    "gcp",
+    "gen-ai",
+    "graphql",
+    "heroku",
+    "http",
+    "jsonrpc",
+    "mcp",
+    "messaging",
+    "onc_rpc",
+    "openai",
+    "openshift",
+    "oracledb",
+    "rpc",
+    "signalr"
+  ],
+  "counts": {
+    "derived": 1,
+    "mapped": 13,
+    "our_domains": 14,
+    "unmapped_candidates": 4
+  },
+  "generator": "gen_semconv_domains.py",
+  "our_domains": [
+    {
+      "domain": "cicd",
+      "status": "mapped"
+    },
+    {
+      "domain": "cli",
+      "status": "mapped"
+    },
+    {
+      "domain": "cloud",
+      "status": "mapped"
+    },
+    {
+      "domain": "db",
+      "status": "mapped"
+    },
+    {
+      "domain": "dns",
+      "status": "mapped"
+    },
+    {
+      "domain": "faas",
+      "status": "mapped"
+    },
+    {
+      "domain": "feature-flags",
+      "status": "mapped"
+    },
+    {
+      "domain": "gen-ai",
+      "status": "mapped"
+    },
+    {
+      "domain": "graphql",
+      "status": "mapped"
+    },
+    {
+      "domain": "http",
+      "status": "mapped"
+    },
+    {
+      "domain": "mcp",
+      "status": "mapped"
+    },
+    {
+      "domain": "messaging",
+      "status": "mapped"
+    },
+    {
+      "domain": "object-stores",
+      "note": "not a semconv namespace — our grouping; keep flagged, don't pretend canonical",
+      "status": "derived"
+    },
+    {
+      "domain": "rpc",
+      "status": "mapped"
+    }
+  ],
+  "registry_namespaces_snapshot": [
+    "android",
+    "app",
+    "artifact",
+    "aspnetcore",
+    "aws",
+    "azure",
+    "browser",
+    "cassandra",
+    "cicd",
+    "cli",
+    "client",
+    "cloud",
+    "cloudevents",
+    "cloudfoundry",
+    "code",
+    "container",
+    "cpu",
+    "cpython",
+    "db",
+    "deployment",
+    "destination",
+    "device",
+    "disk",
+    "dns",
+    "dotnet",
+    "elasticsearch",
+    "enduser",
+    "error",
+    "event",
+    "exceptions",
+    "faas",
+    "feature-flags",
+    "file",
+    "gcp",
+    "gen-ai",
+    "geo",
+    "go",
+    "graphql",
+    "hardware",
+    "heroku",
+    "host",
+    "http",
+    "ios",
+    "jsonrpc",
+    "jvm",
+    "k8s",
+    "kestrel",
+    "linux",
+    "log",
+    "mainframe",
+    "mcp",
+    "messaging",
+    "network",
+    "nfs",
+    "nodejs",
+    "oci",
+    "onc_rpc",
+    "openai",
+    "openshift",
+    "opentracing",
+    "oracledb",
+    "os",
+    "otel",
+    "peer",
+    "pprof",
+    "process",
+    "profile",
+    "rpc",
+    "security-rule",
+    "server",
+    "service",
+    "session",
+    "signalr",
+    "source",
+    "system",
+    "telemetry",
+    "test",
+    "thread",
+    "tls",
+    "url",
+    "user",
+    "user-agent",
+    "v8js",
+    "vcs",
+    "webengine",
+    "zos"
+  ],
+  "registry_source": "/Users/neilyashinsky/Documents/dev/OTel/semantic-conventions/semantic-conventions/model",
+  "subsumed": {
+    "aws": "cloud",
+    "azure": "cloud",
+    "cassandra": "db",
+    "cloudfoundry": "cloud",
+    "elasticsearch": "db",
+    "gcp": "cloud",
+    "heroku": "cloud",
+    "openai": "gen-ai",
+    "openshift": "cloud",
+    "oracledb": "db"
+  },
+  "unmapped_candidates": [
+    {
+      "action": "candidate new §5 domain — consider adding",
+      "namespace": "cloudevents"
+    },
+    {
+      "action": "candidate new §5 domain — consider adding",
+      "namespace": "jsonrpc"
+    },
+    {
+      "action": "candidate new §5 domain — consider adding",
+      "namespace": "onc_rpc"
+    },
+    {
+      "action": "candidate new §5 domain — consider adding",
+      "namespace": "signalr"
+    }
+  ]
+}
