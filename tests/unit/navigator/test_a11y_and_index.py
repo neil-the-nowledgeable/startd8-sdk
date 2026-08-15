@@ -66,6 +66,21 @@ def test_a11y_status_not_colour_only(tmp_path):
     assert "needs attention" in html and "your call" in html
 
 
+# ---- HTH Phase 2 (E1): I/O error → clean exit, not a traceback ---------------
+def test_a11y_build_oserror_exits_cleanly(tmp_path):
+    """HTH P2/E1: an unwritable --out yields a clean non-zero exit + error msg, not a traceback."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("i am a file, not a dir", encoding="utf-8")  # out under a file → NotADirectoryError
+    result = RUNNER.invoke(
+        app,
+        ["navigator", "build", "--source", "requirements", "--requirements", str(FIXTURE),
+         "--format", "a11y", "--out", str(blocker / "nested" / "a.html")],
+    )
+    assert result.exit_code != 0
+    assert "error:" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)  # no leaked traceback
+
+
 # ---- FR-5 / FR-1: standalone (no wireframe import) --------------------------
 def test_render_a11y_is_standalone_no_wireframe_import():
     """FR-5: the a11y renderer must not import wireframe (check import lines, not prose)."""

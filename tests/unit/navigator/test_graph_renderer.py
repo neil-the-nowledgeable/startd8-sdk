@@ -10,10 +10,33 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import json
+
+from typer.testing import CliRunner
+
+from startd8.cli import app
 from startd8.navigator.models import Node, NodeStatus
 from startd8.navigator.render_graph import render_navigator_graph_html
 
 _RENDER_SRC = Path(__file__).resolve().parents[3] / "src" / "startd8" / "navigator" / "render_graph.py"
+_RUNNER = CliRunner()
+
+
+# ---- HTH Phase 2 (E1): I/O error → clean exit, not a traceback ---------------
+def test_graph_build_oserror_exits_cleanly(tmp_path):
+    """HTH P2/E1: the graph CLI branch turns an unwritable --out into a clean non-zero exit."""
+    fixture = tmp_path / "f.json"
+    fixture.write_text(json.dumps({"nodes": [{"key": "A", "does": "a", "status": "built"}]}), "utf-8")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("file, not dir", encoding="utf-8")  # out under a file → NotADirectoryError
+    result = _RUNNER.invoke(
+        app,
+        ["navigator", "build", "--source", "nodes-json", "--nodes-json", str(fixture),
+         "--renderer", "graph", "--format", "html", "--out", str(blocker / "nested" / "g.html")],
+    )
+    assert result.exit_code != 0
+    assert "error:" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
 def _cycle() -> list:

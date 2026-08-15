@@ -125,30 +125,34 @@ def build(
         if out is None:
             console.print("[red]error:[/red] --out is required for --format html")
             raise typer.Exit(_EXIT_ERR)
-        if renderer == "tree":
-            render_navigator_tree_html(
-                list(nodes), out,
-                title=f"Node Navigator — {source}",
-                open_depth=open_depth,
-            )
-        elif renderer == "graph":
-            render_navigator_graph_html(
-                list(nodes), out,
-                title=f"Node Graph — {source}",
-                semantic_only=semantic_only,
-            )
-        elif renderer == "wireframe":
-            render_nodes_html(
-                nodes,
-                out,
-                project_root=project_root,
-                group_by=group_by,
-                profile=profile,
-            )
-        else:
+        if renderer not in ("tree", "graph", "wireframe"):
             console.print(
                 f"[red]error:[/red] unknown --renderer {renderer!r} (expected wireframe|tree|graph)"
             )
+            raise typer.Exit(_EXIT_ERR)
+        try:
+            if renderer == "tree":
+                render_navigator_tree_html(
+                    list(nodes), out,
+                    title=f"Node Navigator — {source}",
+                    open_depth=open_depth,
+                )
+            elif renderer == "graph":
+                render_navigator_graph_html(
+                    list(nodes), out,
+                    title=f"Node Graph — {source}",
+                    semantic_only=semantic_only,
+                )
+            else:  # wireframe
+                render_nodes_html(
+                    nodes,
+                    out,
+                    project_root=project_root,
+                    group_by=group_by,
+                    profile=profile,
+                )
+        except OSError as exc:
+            console.print(f"[red]error:[/red] {exc}")
             raise typer.Exit(_EXIT_ERR)
         console.print(f"wrote {out} ({len(nodes)} nodes, {renderer})")
         raise typer.Exit(_EXIT_OK)
@@ -158,7 +162,11 @@ def build(
         if out is None:
             console.print("[red]error:[/red] --out is required for --format a11y")
             raise typer.Exit(_EXIT_ERR)
-        render_a11y_to_file(list(nodes), out, title=f"{source}")
+        try:
+            render_a11y_to_file(list(nodes), out, title=f"{source}")
+        except OSError as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_ERR)
         console.print(f"wrote {out} ({len(nodes)} nodes, a11y)")
         raise typer.Exit(_EXIT_OK)
 

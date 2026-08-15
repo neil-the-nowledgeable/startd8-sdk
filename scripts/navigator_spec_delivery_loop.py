@@ -161,7 +161,13 @@ def main(argv: List[str]) -> int:
         print("-" * 100)
         n_blocked = 0
         for s in specs:
-            v = gate_spec(s)
+            try:
+                v = gate_spec(s)
+            except (OSError, UnicodeDecodeError) as exc:
+                # One unreadable/non-UTF-8 spec must not abort the whole survey.
+                n_blocked += 1
+                print(f"{s.name:52}{'✗':8}unreadable: {exc}"[:150])
+                continue
             if not v["ok"]:
                 n_blocked += 1
             print(f"{s.name:52}{'✓' if v['ok'] else '✗':8}"
