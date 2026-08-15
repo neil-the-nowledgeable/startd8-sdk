@@ -105,6 +105,14 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
     border-radius:10px;padding:9px 12px;box-shadow:0 6px 22px -14px rgba(40,32,16,.5);max-width:230px}
   #debug .dbg-title{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
     font-weight:700;margin-bottom:6px}
+  /* group headers — the panel's three logical kinds of control (VIEW modes · OVERLAYS · TEMPLATE
+     ANATOMY), each a labelled divider so the panel reads as coherent sections, not a flat pile.
+     Inert on the app path (whole panel is profile-gated). */
+  #debug .dbg-group{font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);
+    font-weight:700;margin:9px 0 3px;padding-top:8px;border-top:1px solid var(--line)}
+  #debug .dbg-group.dbg-group-first{margin-top:2px;padding-top:0;border-top:none}
+  #debug .dbg-group .dbg-hint{font-weight:400;letter-spacing:.02em;text-transform:none;color:var(--faint);
+    opacity:.75}
   #debug .dbg-opt{display:flex;align-items:flex-start;gap:6px;font-size:12.5px;color:var(--ink);
     cursor:pointer;padding:2px 0}
   #debug .dbg-opt input{margin-top:2px;flex:none}
@@ -749,19 +757,32 @@ __PLAN_DATA__
       prov='<div class="dbg-prov '+cls+'">provenance '+ch.score+' · '+ch.present+'/'+ch.total+' proven'+
         (cruft?' · <b>'+cruft+' cruft</b>: '+esc((ch.orphans||[]).join(", ")):' · no cruft ✓')+'</div>';
     }
+    // The panel carries three logically-distinct KINDS of control, now grouped under labelled
+    // headers (FR-19): VIEW (mutually-exclusive content-presentation modes) · OVERLAYS (orthogonal,
+    // additive filters) · TEMPLATE ANATOMY (the debug overlay of the template itself + its legend).
+    // The PROVENANCE readout stays at the bottom. This is REORGANIZATION + labelling only — every
+    // checkbox id and its body-class toggle is unchanged.
     document.getElementById("debug").innerHTML=
       '<div class="dbg-title">View mode</div>'+
+      // ── VIEW: mutually-exclusive content-presentation modes ──────────────────────────────────
+      // Full (default, no control) · Structure only · Combined. Structure-only and Combined clear
+      // each other (radio-like), so they belong under one "pick one" heading.
+      '<div class="dbg-group dbg-group-first">View <span class="dbg-hint">· pick one (Full is default)</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="structOnly"><span>Structure only</span></label>'+
       '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>'+
+      // ── OVERLAYS: orthogonal, additive filters (independent of the VIEW mode) ─────────────────
       // Multi-stage cruft purge: an orthogonal filter (not a view mode) that HIDES the app-scaffold
       // chrome the fresh-eyes audit flagged (sign-off subsystem · mockups · delivery-role kits) —
       // non-destructive so a downstream consumer opts in and elements can resurface later in a
       // different light. Default off (nothing hidden until selected).
+      '<div class="dbg-group">Overlays <span class="dbg-hint">· additive</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="hideScaffold"><span>Hide app-scaffold chrome</span></label>'+
+      // ── TEMPLATE ANATOMY: the debug overlay of the TEMPLATE itself (+ its layer legend) ───────
       // Scaffold mode: the meta-debugging view of the TEMPLATE itself. As this renderer becomes the
       // de-facto multi-domain node visualizer (requirements first; legal · benchmark · dev-os next),
       // an adopter needs to see the template's anatomy — each region labelled with its scaffold role +
       // data source (data-scaffold). Orthogonal overlay, not a view mode.
+      '<div class="dbg-group">Template anatomy <span class="dbg-hint">· debug</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="scaffold"><span>Scaffold mode (template anatomy)</span></label>'+
       // FR-16: scaffold-only — a sub-option of scaffold mode that empties the node-driven content so
       // the adopter sees just the labelled template skeleton. Checking it also turns scaffold mode on.
@@ -769,6 +790,7 @@ __PLAN_DATA__
       '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
         '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
         '<span class="ll node">node-driven</span></div>'+
+      // ── PROVENANCE: the live readout stays at the bottom ──────────────────────────────────────
       prov;
     var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
     var hide=document.getElementById("hideScaffold"), scaf=document.getElementById("scaffold");

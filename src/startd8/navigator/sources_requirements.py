@@ -112,19 +112,43 @@ def requirement_identity(path: Path, text: Optional[str] = None) -> dict:
 
 
 def requirements_profile_for(path: Path, text: Optional[str] = None) -> RenderProfile:
-    """A per-doc RenderProfile whose masthead identity is DERIVED from the requirement itself (FR-17):
-    eyebrow = key, headline = H1 title, sub-headline = the DIDL semantic name — replacing
-    ``REQUIREMENTS_PROFILE``'s static 'This spec' / 'A first look at this spec' domain copy so the
-    masthead speaks about *this* requirement. Falls back to the static base per-field when a field
-    can't be extracted (byte-safe: the base profile is unchanged; only the CLI's per-render copy differs)."""
+    """A per-doc RenderProfile whose masthead + descriptive chrome is DERIVED from the requirement
+    itself, replacing ``REQUIREMENTS_PROFILE``'s static domain copy so the view speaks about *this*
+    requirement. Two derivation layers:
+
+    - FR-17 masthead identity: eyebrow = key, headline = H1 title, sub-headline = the DIDL semantic
+      name (was the static 'This spec' / 'A first look at this spec').
+    - FR-18 descriptive chrome: ``section_lead`` = "What {key} defines" (was static
+      "What this spec defines") and the page ``title`` (the browser tab / OG title, read by
+      ``view.py`` into ``<title>``) = "{key} — {H1 title}" (was static "This spec — a first look").
+
+    Every field falls back to the static base when its identity input can't be extracted (byte-safe:
+    the base profile is unchanged; only the CLI's per-render copy differs). The remaining base strings
+    — ``why`` / ``do`` (reading guidance about the renderer, not this requirement's content) and
+    ``gap_noun`` (domain vocabulary) — are intentionally NOT derived and ride through unchanged."""
     from dataclasses import replace
 
     idy = requirement_identity(path, text)
+    key = idy["key"]
+    title = idy["title"]
+    # section_lead names THIS requirement ("What REQ-01 defines"); page title is "{key} — {H1}".
+    # Both prefer the key (the stable, self-identifying handle); degrade gracefully when it's absent.
+    section_lead = f"What {key} defines" if key else REQUIREMENTS_PROFILE.section_lead
+    if key and title:
+        doc_title = f"{key} — {title}"
+    elif key:
+        doc_title = key
+    elif title:
+        doc_title = title
+    else:
+        doc_title = REQUIREMENTS_PROFILE.title
     return replace(
         REQUIREMENTS_PROFILE,
-        eyebrow=idy["key"] or REQUIREMENTS_PROFILE.eyebrow,
-        headline=idy["title"] or REQUIREMENTS_PROFILE.headline,
+        eyebrow=key or REQUIREMENTS_PROFILE.eyebrow,
+        headline=title or REQUIREMENTS_PROFILE.headline,
         summary_meta=(idy["semantic_name"],) if idy["semantic_name"] else REQUIREMENTS_PROFILE.summary_meta,
+        section_lead=section_lead,
+        title=doc_title,
     )
 
 

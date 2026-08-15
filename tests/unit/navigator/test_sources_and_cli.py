@@ -50,6 +50,34 @@ def test_requirements_profile_for_falls_back_when_unextractable(tmp_path):
     prof = requirements_profile_for(bare)
     assert prof.eyebrow == REQUIREMENTS_PROFILE.eyebrow          # graceful fallback to the base
     assert prof.summary_meta == REQUIREMENTS_PROFILE.summary_meta
+    # FR-18: with no REQ-key, section_lead falls back to the base (it's key-derived).
+    assert prof.section_lead == REQUIREMENTS_PROFILE.section_lead
+    # The page title still degrades to the doc's own H1/stem identity ("notes") rather than the
+    # generic base — a per-doc handle is always more useful than "This spec — a first look".
+    assert prof.title == "notes"
+
+
+# ---- FR-18: deterministic descriptive chrome (section_lead + page title, derived) ----
+def test_requirements_profile_for_derives_section_lead_and_title():
+    prof = requirements_profile_for(_REQ01)
+    assert prof.section_lead == "What REQ-01 defines"           # was static 'What this spec defines'
+    assert prof.title == "REQ-01 — SDK Node Home"               # was static 'This spec — a first look'
+    # guidance + vocabulary ride through unchanged (NOT force-derived)
+    assert prof.why == REQUIREMENTS_PROFILE.why
+    assert prof.do == REQUIREMENTS_PROFILE.do
+    assert prof.gap_noun == REQUIREMENTS_PROFILE.gap_noun
+    # the static base profile is unchanged (per-render copy only) — byte-identity guard
+    assert REQUIREMENTS_PROFILE.section_lead == "What this spec defines"
+    assert REQUIREMENTS_PROFILE.title == "This spec — a first look"
+
+
+def test_requirements_profile_for_title_uses_key_when_present(tmp_path):
+    # a doc with a key in the filename and an H1 → section_lead names the key; title is "{key} — {H1}"
+    doc = tmp_path / "REQ-42-thing.md"
+    doc.write_text("# My Thing\n\nbody\n", encoding="utf-8")
+    prof = requirements_profile_for(doc)
+    assert prof.section_lead == "What REQ-42 defines"
+    assert prof.title == "REQ-42 — My Thing"
 
 
 def test_capability_index_emits_live_keys():

@@ -81,6 +81,13 @@ def test_debug_view_mode_panel_is_profiled_and_byte_safe():
     assert 'body.scaffold [data-layer="computed"]' in profiled  # layer-aware colouring
     assert 'id="scaffoldOnly"' in profiled               # FR-16 scaffold-only (anatomy isolation) toggle
     assert 'body.scaffold-only [data-layer="node"]' in profiled  # FR-16 hides node content, keeps skeleton
+    # FR-19: the panel's three logically-distinct kinds of control are grouped under labelled headers
+    # (VIEW modes · OVERLAYS · TEMPLATE ANATOMY) — reorganization + labelling only, no behavior change.
+    assert 'class="dbg-group' in profiled                # group-header markup is present
+    assert "#debug .dbg-group{" in profiled              # group-header CSS is present (inert on app path)
+    assert ">View <span" in profiled                     # VIEW group header (Structure only + Combined)
+    assert ">Overlays <span" in profiled                 # OVERLAYS group header (Hide app-scaffold chrome)
+    assert ">Template anatomy <span" in profiled         # TEMPLATE ANATOMY group header (scaffold + legend)
     assert "if(payload.profile)" in profiled             # the panel is gated on a profile
     # Byte-safe: the app path is byte-identical with/without an explicit None (FR-8 preserved).
     assert render_html(_plan()) == render_html(_plan(), profile=None)
