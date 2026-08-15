@@ -28,8 +28,10 @@ from .engine import (
     sha,
     write_or_check,
 )
+from .findings_sarif import SARIF_SCHEMA_URI, render_sarif_from_findings
 
 __all__ = [
+    "SARIF_SCHEMA_URI",
     "CoverageAdapter",
     "Detector",
     "LanguageIndexSpec",
@@ -40,6 +42,7 @@ __all__ = [
     "render_coverage_md",
     "render_index_md",
     "render_sarif",
+    "render_sarif_from_findings",
     "serialize",
     "sha",
     "write_or_check",
