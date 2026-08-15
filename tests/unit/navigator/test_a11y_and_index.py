@@ -83,10 +83,20 @@ def test_a11y_build_oserror_exits_cleanly(tmp_path):
 
 # ---- FR-5 / FR-1: standalone (no wireframe import) --------------------------
 def test_render_a11y_is_standalone_no_wireframe_import():
-    """FR-5: the a11y renderer must not import wireframe (check import lines, not prose)."""
+    """FR-5 (REQ-03) + FR-2/FR-3 (REQ-09): the a11y renderer must not couple to the wireframe *plan*
+    machinery. The ONLY wireframe touches permitted are the REQ-09 shared-lens soft-imports
+    (``node_lenses.apply_node_lenses`` + ``delivery_roles.effective_voice``); it must NOT pull
+    WireframePlan / WireframeItem / compose / view (checked on import lines, not docstring prose)."""
     src = _A11Y_SRC.read_text(encoding="utf-8")
     import_lines = [ln for ln in src.splitlines() if ln.strip().startswith(("import ", "from "))]
-    assert not any("wireframe" in ln for ln in import_lines), "a11y renderer must not import wireframe"
+    wf_imports = [ln for ln in import_lines if "wireframe" in ln]
+    for ln in wf_imports:
+        assert ("node_lenses" in ln) or ("delivery_roles" in ln), (
+            f"only the REQ-09 lens soft-imports are permitted; unexpected wireframe import: {ln}"
+        )
+    joined = " ".join(wf_imports)
+    for banned in ("WireframePlan", "WireframeItem", "wireframe_view.compose", "wireframe_view.view"):
+        assert banned not in joined, f"a11y renderer must not import {banned}"
 
 
 def test_render_index_is_standalone_no_wireframe_import():

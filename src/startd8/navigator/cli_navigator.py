@@ -67,6 +67,14 @@ def build(
     ),
     group_by: str = typer.Option("category", "--group-by", help="Section grouping axis"),
     open_depth: int = typer.Option(2, "--open-depth", help="tree renderer: levels open by default"),
+    role: Optional[str] = typer.Option(
+        None, "--role",
+        help="audience lens for tree/a11y labels (e.g. end_user); default None = raw labels "
+        "(byte-identical). Not applied to the graph renderer (already lensed).",
+    ),
+    fluency: str = typer.Option(
+        "intermediate", "--fluency", help="fluency lens for tree/a11y labels (with --role)"
+    ),
 ) -> None:
     """Project a source into Nodes and write JSON or HTML."""
     source = source.strip().lower()
@@ -136,6 +144,8 @@ def build(
                     list(nodes), out,
                     title=f"Node Navigator — {source}",
                     open_depth=open_depth,
+                    role=role,
+                    fluency=fluency,
                 )
             elif renderer == "graph":
                 render_navigator_graph_html(
@@ -163,7 +173,8 @@ def build(
             console.print("[red]error:[/red] --out is required for --format a11y")
             raise typer.Exit(_EXIT_ERR)
         try:
-            render_a11y_to_file(list(nodes), out, title=f"{source}")
+            render_a11y_to_file(list(nodes), out, title=f"{source}",
+                                role=role, fluency=fluency)
         except OSError as exc:
             console.print(f"[red]error:[/red] {exc}")
             raise typer.Exit(_EXIT_ERR)

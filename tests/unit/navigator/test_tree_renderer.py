@@ -41,10 +41,20 @@ def test_nodes_json_roundtrip_preserves_tree():
 
 
 def test_render_tree_is_standalone_no_wireframe_import():
-    """FR-5: the tree renderer must not couple to the wireframe path (check import lines, not prose)."""
+    """FR-5 (REQ-02) + FR-1/FR-3 (REQ-09): the tree renderer must not couple to the wireframe *plan*
+    machinery. The ONLY wireframe touches permitted are the REQ-09 shared-lens soft-imports
+    (``node_lenses.apply_node_lenses`` + ``delivery_roles.effective_voice``); it must NOT pull
+    WireframePlan / WireframeItem / compose / view (checked on import lines, not docstring prose)."""
     src = Path("src/startd8/navigator/render_tree.py").read_text(encoding="utf-8")
     import_lines = [l for l in src.splitlines() if l.strip().startswith(("import ", "from "))]
-    assert not any("wireframe" in l for l in import_lines), "tree renderer must not import wireframe"
+    wf_imports = [l for l in import_lines if "wireframe" in l]
+    for ln in wf_imports:
+        assert ("node_lenses" in ln) or ("delivery_roles" in ln), (
+            f"only the REQ-09 lens soft-imports are permitted; unexpected wireframe import: {ln}"
+        )
+    joined = " ".join(wf_imports)
+    for banned in ("WireframePlan", "WireframeItem", "wireframe_view.compose", "wireframe_view.view"):
+        assert banned not in joined, f"tree renderer must not import {banned}"
 
 
 def test_no_shadowed_dead_defs():

@@ -18,7 +18,7 @@ from __future__ import annotations
 import html
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Sequence
 
 from .models import Node
 # Decision-1 (locked): reuse REQ-02's already-tested XSS helper. Every href goes through
@@ -26,6 +26,21 @@ from .models import Node
 # CSS palette, not from source), so `_safe_color` is not needed here — the index reuses `_safe_href`
 # for the same reason. `esc`/`html.escape` handle all text escaping.
 from .render_tree import _safe_href
+
+# REQ-09 FR-2/FR-3: opt-in adoption of the shared audience×fluency lens transform — the same seam the
+# tree + graph renderers use. Soft-import guarded exactly like render_graph/render_tree: if REQ-04 is
+# absent (or role=None) the a11y view renders raw ``Node`` labels and stays byte-identical. The a11y
+# renderer uses the same DIRECT ``apply_node_lenses`` bridge as the tree (FR-3), substituting only the
+# ``does`` portion of its own ``{key} — {does}`` layout. It must NOT pull WireframePlan / compose / view.
+try:  # pragma: no cover - exercised by the import-guard test via monkeypatch
+    from ..wireframe_view.node_lenses import apply_node_lenses
+except ImportError:  # pragma: no cover - REQ-04 absent → raw labels, byte-identical
+    apply_node_lenses = None  # type: ignore[assignment]
+
+try:  # pragma: no cover
+    from ..wireframe.delivery_roles import effective_voice
+except ImportError:  # pragma: no cover
+    effective_voice = None  # type: ignore[assignment]
 
 # The REQUIREMENTS status vocabulary (from sources_requirements.REQUIREMENTS_PROFILE),
 # NOT the build vocabulary (built/spec/deprecated). status_key -> speakable label.
@@ -62,6 +77,51 @@ def attr(n: Node, key: str, default: str = "") -> str:
 def does(n: Node) -> str:
     """node.does, minus a dangling ' —' the OUTCOME-BRIEF ' — target:' split leaves."""
     return (n.does if n else "").rstrip(" —").rstrip()
+
+
+def _lens_labels(
+    nodes: Sequence[Node], *, role: Optional[str], fluency: str
+) -> Dict[str, str]:
+    """Return ``{node.key: humanised_does}`` via a DIRECT ``apply_node_lenses`` call (FR-2/FR-3).
+
+    Mirrors the tree renderer's bridge: builds a flat item-view list ``[{"label": node.does, ...}]``,
+    hands it to the shared aggregate, and keys the lensed ``label`` back to ``Node.key`` positionally.
+    Label = ``node.does`` (not ``"{key} — {does}"``) so the humanised text substitutes ONLY the ``does``
+    portion of the a11y renderer's own ``{key} — {does}`` layout. Soft dependency: transform absent or
+    ``role`` None → ``{}`` → the caller falls back to raw ``does(node)`` → byte-identical (FR-5)."""
+    if apply_node_lenses is None or role is None:
+        return {}
+    voice = effective_voice(role) if effective_voice is not None else role
+    views = [
+        {
+            "label": n.does,
+            "status": n.status,
+            "detail": n.does,
+            "route_state": getattr(n, "route_state", "") or "",
+        }
+        for n in nodes
+    ]
+    try:
+        lensed = apply_node_lenses(views, role=role, fluency=fluency, voice=voice)
+    except Exception:  # pragma: no cover - defensive; a broken lens never breaks the render
+        return {}
+    out: Dict[str, str] = {}
+    for n, view in zip(nodes, lensed):
+        label = view.get("label") if isinstance(view, dict) else None
+        if label is not None:
+            out[n.key] = label
+    return out
+
+
+def _lensed(n: Node, labels: Optional[Dict[str, str]]) -> Optional[str]:
+    """The humanised label for ``n`` when ``labels`` (the lens map) carries its key, else ``None``.
+
+    Returns ``None`` when there is no lens override so each call site keeps its OWN original fallback
+    expression verbatim (``does(o)`` vs raw ``f.does``) — the guarantee that ``role=None`` (empty map)
+    is byte-identical to the pre-REQ-09 render (FR-5)."""
+    if not labels or n is None:
+        return None
+    return labels.get(n.key)
 
 
 def status_label(n: Node) -> str:
@@ -383,13 +443,21 @@ def render_html(
     title: str = "",
     up_href: str = "",
     up_label: str = "",
+    *,
+    role: Optional[str] = None,
+    fluency: str = "intermediate",
 ) -> str:
     """Render a ReqView to a self-contained, screen-reader-native HTML document.
 
     ``title`` titles the requirement (the doc's H1); falls back to the masthead key.
     ``up_href``/``up_label`` add a breadcrumb back to a parent view (a corpus index links its
     leaves back to itself). Every href is passed through the REQ-02 `_safe_href` sanitizer.
+
+    ``role`` (FR-2, opt-in) routes the requirement ``does`` labels through the shared
+    ``apply_node_lenses`` transform (soft-import guarded); ``role=None`` (the default) renders raw
+    ``Node`` labels and is byte-identical to the pre-REQ-09 output.
     """
+    labels = _lens_labels(v.nodes, role=role, fluency=fluency)
     title = esc(title or (v.masthead.key if v.masthead else "requirement"))
     P: List[str] = []
     P.append("<!doctype html>")
@@ -438,9 +506,10 @@ def render_html(
     for o in v.objectives:
         tgt = attr(o, "target")
         head = f'{tag(o)}<strong>{esc(o.key)}</strong>'
-        P.append(f"<li>{head} — {esc(tgt) if tgt else esc(does(o))}")
+        _o_does = _lensed(o, labels) or does(o)
+        P.append(f"<li>{head} — {esc(tgt) if tgt else esc(_o_does)}")
         if tgt:
-            P.append(f'<div class="field">{esc(does(o))}</div>')
+            P.append(f'<div class="field">{esc(_o_does)}</div>')
         P.append("</li>")
     P.append("</ul></details>")
 
@@ -502,7 +571,7 @@ def render_html(
     def _emit_cap(f: Node) -> None:
         P.append(
             f'<li class="cap" id="cap-{esc(f.key)}">{tag(f)}'
-            f'<strong>{esc(f.key)}</strong> — {esc(f.does)}'
+            f'<strong>{esc(f.key)}</strong> — {esc(_lensed(f, labels) or f.does)}'
         )
         ver = attr(f, "verify")
         if ver:
@@ -521,7 +590,7 @@ def render_html(
         serving = v.frs_for(o.key)
         if not serving:
             continue
-        P.append(f"<h3>Serves {esc(o.key)} — {esc(does(o))}</h3><ul>")
+        P.append(f"<h3>Serves {esc(o.key)} — {esc(_lensed(o, labels) or does(o))}</h3><ul>")
         for f in serving:
             _emit_cap(f)
         P.append("</ul>")
@@ -590,18 +659,25 @@ def check_no_bleed(html_text: str) -> Dict[str, object]:
 def render_a11y_to_file(
     nodes: List[Node], out_path, title: str = "",
     up_href: str = "", up_label: str = "",
+    *,
+    role: Optional[str] = None,
+    fluency: str = "intermediate",
 ) -> str:
     """Render requirement Nodes to a self-contained, screen-reader-native HTML view.
 
     Requirement-native: reads only the Node model — it never imports or invokes the wireframe
     renderer, so no app-domain chrome can bleed in. ``up_href``/``up_label`` add a breadcrumb back
-    to a parent view (a corpus index links its leaves back to itself). Returns the path written.
+    to a parent view (a corpus index links its leaves back to itself).
+
+    ``role`` (FR-2, opt-in) routes the requirement ``does`` labels through the shared lens transform;
+    ``role=None`` (the default) is byte-identical to the pre-REQ-09 output. Returns the path written.
     """
     v = ReqView(list(nodes))
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-        render_html(v, title=title, up_href=up_href, up_label=up_label),
+        render_html(v, title=title, up_href=up_href, up_label=up_label,
+                    role=role, fluency=fluency),
         encoding="utf-8",
     )
     return str(out_path)

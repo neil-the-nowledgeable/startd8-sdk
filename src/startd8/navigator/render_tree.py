@@ -13,10 +13,26 @@ from __future__ import annotations
 import html
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urlsplit
 
 from .models import Node, NodeEvidence, NodeStatus
+
+# REQ-09 FR-1/FR-3: opt-in adoption of the shared audience×fluency lens transform. Soft-import
+# guarded exactly like render_graph — if REQ-04 is absent (or role=None) the tree renders raw
+# ``Node`` labels and stays byte-identical. This is the ONE wireframe_view touch permitted; it must
+# NOT pull WireframePlan / WireframeItem / compose / view. Unlike render_graph (which routes through
+# ``project_nodes``), the tree calls ``apply_node_lenses`` DIRECTLY (FR-3) — giving that aggregate its
+# first real external consumer so it is no longer a dormant single-internal-caller path.
+try:  # pragma: no cover - exercised by the import-guard test via monkeypatch
+    from ..wireframe_view.node_lenses import apply_node_lenses
+except ImportError:  # pragma: no cover - REQ-04 absent → raw labels, byte-identical
+    apply_node_lenses = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - effective_voice mirrors project_nodes' voice computation
+    from ..wireframe.delivery_roles import effective_voice
+except ImportError:  # pragma: no cover
+    effective_voice = None  # type: ignore[assignment]
 
 _DEFAULT_LEGEND = {
     NodeStatus.BUILT: "built / ok",
@@ -144,12 +160,20 @@ def _tree_body_html(node: Node) -> str:
     return "".join(out)
 
 
-def _tree_node_html(node: Node, depth: int, open_depth: int) -> str:
-    """One node → nested <details> (recurses node.children); a childless bodyless node is a flat row."""
+def _tree_node_html(
+    node: Node, depth: int, open_depth: int,
+    labels: Optional[Dict[str, str]] = None,
+) -> str:
+    """One node → nested <details> (recurses node.children); a childless bodyless node is a flat row.
+
+    ``labels`` (FR-1) is an optional ``{node.key: humanised_label}`` map from the shared lens transform;
+    when it carries this node's key the ``does`` span renders the lensed label instead of the raw
+    ``node.does``. Absent/empty → raw ``node.does`` → byte-identical default."""
     blob = html.escape(_search_blob(node), quote=True)
     glyph = html.escape(node.glyph)
     key = html.escape(node.key)
-    does = html.escape(node.does)
+    _does_text = labels.get(node.key, node.does) if labels else node.does
+    does = html.escape(_does_text)
     status = html.escape(node.status)
     facets = _facets_html(node)
     summary = (
@@ -158,7 +182,9 @@ def _tree_node_html(node: Node, depth: int, open_depth: int) -> str:
         f'<span class="does">{does}</span>{facets}</summary>'
     )
     body = _tree_body_html(node)
-    children_html = "".join(_tree_node_html(c, depth + 1, open_depth) for c in node.children)
+    children_html = "".join(
+        _tree_node_html(c, depth + 1, open_depth, labels) for c in node.children
+    )
 
     if not body and not children_html:
         return (
@@ -179,6 +205,49 @@ def _tree_node_html(node: Node, depth: int, open_depth: int) -> str:
 
 def _count_nodes(nodes: List[Node]) -> int:
     return sum(1 + _count_nodes(list(n.children)) for n in nodes)
+
+
+def _flatten_tree(nodes: Sequence[Node]) -> List[Node]:
+    """Flatten the nested ``node.children`` tree exactly as the graph projection does (reuse its
+    ``_flatten``), so the lens label map (keyed by ``Node.key``) covers every node once (FR-3, D3)."""
+    from .graph_projection import _flatten  # reuse the projection's flattener (Kagami, no re-fork)
+
+    flat, _ = _flatten(nodes)
+    return flat
+
+
+def _labels_via_lenses(
+    nodes: Sequence[Node], *, role: Optional[str], fluency: str
+) -> Dict[str, str]:
+    """Return ``{node.key: humanised_label}`` via a DIRECT ``apply_node_lenses`` call (FR-3).
+
+    Builds a flat item-view list ``[{"label": node.does, ...}]`` and hands it to the shared aggregate,
+    then keys the lensed ``label`` back to ``Node.key`` positionally (zip). Label = ``node.does`` (NOT
+    project_nodes' ``"{key} — {does}"``) so the humanised text maps 1:1 onto the tree's ``does`` span.
+    Soft dependency: if the transform is absent (import-guarded) or ``role`` is None, returns ``{}`` and
+    the caller falls back to raw ``Node`` labels → byte-identical default (FR-1/FR-5)."""
+    if apply_node_lenses is None or role is None:
+        return {}
+    voice = effective_voice(role) if effective_voice is not None else role
+    views = [
+        {
+            "label": node.does,
+            "status": node.status,
+            "detail": node.does,
+            "route_state": getattr(node, "route_state", "") or "",
+        }
+        for node in nodes
+    ]
+    try:
+        lensed = apply_node_lenses(views, role=role, fluency=fluency, voice=voice)
+    except Exception:  # pragma: no cover - defensive; a broken lens never breaks the render
+        return {}
+    out: Dict[str, str] = {}
+    for node, view in zip(nodes, lensed):
+        label = view.get("label") if isinstance(view, dict) else None
+        if label is not None:
+            out[node.key] = label
+    return out
 
 
 _TREE_CSS = """
@@ -277,12 +346,20 @@ def render_navigator_tree_html(
     open_depth: int = 2,
     status_legend: Optional[Dict[str, str]] = None,
     readiness: Optional[Any] = None,
+    role: Optional[str] = None,
+    fluency: str = "intermediate",
 ) -> Path:
     """Render nodes as a nested, searchable, self-contained HTML tree (N-level drill over children).
 
     Dependency-free (inlined CSS+JS, opens offline). ``open_depth`` controls how many levels start
     expanded. ``readiness`` (dict with ``label``/``overall.label``, or a string) renders a header band;
-    if omitted it falls back to the first root's ``attributes["readiness"]``. Returns the written path."""
+    if omitted it falls back to the first root's ``attributes["readiness"]``.
+
+    ``role`` (FR-1, opt-in) routes node ``does`` labels through the shared ``apply_node_lenses``
+    transform (soft-import guarded, keyed by ``Node.key`` over the flattened tree); ``role=None`` (the
+    default) renders raw ``Node`` labels and is byte-identical to the pre-REQ-09 output. Returns the
+    written path."""
+    labels = _labels_via_lenses(_flatten_tree(nodes), role=role, fluency=fluency)
     legend = dict(_DEFAULT_LEGEND)
     if status_legend:
         legend.update(status_legend)
@@ -304,7 +381,7 @@ def render_navigator_tree_html(
     )
 
     total = _count_nodes(nodes)
-    body = "".join(_tree_node_html(n, 0, open_depth) for n in nodes)
+    body = "".join(_tree_node_html(n, 0, open_depth, labels) for n in nodes)
     sub = f'<div class="sub">{html.escape(subtitle)}</div>' if subtitle else ""
 
     doc = f"""<!doctype html>
