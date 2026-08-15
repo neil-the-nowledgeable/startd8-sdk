@@ -50,6 +50,7 @@ from .cli_assist import assist_app
 from .cli_nav import nav_app
 from .cli_polish import polish_app
 from .cli_openapi import openapi_app
+from .cli_validate import validate_command
 from .cli_capdevpipe import capdevpipe_app
 from .cli_fde import fde_app
 from .cli_sapper import sapper_app
@@ -1283,6 +1284,11 @@ app.add_typer(kickoff_panel_app, name="kickoff-panel")
 # Wireframe (pre-generation assembly summary — read-only, $0, advisory)
 # ──────────────────────────────────────────────────────────────────────────
 app.command("wireframe")(_wireframe_command)
+
+# ──────────────────────────────────────────────────────────────────────────
+# Validate (cross-language semantic validators → text / JSON / SARIF; $0, deterministic)
+# ──────────────────────────────────────────────────────────────────────────
+app.command("validate")(validate_command)
 
 
 # ──────────────────────────────────────────────────────────────────────────
