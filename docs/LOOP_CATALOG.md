@@ -149,6 +149,11 @@ a script and/or runbook.
   python3 scripts/navigator_spec_delivery_loop.py REQ-05       # gate one (exit 1 if blocked)
   python3 scripts/navigator_spec_delivery_loop.py --checklist  # the 6-stage runbook
   ```
+- **Complement (Check→Act back-half):** **`/harden-then-harvest`** — run it on the surface this loop
+  ships. Delivery ends at RECORD; HTH begins there (code-review §1.5 value-path → python-code-refactor →
+  reflective-retrospective §2.5 dormant inventory → cumulative-enhancement → bus/Yokoten). It catches
+  built-but-unwired defects a green GATE-2 misses and harvests the standard + a ranked backlog. See the
+  runbook's "Complement" section.
 - **State:** the gate is stateless (reads the spec live); outcomes recorded in `SESSION_LEDGER`.
 - **Status:** ACTIVE. Build-ready: REQ-02/03/04/05/06/07/08; blocked: REQ-01 (`frs-named`), seat-req.
 

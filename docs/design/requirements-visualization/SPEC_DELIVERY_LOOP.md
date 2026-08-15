@@ -72,3 +72,26 @@ git checkout main && git merge --ff-only feat/<handle> && git branch -d feat/<ha
   those improve what exists; this delivers what's specced.
 - **Composes with** `/reflective-requirements` (authoring the spec that this loop then delivers) and
   the git-cadence memory (stage 5).
+
+## Complement: `/harden-then-harvest` (the Check→Act back-half)
+
+This loop is a **Plan→Do** composition: it takes an authored spec and *does* the build. Its natural
+complement is the **Check→Act** composition **`/harden-then-harvest`** (HTH) — run it on the surface
+this loop just shipped. Where delivery ends at RECORD, HTH begins:
+
+```
+Spec Delivery Loop (Plan→Do)                    /harden-then-harvest (Check→Act)
+  GATE→PREP→BUILD→GATE-2→REVIEW→LAND→RECORD  ──▶  code-review(§1.5 value-path) → python-code-refactor
+  spec ──────────────────────────▶ merged        → reflective-retrospective(§2.5 dormant inventory)
+                                                  → cumulative-enhancement → bus/Yokoten handoff
+```
+
+- **When:** after a delivery (or a batch of them) lands — the merged code is HTH's raw material. Not on
+  a stub; the dispatch guard requires a substantial shipped surface.
+- **What it adds that GATE-2 doesn't:** GATE-2 proves the build *passes its tests*; HTH's value-path
+  audit + Phase-2.5 dormant inventory catch **built-but-unwired / claim>gate** defects a green suite
+  misses — and it *harvests* (extracts the standard the delivery proved + a ranked enhancement backlog).
+- **Handoff seam:** stage 6 RECORD is the trigger point — the ledger row that says "REQ-NN built" is
+  the cue to run HTH on it. HTH's retrospective feeds the *next* spec's requirements (closing Plan↔Check).
+- HTH is the reverse twin of the forward `reflective-then-crp` (Plan→Do) at the composition level;
+  here the loop *is* the Do, so HTH is the specific Check→Act that pairs with it.
