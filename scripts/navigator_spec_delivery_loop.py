@@ -69,14 +69,20 @@ def _public_symbols(path: Path) -> List[str]:
 
 
 def reachability(paths: List[Path]) -> List[Dict[str, Any]]:
-    """For each public symbol defined in ``paths``, find call sites elsewhere in ``src/``.
+    """For each public symbol defined in ``paths``, find call sites elsewhere in ``src/`` + ``scripts/``.
 
     Grounds the HTH retro's clause 5 ("wired, not just built"): a ported/lifted symbol that is tested
     but never *called* in the real tree is dormant (D-2 ``validate_graph_model`` was exactly this). A
     reference only in an ``__init__.py`` re-export is ``export-only`` (wired to the surface, not a
     consumer). Zero references outside the defining file → ``DORMANT``.
+
+    Scan roots are ``src/`` (product) **and** ``scripts/`` (tooling) — a symbol consumed by a driver
+    script (e.g. ``gate_spec`` from the loop script) is genuinely wired, so a ``src``-only scan would
+    cry wolf (found by HTH on REQ-06). ``tests/`` is deliberately EXCLUDED: a test-only consumer is the
+    "tested but not wired" dormant this probe exists to catch, so it must not count as a call site.
     """
-    src_files = list((REPO / "src").rglob("*.py"))
+    scan_roots = [REPO / "src", REPO / "scripts"]
+    src_files = [f for root in scan_roots if root.is_dir() for f in root.rglob("*.py")]
     cache = {f: f.read_text(encoding="utf-8", errors="replace") for f in src_files}
     out: List[Dict[str, Any]] = []
     for path in paths:

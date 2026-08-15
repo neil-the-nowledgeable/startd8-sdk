@@ -76,6 +76,24 @@ def test_reachability_classifies_wired_dormant_export_only(tmp_path, monkeypatch
     assert rows["baz_export"] == "export-only"
 
 
+def test_reachability_counts_scripts_consumers_not_tests(tmp_path, monkeypatch):
+    """HTH-on-REQ-06 fix: a symbol consumed by scripts/ is wired (not a false dormant); a symbol
+    consumed only by tests/ stays DORMANT (tests are not wiring — the 'tested but not built' class)."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "src" / "mod.py").write_text(
+        "def used_by_script():\n    pass\n\ndef used_only_by_test():\n    pass\n", encoding="utf-8")
+    (tmp_path / "scripts" / "driver.py").write_text(
+        "from mod import used_by_script\nused_by_script()\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_x.py").write_text(
+        "from mod import used_only_by_test\nused_only_by_test()\n", encoding="utf-8")
+    monkeypatch.setattr(sdl, "REPO", tmp_path)
+    rows = {r["symbol"]: r["status"] for r in sdl.reachability([tmp_path / "src" / "mod.py"])}
+    assert rows["used_by_script"] == "wired"        # scripts/ counts (tooling is real wiring)
+    assert rows["used_only_by_test"] == "DORMANT"   # tests/ does not count
+
+
 def test_run_reachability_strict_flips_exit_on_dormant(tmp_path, monkeypatch, capsys):
     """EB-3: advisory by default (exit 0); --strict exits 1 when a symbol is dormant."""
     src = tmp_path / "src"
