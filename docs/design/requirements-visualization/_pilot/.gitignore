@@ -1,0 +1,2 @@
+# ephemeral per-FR render artifacts (regenerable via navigator_pilot_loop.py)
+*.html

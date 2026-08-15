@@ -1,0 +1,71 @@
+{
+  "startd8.codegen.import_path": [
+    {
+      "cruft_lint": "cruft_lint: capability-index-startd8_codegen_import_path.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": false,
+        "confidence": 0.85,
+        "fr": "startd8.codegen.import_path",
+        "fr_health": "",
+        "lives_count": 4,
+        "lives_resolve": 3,
+        "lives_types": {
+          "code": 3,
+          "docs": 1
+        },
+        "pilot_score": 0.45,
+        "ships_when": false,
+        "status_key": "built"
+      },
+      "phase": "baseline",
+      "top_gap": "EVIDENCE \u2014 1 of 4 Lives refs do not resolve on disk; fix the path or sha.",
+      "when": "2026-08-14T19:41:37.509485+00:00"
+    }
+  ],
+  "startd8.diagnostics.runner": [
+    {
+      "cruft_lint": "cruft_lint: capability-index-startd8_diagnostics_runner.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": false,
+        "confidence": 0.7,
+        "fr": "startd8.diagnostics.runner",
+        "fr_health": "",
+        "lives_count": 1,
+        "lives_resolve": 1,
+        "lives_types": {
+          "code": 1
+        },
+        "pilot_score": 0.65,
+        "ships_when": false,
+        "status_key": "built"
+      },
+      "phase": "baseline",
+      "top_gap": "CONFIDENCE is 0.7 (authored in the manifest, currently code:1) \u2014 add test evidence or confirm the authored value; capability confidence is not derived from lives the way an FR's is.",
+      "when": "2026-08-14T19:41:45.339517+00:00"
+    }
+  ],
+  "startd8.integration.observability_artifact_generation": [
+    {
+      "cruft_lint": "cruft_lint: capability-index-startd8_integration_observability_artifact_generation.html \u2014 2 gap(s), 0 candidate(s)",
+      "metrics": {
+        "approve_prompts": false,
+        "confidence": 0.85,
+        "fr": "startd8.integration.observability_artifact_generation",
+        "fr_health": "",
+        "lives_count": 6,
+        "lives_resolve": 6,
+        "lives_types": {
+          "code": 4,
+          "docs": 1,
+          "test": 1
+        },
+        "pilot_score": 0.65,
+        "ships_when": false,
+        "status_key": "built"
+      },
+      "phase": "baseline",
+      "top_gap": "CONFIDENCE is 0.85 (authored in the manifest, currently code:4,test:1,docs:1) \u2014 add test evidence or confirm the authored value; capability confidence is not derived from lives the way an FR's is.",
+      "when": "2026-08-14T19:41:53.657345+00:00"
+    }
+  ]
+}

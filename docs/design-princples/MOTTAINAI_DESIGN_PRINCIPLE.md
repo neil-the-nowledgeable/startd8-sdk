@@ -1,5 +1,10 @@
 # Mottainai Design Principle
 
+> **Principle canonical home: `~/Documents/craft/design_principles/MOTTAINAI_DESIGN_PRINCIPLE.md`**
+> (the universal statement; twin of Kagami). **This file is the pipeline APPLICATION** — the concrete
+> forwarding gaps for the ContextCore + startd8-sdk pipeline (Gaps 1–16, the prime-contractor audit).
+> It *cites* the principle above, it does not restate it (Kagami / single-source). Promoted 2026-08-15.
+
 Purpose: establish a cross-cutting design principle for the ContextCore + startd8-sdk pipeline — an aversion to wasteful regeneration of artifacts that earlier pipeline stages already produced.
 
 This document is intentionally living guidance. Update it as new reuse opportunities are identified.

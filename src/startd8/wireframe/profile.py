@@ -40,6 +40,13 @@ class RenderProfile:
     section_lead: str = "What your app includes"
     headline: str = "A first look at your app"
     gap_noun: str = "part"  # "N parts not set up yet"
+    # Apex chrome for the *technical* masthead (architect voice). The app path leaves these
+    # empty and the template falls back to its built-in "Wireframe Preview" + WIREFRAME_META
+    # + describe_summary why/do. A non-app consumer supplies its own so the apex speaks its
+    # domain instead of bleeding "$0 generation / entity count IS the contract" onto a Node view.
+    summary_meta: Tuple[str, ...] = ()   # sub-headline lines (replaces WIREFRAME_META)
+    why: str = ""                        # the "Why" clause of the apex whybox
+    do: str = ""                         # the "Do" clause of the apex whybox
 
     def to_dict(self) -> dict:
         """JSON-safe payload the template's client renderer reads (``data.profile``)."""
@@ -60,6 +67,9 @@ class RenderProfile:
             "section_lead": self.section_lead,
             "headline": self.headline,
             "gap_noun": self.gap_noun,
+            "summary_meta": list(self.summary_meta),
+            "why": self.why,
+            "do": self.do,
         }
 
 

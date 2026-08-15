@@ -19,7 +19,7 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Your app — a first look</title>
+<title>__DOC_TITLE__</title>
 <style>
   :root{
     --paper:#f4efe4; --card:#fffdf6; --card2:#fbf7ec;
@@ -80,6 +80,86 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .section-lead{font-family:var(--serif);font-size:13px;letter-spacing:.02em;color:var(--faint);
     text-transform:uppercase;margin:0 0 12px}
 
+  /* Structure-only view (profiled navigator): strip the descriptive layer, leaving just the
+     section groups + node labels — the underlying node structure with no other text. */
+  body.structure-only .meta, body.structure-only .whybox, body.structure-only .lead,
+  body.structure-only .glance, body.structure-only #legend, body.structure-only #signbar,
+  body.structure-only #warn, body.structure-only .det, body.structure-only .lives,
+  body.structure-only .was, body.structure-only .narr, body.structure-only .needlist,
+  body.structure-only .sec-one, body.structure-only .needs, body.structure-only .allset,
+  body.structure-only .badge, body.structure-only .signoff, body.structure-only .todos-box,
+  body.structure-only .item .row details, body.structure-only .sig-mark{display:none !important}
+  body.structure-only .item{padding:4px 0}
+  body.structure-only .sec-body{padding-top:6px}
+  /* structure-only shows the bare node key, not the full descriptive label */
+  .lbl-key{display:none}
+  body.structure-only .lbl{display:none}
+  body.structure-only .lbl-key{display:inline;font-weight:600;font-size:14px}
+  /* the available structural metadata per node — hidden normally, revealed in structure-only + combined */
+  .node-meta{display:none;font-family:var(--mono);font-size:11.5px;color:var(--ink2);margin:3px 0 0 1px}
+  body.structure-only .node-meta, body.combined .node-meta{display:block}
+
+  /* ---------- debugging layer: fixed top-right view-mode panel ---------- */
+  #debug:empty{display:none}
+  #debug{position:fixed;top:14px;right:14px;z-index:50;background:var(--card);border:1px solid var(--line2);
+    border-radius:10px;padding:9px 12px;box-shadow:0 6px 22px -14px rgba(40,32,16,.5);max-width:230px}
+  #debug .dbg-title{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+    font-weight:700;margin-bottom:6px}
+  #debug .dbg-opt{display:flex;align-items:flex-start;gap:6px;font-size:12.5px;color:var(--ink);
+    cursor:pointer;padding:2px 0}
+  #debug .dbg-opt input{margin-top:2px;flex:none}
+  #debug .dbg-prov{margin-top:8px;padding-top:7px;border-top:1px solid var(--line);font-size:11px;
+    font-family:var(--mono);line-height:1.4}
+  #debug .dbg-prov.dbg-clean{color:var(--planned)}
+  #debug .dbg-prov.dbg-cruft{color:var(--ochre-ink)}
+  #debug .dbg-prov b{font-weight:700}
+  @media (max-width:920px){#debug{position:static;max-width:none;margin:14px 0 0;box-shadow:none}}
+
+  /* multi-stage cruft purge — hide the app-scaffold chrome the audit flagged (non-destructive;
+     opt-in via the debug panel). Sign-off subsystem, dead mockup drills, EU need-signals, todos,
+     and the delivery-role kit optgroups in the VIEW dropdown. */
+  body.hide-scaffold .signoff,
+  body.hide-scaffold #signbar,
+  body.hide-scaffold .item .row details,
+  body.hide-scaffold .todos-box,
+  body.hide-scaffold .needs,
+  body.hide-scaffold .allset,
+  body.hide-scaffold #tg-role optgroup[label^="Delivery role"]{display:none !important}
+
+  /* Scaffold mode — the template's anatomy: outline every region carrying a data-scaffold role and
+     float its label + data source, so an adopter (legal · benchmark · dev-os) can read the template
+     itself from a debugging standpoint. Overlay only; no layout shift beyond the outline. */
+  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative}
+  /* blueprint-annotation label: a solid dark chip (white on --ink ≈ 13:1 contrast — legible over ANY
+     underlying content, unlike the old 9.5px semi-transparent colour-on-colour chip) with a
+     layer-coloured left stripe. 11px, full opacity, high z-index + shadow so it lifts off the content. */
+  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:-11px;left:8px;
+    z-index:10;background:var(--ink);color:#f7f3ea;font-family:var(--mono);font-size:11px;font-weight:600;
+    letter-spacing:.02em;padding:2px 8px;border-radius:4px;white-space:nowrap;pointer-events:none;
+    border-left:4px solid var(--accent);box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  /* layer-aware colouring — the dark chip is constant (legibility); the left stripe + dashed outline
+     carry the LAYER (control · descriptive · computed · node-driven), so scaffold mode still teaches
+     the taxonomy without the failed white-on-ochre / white-on-green contrast. */
+  body.scaffold [data-layer="control"]{outline-color:var(--accent2)}
+  body.scaffold [data-layer="control"]::before{border-left-color:var(--accent2)}
+  body.scaffold [data-layer="computed"]{outline-color:var(--ochre)}
+  body.scaffold [data-layer="computed"]::before{border-left-color:var(--ochre)}
+  body.scaffold [data-layer="node"]{outline-color:var(--planned)}
+  body.scaffold [data-layer="node"]::before{border-left-color:var(--planned)}
+  /* Scaffold-only (FR-16): isolate the anatomy — hide the node-driven CONTENT filling the node layer
+     while keeping the region's outline + label (an empty labelled skeleton). Non-node regions keep
+     their content; only the node layer's descendants are hidden. Pairs with scaffold mode. */
+  body.scaffold-only [data-layer="node"] *{visibility:hidden}
+  body.scaffold-only [data-layer="node"]{visibility:visible}
+  #debug .dbg-opt.dbg-sub{margin-left:16px}
+  /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
+  #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
+    font-size:10px;font-family:var(--mono);line-height:1.7}
+  body.scaffold #debug .dbg-layers{display:block}
+  #debug .dbg-layers .ll{display:inline-block;color:#fff;border-radius:3px;padding:0 5px;margin:0 3px 3px 0}
+  #debug .ll.control{background:var(--accent2)} #debug .ll.descriptive{background:var(--accent)}
+  #debug .ll.computed{background:var(--ochre)} #debug .ll.node{background:var(--planned)}
+
   /* ---------- sections (progressive disclosure) ---------- */
   details.sec{background:var(--card);border:1px solid var(--line);border-radius:13px;margin:11px 0;
     overflow:hidden;transition:border-color .15s, box-shadow .15s}
@@ -123,6 +203,10 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .item .row{display:flex;align-items:center;gap:9px}
   .item .lbl{font-weight:600;font-size:14px}
   .item .det{color:var(--ink2);font-size:12px;font-family:var(--mono);margin:4px 0 0 1px}
+  .item .lives{color:var(--ink2);font-size:12px;font-family:var(--mono);margin:4px 0 0 1px}
+  .item .lives .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin-right:6px}
+  .item .was{color:var(--faint);font-size:12px;font-family:var(--mono);margin:2px 0 0 1px}
+  .item .was .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-right:6px}
   .badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;
     border-radius:20px;color:#fff;white-space:nowrap}
   .b-planned{background:var(--planned)}.b-defaults{background:var(--defaults)}
@@ -201,12 +285,27 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .signoff .so-note{display:none;flex-basis:100%;width:100%;margin-top:4px;font:inherit;font-size:13px;color:var(--ink);
     border:1px solid var(--line2);border-radius:8px;padding:8px 10px;background:var(--card2);resize:vertical;min-height:42px}
   .signoff.flagged .so-note{display:block}
+  .signoff .so-prompts{flex-basis:100%;width:100%;margin:0 0 6px;padding:8px 10px;background:var(--card2);
+    border:1px dashed var(--line2);border-radius:8px}
+  .signoff .so-prompts ul{margin:4px 0 0 1.1em;padding:0;font-size:13px;color:var(--ink2)}
+  .signoff .so-prompts li{margin:2px 0}
   .signbar{display:flex;align-items:center;gap:10px;margin:20px 0 0;background:var(--card);border:1px solid var(--line);
     border-radius:12px;padding:11px 15px;font-size:13.5px;color:var(--ink2)}
   .signbar b{color:var(--accent)}
   .signbar button{margin-left:auto;font:inherit;font-size:12.5px;color:#fff;background:var(--accent);
     border:1px solid var(--accent);border-radius:20px;padding:6px 15px;cursor:pointer}
   .signbar button:hover{background:var(--accent2)}
+
+  /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
+  .status-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+  .status-chip{font-size:11px;font-weight:700;letter-spacing:.03em;padding:3px 9px;border-radius:20px;
+    color:#fff;cursor:pointer;border:2px solid transparent;white-space:nowrap;line-height:1.4}
+  .status-chip:hover{opacity:.85}
+  .status-chip.active{box-shadow:0 0 0 2px var(--ink),0 0 0 4px transparent;outline:2px solid var(--ink);outline-offset:1px}
+  /* items hidden by the active filter (JS sets display:none via applyFilter) */
+  .item.pf-hidden{display:none}
+  /* sections with no visible items are collapsed + dimmed when a filter is active */
+  details.sec.pf-empty{opacity:.45;pointer-events:none}
 
   /* ---------- motion ---------- */
   @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -224,17 +323,18 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
 </style>
 </head>
 <body>
+<div id="debug" role="group" aria-label="View mode"></div>
 <div class="wrap">
-  <header class="mast" id="mast"></header>
+  <header class="mast" id="mast" data-layer="descriptive" data-scaffold="masthead — profile chrome (eyebrow · headline · why/do)"></header>
   <div id="warn" role="status"></div>
-  <section class="glance" id="glance" aria-label="At a glance"></section>
+  <section class="glance" id="glance" aria-label="At a glance" data-layer="computed" data-scaffold="glance band — computed summary (status_counts · plan.shape)"></section>
   <div id="todos"></div>
-  <div class="toolbar" id="toolbar"></div>
-  <div class="legend" id="legend"></div>
+  <div class="toolbar" id="toolbar" data-layer="control" data-scaffold="control layer — audience × fluency lenses"></div>
+  <div class="legend" id="legend" data-layer="descriptive" data-scaffold="status legend — profile.statuses[].meaning"></div>
   <div class="lens-banner" id="lens" hidden></div>
   <hr class="rule">
-  <p class="section-lead" id="seclead">What your app includes</p>
-  <main id="outline"></main>
+  <p class="section-lead" id="seclead" data-layer="descriptive" data-scaffold="section lead — profile.section_lead">What your app includes</p>
+  <main id="outline" data-layer="node" data-scaffold="outline — node sections + cards (the node-driven layer)"></main>
   <div class="signbar" id="signbar"></div>
   <footer class="closing" id="closing" hidden></footer>
 </div>
@@ -290,7 +390,14 @@ __PLAN_DATA__
   function signRow(sec,mk){
     var w=document.createElement("div"); var st0=SIGN[sec.key]||{};
     w.className="signoff"+(st0.status==="flag"?" flagged":"");
-    w.innerHTML='<span class="slab">Your call</span>'+
+    var prompts=(sec.approve_prompts||[]);
+    var promptHtml=prompts.length
+      ?('<div class="so-prompts"><span class="slab">Approve?</span><ul>'+
+        prompts.map(function(q){ return '<li>'+esc(q)+'</li>'; }).join("")+
+        '</ul></div>')
+      :'';
+    w.innerHTML=promptHtml+
+      '<span class="slab">Your call</span>'+
       '<button type="button" class="so-ok'+(st0.status==="ok"?" on-ok":"")+'">✓ Looks right</button>'+
       '<button type="button" class="so-flag'+(st0.status==="flag"?" on-flag":"")+'">⚑ Flag this</button>'+
       '<textarea class="so-note" placeholder="What should change here? (optional)"></textarea>';
@@ -323,7 +430,9 @@ __PLAN_DATA__
   }
   function exportSign(){
     var rows=(data.sections||[]).map(function(x){ var st=SIGN[x.key]||{};
-      return {key:x.key, title:x.title, status:st.status||"unreviewed", note:st.note||""}; });
+      var row={key:x.key, title:x.title, status:st.status||"unreviewed", note:st.note||""};
+      if(x.approve_prompts&&x.approve_prompts.length) row.approve_prompts=x.approve_prompts.slice();
+      return row; });
     // SO-1: stamp the plan identity so --signoff can bind this verdict to the exact plan it reviewed.
     var out={app:APP, audience:(data.audience||{}),
       inputs_fingerprint:(payload.inputs_fingerprint||null), schema_version:(data.schema_version||null),
@@ -346,17 +455,55 @@ __PLAN_DATA__
         (s.lead?'<p class="lead">'+esc(s.lead)+'</p>':'')+
         (steps?'<ol class="steps">'+steps+'</ol>':'');
     } else {
-      var meta=(s.meta||[]).map(function(m){ return '<div class="meta">'+esc(m)+'</div>'; }).join("");
+      // A profiled (non-app) consumer supplies its own apex chrome so the masthead speaks its
+      // domain; without a profile the built-in app strings + summary meta/why/do are unchanged
+      // (byte-identity: esc() of the literals is the literals).
+      var P=payload.profile||null;
+      var eyebrow=(P&&P.eyebrow)||"Wireframe";
+      var headline=(P&&P.headline)||"Wireframe Preview";
+      var metaLines=P?(P.summary_meta||[]):(s.meta||[]);
+      var why=P?(P.why||""):(s.why||"");
+      var doo=P?(P.do||""):(s.do||"");
+      var meta=metaLines.map(function(m){ return '<div class="meta">'+esc(m)+'</div>'; }).join("");
       h.innerHTML=
-        '<div class="eyebrow">Wireframe <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
-        '<h1 class="headline">Wireframe Preview</h1>'+ meta +
-        ((s.why||s.do)?'<div class="whybox"><div><b>Why </b>'+esc(s.why)+'</div>'+
-          '<div><b>Do </b>'+esc(s.do)+'</div></div>':'');
+        '<div class="eyebrow">'+esc(eyebrow)+' <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
+        '<h1 class="headline">'+esc(headline)+'</h1>'+ meta +
+        ((why||doo)?'<div class="whybox" data-layer="descriptive" data-scaffold="reading guidance — profile.why / profile.do">'+
+          '<div><b>Why </b>'+esc(why)+'</div>'+
+          '<div><b>Do </b>'+esc(doo)+'</div></div>':'');
     }
     if(data.schema_version!==EXPECTED_SCHEMA){
       document.getElementById("warn").innerHTML='<div class="banner">This preview was made with a '+
         'different version — some parts may look incomplete.</div>';
     }
+  }
+
+  // ---------- PF-1: status-filter machinery (profiled navigator only) ----------
+  var _activeFilter = null;   // current status key filter, null = show all
+
+  function _applyFilter(key){
+    // Walk every .item in the outline, show/hide by data-status; hide empty sections.
+    var items = document.querySelectorAll("#outline .item[data-status]");
+    items.forEach(function(it){
+      var match = (key === null) || (it.getAttribute("data-status") === key);
+      it.classList.toggle("pf-hidden", !match);
+    });
+    // Collapse / dim sections that have no visible items under the active filter.
+    var secs = document.querySelectorAll("#outline details.sec");
+    secs.forEach(function(sec){
+      if(key === null){ sec.classList.remove("pf-empty"); return; }
+      var visible = sec.querySelectorAll(".item[data-status]:not(.pf-hidden)").length;
+      sec.classList.toggle("pf-empty", visible === 0);
+    });
+    // Sync chip active state.
+    document.querySelectorAll(".status-chip").forEach(function(ch){
+      ch.classList.toggle("active", ch.getAttribute("data-chip-key") === key);
+    });
+  }
+
+  function _onChipClick(key){
+    _activeFilter = (_activeFilter === key) ? null : key;   // toggle: click active chip → clear
+    _applyFilter(_activeFilter);
   }
 
   // ---------- at-a-glance ----------
@@ -365,9 +512,32 @@ __PLAN_DATA__
     var rows = EU
       ? [["Health",s.plain_status],["Size",s.plain_shape],["Content",s.plain_content],["Ready to build?",s.plain_ready]]
       : [["Status",s.counts],["Shape",s.shape],["Content",s.content],["Cascade",s.readiness]];
-    g.innerHTML=rows.map(function(r){
-      return '<div class="cell"><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
-    }).join("");
+    // A profiled (non-app) consumer often has no Content/Cascade figures; drop the empty cells
+    // rather than render bare "CONTENT"/"CASCADE" labels. App path (no profile) keeps all four.
+    if(payload.profile){ rows=rows.filter(function(r){ return r[1]!=null && String(r[1]).trim()!==""; }); }
+    // PF-1 (inspect-loop derivative value): in a profiled navigator view, replace the STATUS cell's
+    // plain text with interactive chips — the status roll-up becomes a live grounding filter.
+    if(!EU && payload.profile && s.status_counts && Object.keys(s.status_counts).length){
+      g.innerHTML=rows.map(function(r){
+        var sc=(r[0]==="Shape")?' data-layer="computed" data-scaffold="shape — plan.shape (dialect-aware)"':'';
+        if(r[0] !== "Status") return '<div class="cell"'+sc+'><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
+        var chips = Object.keys(s.status_counts).map(function(key){
+          var cnt=s.status_counts[key], p=profStatus(key), bg=p?p.color:"#888", lbl=p?p.label:key;
+          return '<button class="status-chip" type="button" data-chip-key="'+esc(key)+'"'+
+            ' style="background:'+esc(bg)+'" title="Filter to '+esc(lbl)+' items">'+
+            esc(lbl)+' ('+esc(String(cnt))+')</button>';
+        }).join("");
+        return '<div class="cell" id="glance-status-cell" data-layer="computed" data-scaffold="status roll-up — status_counts (+ PF-1 grounding filter)"><div class="k">'+esc(r[0])+'</div>'+
+          '<div class="status-chips" id="status-chips">'+chips+'</div></div>';
+      }).join("");
+      g.querySelectorAll(".status-chip").forEach(function(btn){
+        btn.addEventListener("click", function(){ _onChipClick(btn.getAttribute("data-chip-key")); });
+      });
+    } else {
+      g.innerHTML=rows.map(function(r){
+        return '<div class="cell"><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
+      }).join("");
+    }
   }
 
   // ---------- mockups ----------
@@ -411,9 +581,27 @@ __PLAN_DATA__
   // ---------- items ----------
   function renderItem(k,item,nav){
     var w=document.createElement("div"); w.className="item";
+    // PF-1: expose the item's status as a data attribute when a domain profile is active so the
+    // filter machinery (data-status selectors) can show/hide items without touching the app path.
+    if(payload.profile && item.status) w.setAttribute("data-status", item.status);
     var mock=mockFor(k,item);
     var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
-    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+badge(item.status)+'</div>'+det;
+    var livesHtml="";
+    if(item.lives&&item.lives.length&&!EU){
+      livesHtml='<div class="lives"><span class="lk">Lives</span>'+
+        item.lives.map(function(e){
+          var t=(e.type||"ref"), r=(e.ref||"");
+          return esc(t)+": "+esc(r);
+        }).join(" · ")+'</div>';
+    }
+    var wasHtml="";
+    if(item.was&&item.was.length&&!EU){
+      wasHtml='<div class="was"><span class="lk">Was</span>'+esc(item.was.join(" · "))+'</div>';
+    }
+    var metaHtml=(item.meta&&!EU)?'<div class="node-meta">'+esc(item.meta)+'</div>':'';  // structure-only reveal
+    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
+      (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // structure-only: bare node key
+      badge(item.status)+'</div>'+det+livesHtml+wasHtml+metaHtml;
     if(mock||k==="pages"){
       var d=document.createElement("details");
       var sm=document.createElement("summary"); sm.className="drill"; sm.textContent="show a sketch";
@@ -494,6 +682,7 @@ __PLAN_DATA__
 
   // ---------- render the whole document from the current variant (re-run on toggle, QW-1) ----------
   function renderAll(){
+    _activeFilter = null;   // PF-1: reset status filter on each full re-render (voice/depth toggle)
     data=resolveVM(cur);                                       // EC-4: kit → its base voice's variant
     EU=((data.audience&&data.audience.voice)==="end_user"); s=data.summary||{};
     renderLens();                                              // EC-4: the delivery-role focus lens
@@ -546,6 +735,61 @@ __PLAN_DATA__
   selRole.onchange=onToggle; selFlu.onchange=onToggle; syncDepth();
   document.getElementById("ex").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=true;}); };
   document.getElementById("co").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=false;}); };
+
+  // ---------- debugging layer: top-right view-mode panel (profiled navigator only) ----------
+  // Three modes over the node view: content (default) · structure only (keys + metadata, no prose) ·
+  // combined (content AND the structural metadata together). Gated to a profile so the app path is
+  // byte-identical (FR-8). Structure-only and Combined are mutually exclusive.
+  if(payload.profile){
+    // Live provenance readout — "all content is cruft until proven otherwise": chrome that traces to
+    // a source is proven; an orphan (no source) is cruft. Green when clean, ochre when cruft remains.
+    var ch=payload.chrome, prov="";
+    if(ch){
+      var cruft=(ch.orphans||[]).length, cls=cruft?"dbg-cruft":"dbg-clean";
+      prov='<div class="dbg-prov '+cls+'">provenance '+ch.score+' · '+ch.present+'/'+ch.total+' proven'+
+        (cruft?' · <b>'+cruft+' cruft</b>: '+esc((ch.orphans||[]).join(", ")):' · no cruft ✓')+'</div>';
+    }
+    document.getElementById("debug").innerHTML=
+      '<div class="dbg-title">View mode</div>'+
+      '<label class="dbg-opt"><input type="checkbox" id="structOnly"><span>Structure only</span></label>'+
+      '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>'+
+      // Multi-stage cruft purge: an orthogonal filter (not a view mode) that HIDES the app-scaffold
+      // chrome the fresh-eyes audit flagged (sign-off subsystem · mockups · delivery-role kits) —
+      // non-destructive so a downstream consumer opts in and elements can resurface later in a
+      // different light. Default off (nothing hidden until selected).
+      '<label class="dbg-opt"><input type="checkbox" id="hideScaffold"><span>Hide app-scaffold chrome</span></label>'+
+      // Scaffold mode: the meta-debugging view of the TEMPLATE itself. As this renderer becomes the
+      // de-facto multi-domain node visualizer (requirements first; legal · benchmark · dev-os next),
+      // an adopter needs to see the template's anatomy — each region labelled with its scaffold role +
+      // data source (data-scaffold). Orthogonal overlay, not a view mode.
+      '<label class="dbg-opt"><input type="checkbox" id="scaffold"><span>Scaffold mode (template anatomy)</span></label>'+
+      // FR-16: scaffold-only — a sub-option of scaffold mode that empties the node-driven content so
+      // the adopter sees just the labelled template skeleton. Checking it also turns scaffold mode on.
+      '<label class="dbg-opt dbg-sub"><input type="checkbox" id="scaffoldOnly"><span>Scaffold only (hide node content)</span></label>'+
+      '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
+        '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
+        '<span class="ll node">node-driven</span></div>'+
+      prov;
+    var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
+    var hide=document.getElementById("hideScaffold"), scaf=document.getElementById("scaffold");
+    function syncModes(){
+      document.body.classList.toggle("structure-only", struct.checked);
+      document.body.classList.toggle("combined", comb.checked);
+    }
+    struct.onchange=function(){ if(struct.checked) comb.checked=false; syncModes(); };
+    comb.onchange=function(){ if(comb.checked) struct.checked=false; syncModes(); };
+    hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
+    var scafOnly=document.getElementById("scaffoldOnly");
+    scaf.onchange=function(){
+      document.body.classList.toggle("scaffold", scaf.checked);
+      if(!scaf.checked){ scafOnly.checked=false; document.body.classList.remove("scaffold-only"); }
+    };
+    scafOnly.onchange=function(){
+      var on=scafOnly.checked;
+      document.body.classList.toggle("scaffold-only", on);
+      if(on){ scaf.checked=true; document.body.classList.add("scaffold"); }  // labels/outlines need scaffold
+    };
+  }
 
   renderAll();
 })();

@@ -69,6 +69,7 @@ def render_html(
     fluency: str = DEFAULT_HTML_FLUENCY,
     live_reload_secs: Optional[int] = None,
     profile: Optional[RenderProfile] = None,
+    chrome: Optional[dict] = None,
 ) -> str:
     """The standalone offline HTML preview for ``plan`` — deterministic, no external assets.
 
@@ -76,10 +77,13 @@ def render_html(
     toggle switches between them. Defaults to the end-user voice (FR-AUD-2). ``live_reload_secs``
     (EC-3 ``--watch``) injects a meta-refresh + LIVE banner so an open browser auto-updates as the
     manifests change; ``None`` ⇒ the static offline file, byte-identical to the no-arg call."""
-    variants = {f"{r}|{f}": compose(plan, role=r, fluency=f) for r, f in _EMBED_COMBOS}
+    # Narration seam: the profile (if any) is threaded into compose so the apex meta/why/do come
+    # from the consumer's RenderProfile at the source — one seam, not a post-hoc override. App path
+    # (profile=None) is byte-identical.
+    variants = {f"{r}|{f}": compose(plan, role=r, fluency=f, profile=profile) for r, f in _EMBED_COMBOS}
     default = f"{role}|{fluency}"
     if default not in variants:  # a requested combo we didn't pre-embed → include it
-        variants[default] = compose(plan, role=role, fluency=fluency)
+        variants[default] = compose(plan, role=role, fluency=fluency, profile=profile)
     # EC-4: the delivery-role kits as metadata only (label + base voice + lens). A kit renders its base
     # voice's embedded variant + its lens banner, so the toggle offers 10 more roles with no embed bloat.
     kits = {r: {"label": m["label"], "base": m["base"], "lens": m["lens"]} for r, m in KITS.items()}
@@ -88,12 +92,20 @@ def render_html(
     # (fingerprint is deterministic — SHA-256 over inputs — so this preserves render-html determinism).
     payload = {"default": default, "variants": variants, "kits": kits,
                "inputs_fingerprint": _inputs_fingerprint(plan)}
-    # Opt-in domain vocabulary/chrome. Embedded ONLY when a profile is passed, so
-    # the app path's payload — and its bytes — are unchanged (byte-identity tests).
+    # Opt-in domain vocabulary/chrome. Embedded ONLY when a profile is passed, so the app path's
+    # payload — and its bytes — are unchanged (byte-identity tests). The apex meta/why/do are already
+    # profile-driven inside compose (the narration seam), so no post-hoc override is needed — the
+    # embed is clean at the source, which also keeps the cruft_lint / `tok in src` guard enforceable.
     if profile is not None:
         payload["profile"] = profile.to_dict()
+        # Chrome-provenance summary for the debug panel's live readout (score + orphan/cruft list).
+        # Profiled-only, so the app path payload is untouched (byte-identity).
+        if chrome is not None:
+            payload["chrome"] = chrome
+    doc_title = profile.title if profile is not None else "Your app — a first look"
     html = (
         WIREFRAME_VIEW_TEMPLATE
+        .replace("__DOC_TITLE__", doc_title)
         .replace("__EXPECTED_SCHEMA__", str(EXPECTED_SCHEMA_VERSION))
         .replace("__PLAN_DATA__", _embed_json(payload))
     )
@@ -122,17 +134,19 @@ def render_to_file(
     fluency: str = DEFAULT_HTML_FLUENCY,
     live_reload_secs: Optional[int] = None,
     profile: Optional[RenderProfile] = None,
+    chrome: Optional[dict] = None,
 ) -> Path:
     """Write the preview atomically (temp + rename); create the parent dir. Returns the path.
 
     ``live_reload_secs`` (EC-3 ``--watch``) injects the auto-refresh + LIVE banner; ``None`` writes the
-    static offline file."""
+    static offline file. ``chrome`` (chrome-provenance summary) is embedded for the debug panel's live
+    readout; ``None`` (app path) leaves the payload byte-identical."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
         render_html(plan, role=role, fluency=fluency,
-                    live_reload_secs=live_reload_secs, profile=profile),
+                    live_reload_secs=live_reload_secs, profile=profile, chrome=chrome),
         encoding="utf-8",
     )
     os.replace(tmp, path)
