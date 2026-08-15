@@ -16,10 +16,11 @@ Two failure modes it forbids:
 2. **Undisciplined landing** — building in the primary tree, editing goldens to make byte-identity
    "pass", or staging another agent's in-flight files. Stages 2/3/5 forbid each.
 
-The **human stays in the loop** at exactly two points (stage 1 decisions, stage 4 diff review) — that
-is what makes it *semi*-autonomous rather than autonomous. Everything else the agents/gates carry.
+The **human stays in the loop** at stage 1 decisions and stage 4 diff review (and, once HARVEST runs,
+at HTH's between-phase offers in stage 7) — that is what makes it *semi*-autonomous rather than
+autonomous. Everything else the agents/gates carry.
 
-## The six stages
+## The seven stages
 
 | # | Stage | Owner | What | Gate / artifact |
 |---|-------|-------|------|-----------------|
@@ -29,7 +30,8 @@ is what makes it *semi*-autonomous rather than autonomous. Everything else the a
 | **3** | **GATE-2** | script | `PYTHONPATH=<wt>/src pytest <suites>` + **byte-identity UNEDITED** + no-forbidden-import + `ruff` + **reachability probe** (`--reachability <touched.py>` — "wired, not just built") | all green; goldens untouched; no dormant symbols |
 | **4** | **REVIEW** | **the human** | read the diff (fresh eyes) BEFORE anything lands — the cruft/dismissal discipline | approval to land |
 | **5** | **LAND** | git cadence | branch → FF `main` → restore to `main`; **stage OWN files only** (file-disjoint from other agents) | commit on `main`, checkout restored |
-| **6** | **RECORD** | script/human | refresh `SESSION_LEDGER`; register the outcome (Mieruka) | ledger reflects new state |
+| **6** | **RECORD** | script/human | refresh `SESSION_LEDGER`; register the outcome (Mieruka); **the ledger row is the trigger that hands off to stage 7** | ledger reflects new state |
+| **7** | **HARVEST** | **`/harden-then-harvest`** | run HTH on the shipped surface — the 5-skill Check→Act composition: code-review §1.5 value-path → python-code-refactor → reflective-retrospective §2.5 dormant inventory → cumulative-enhancement → bus/Yokoten. Runs on a **substantial** delivery (scale down / skip for a trivial one); its human checkpoints are the between-phase offers | hardened surface + extracted standard + ranked enhancement backlog |
 
 ## Running it
 
@@ -37,7 +39,7 @@ is what makes it *semi*-autonomous rather than autonomous. Everything else the a
 # stage 0 — is a spec build-ready?
 python3 scripts/navigator_spec_delivery_loop.py --status          # survey every REQ-*.md
 python3 scripts/navigator_spec_delivery_loop.py REQ-05            # gate one (exit 1 if blocked)
-python3 scripts/navigator_spec_delivery_loop.py --checklist       # print the 6 stages
+python3 scripts/navigator_spec_delivery_loop.py --checklist       # print the 7 stages
 
 # stages 1–2 — dispatch agents (parent orchestrates):
 #   PREP:  out-of-cast agent → readiness + decisions
@@ -50,6 +52,10 @@ python3 scripts/navigator_spec_delivery_loop.py --reachability <touched.py...>  
 # stages 4–5 — human reviews the diff, then land per cadence (from primary, on main):
 git checkout -b feat/<handle> && <copy own files> && pytest && git commit
 git checkout main && git merge --ff-only feat/<handle> && git branch -d feat/<handle>
+
+# stage 6 — RECORD (refresh SESSION_LEDGER) — the ledger row is the cue to run stage 7
+# stage 7 — HARVEST (on a SUBSTANTIAL delivery; scale down / skip a trivial one):
+#   /harden-then-harvest   # runs on the shipped surface — see stage 7 below
 ```
 
 ## Non-negotiables (the discipline)
@@ -74,25 +80,29 @@ git checkout main && git merge --ff-only feat/<handle> && git branch -d feat/<ha
 - **Composes with** `/reflective-requirements` (authoring the spec that this loop then delivers) and
   the git-cadence memory (stage 5).
 
-## Complement: `/harden-then-harvest` (the Check→Act back-half)
+## Stage 7 — HARVEST: `/harden-then-harvest` (the Check→Act back-half)
 
-This loop is a **Plan→Do** composition: it takes an authored spec and *does* the build. Its natural
-complement is the **Check→Act** composition **`/harden-then-harvest`** (HTH) — run it on the surface
-this loop just shipped. Where delivery ends at RECORD, HTH begins:
+Stages 0–6 are a **Plan→Do** arc: they take an authored spec and *do* the build, ending at RECORD.
+Stage 7 is the **Check→Act** back-half — the official closing stage, owned by **`/harden-then-harvest`**
+(HTH), run on the surface this loop just shipped:
 
 ```
-Spec Delivery Loop (Plan→Do)                    /harden-then-harvest (Check→Act)
+Spec Delivery Loop (Plan→Do, stages 0–6)              Stage 7 HARVEST — /harden-then-harvest (Check→Act)
   GATE→PREP→BUILD→GATE-2→REVIEW→LAND→RECORD  ──▶  code-review(§1.5 value-path) → python-code-refactor
   spec ──────────────────────────▶ merged        → reflective-retrospective(§2.5 dormant inventory)
                                                   → cumulative-enhancement → bus/Yokoten handoff
 ```
 
-- **When:** after a delivery (or a batch of them) lands — the merged code is HTH's raw material. Not on
-  a stub; the dispatch guard requires a substantial shipped surface.
+- **When:** after a delivery (or a batch of them) lands — the merged code is HTH's raw material.
+  HARVEST runs on a **substantial** shipped surface; for a **trivial** delivery, scale it down or skip
+  it (the HTH dispatch guard requires a substantial surface — don't run it on a stub).
+- **Human checkpoints:** stage 7's human-in-the-loop points are HTH's **between-phase offers** (accept
+  the review, the refactor, the retrospective, the backlog before each next phase).
 - **What it adds that GATE-2 doesn't:** GATE-2 proves the build *passes its tests*; HTH's value-path
   audit + Phase-2.5 dormant inventory catch **built-but-unwired / claim>gate** defects a green suite
   misses — and it *harvests* (extracts the standard the delivery proved + a ranked enhancement backlog).
 - **Handoff seam:** stage 6 RECORD is the trigger point — the ledger row that says "REQ-NN built" is
-  the cue to run HTH on it. HTH's retrospective feeds the *next* spec's requirements (closing Plan↔Check).
+  the cue to run stage 7 (HARVEST) on it. HTH's retrospective feeds the *next* spec's requirements
+  (closing Plan↔Check).
 - HTH is the reverse twin of the forward `reflective-then-crp` (Plan→Do) at the composition level;
-  here the loop *is* the Do, so HTH is the specific Check→Act that pairs with it.
+  here stages 0–6 *are* the Do, so stage 7 is the specific Check→Act that pairs with them.

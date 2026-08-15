@@ -5,7 +5,7 @@ The disciplined, semi-autonomous path from an authored det-req SPEC to a landed 
 It is the *forward* sibling of the improvement loops: where the Pilot/Content loops improve a node
 that already exists, this loop turns a build-ready spec into merged code under engineering discipline.
 
-The loop has six stages (full detail in the runbook `SPEC_DELIVERY_LOOP.md`):
+The loop has seven stages (full detail in the runbook `SPEC_DELIVERY_LOOP.md`):
 
   0. GATE      (this script — deterministic)  the spec is build-ready: name block · single-line FRs
                that parse · every FR has Name/Verify/Serves. FAIL → refuse to proceed.
@@ -16,6 +16,8 @@ The loop has six stages (full detail in the runbook `SPEC_DELIVERY_LOOP.md`):
   4. REVIEW    (fresh eyes — the human)       read the diff before anything lands.
   5. LAND      (git cadence)                  branch → FF main → restore to main; stage OWN files only.
   6. RECORD    (Mieruka)                      refresh the session ledger; register the outcome.
+  7. HARVEST   (/harden-then-harvest)         on a substantial delivery, harden the shipped surface +
+               harvest the standard + backlog (Check→Act); scale down / skip for a trivial one.
 
 Only stage 0 (and the mechanical half of stage 3) is a pure script — the rest is agent+human
 orchestration the runbook governs. This driver is the enforceable gate: it reuses the SDK's own
@@ -26,7 +28,7 @@ in embryo, scoped to the one precondition that guards a build.
 Usage:
     python3 scripts/navigator_spec_delivery_loop.py --status            # readiness of every REQ-*.md
     python3 scripts/navigator_spec_delivery_loop.py REQ-05              # gate one spec (by key or path)
-    python3 scripts/navigator_spec_delivery_loop.py --checklist         # print the 6-stage runbook
+    python3 scripts/navigator_spec_delivery_loop.py --checklist         # print the 7-stage runbook
 """
 from __future__ import annotations
 
@@ -154,7 +156,7 @@ def _print_verdict(v: Dict[str, Any]) -> None:
 
 
 CHECKLIST = """\
-Spec Delivery Loop — the 6 stages (runbook: docs/design/requirements-visualization/SPEC_DELIVERY_LOOP.md)
+Spec Delivery Loop — the 7 stages (runbook: docs/design/requirements-visualization/SPEC_DELIVERY_LOOP.md)
 
   0. GATE      python3 scripts/navigator_spec_delivery_loop.py REQ-NN   (must PASS to proceed)
   1. PREP      out-of-cast agent: name check + port-map/readiness; surface decisions to the human
@@ -164,9 +166,13 @@ Spec Delivery Loop — the 6 stages (runbook: docs/design/requirements-visualiza
                  ("wired, not just built" — every new/ported public symbol needs a call site)
   4. REVIEW    the human reads the diff (fresh eyes) BEFORE anything lands
   5. LAND      branch → FF main → restore to main; stage OWN files only (file-disjoint from other agents)
-  6. RECORD    refresh SESSION_LEDGER; register the outcome
+  6. RECORD    refresh SESSION_LEDGER; register the outcome  →  hands off to stage 7
+  7. HARVEST   /harden-then-harvest on the shipped surface: hardens it + harvests the standard + backlog
+                 (code-review §1.5 → python-code-refactor → reflective-retrospective §2.5 →
+                  cumulative-enhancement → bus); run on a SUBSTANTIAL delivery, scale down / skip a trivial one
 
-Human checkpoints (what keeps it *semi*-autonomous, not autonomous): decisions in stage 1, diff review in stage 4.
+Human checkpoints (what keeps it *semi*-autonomous, not autonomous): decisions in stage 1, diff review in
+stage 4, and HTH's between-phase offers in stage 7.
 """
 
 

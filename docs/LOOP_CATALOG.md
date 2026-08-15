@@ -131,11 +131,13 @@ a script and/or runbook.
 ### 6. Spec Delivery Loop  *(the forward loop — spec → merged implementation)*
 
 - **What it does:** turns a build-ready det-req SPEC into a landed IMPLEMENTATION under engineering
-  discipline, semi-autonomously. Six stages: **0 GATE** (deterministic build-readiness) → **1 PREP**
+  discipline, semi-autonomously. Seven stages: **0 GATE** (deterministic build-readiness) → **1 PREP**
   (out-of-cast readiness + decisions) → **2 BUILD** (agent in an isolated worktree) → **3 GATE-2**
   (full suite + byte-identity UNEDITED + no-forbidden-import + ruff) → **4 REVIEW** (human reads the
-  diff) → **5 LAND** (git cadence, own files only) → **6 RECORD** (ledger). The human stays in the
-  loop at stages 1 and 4 — that is what makes it *semi*-autonomous. Proven on REQ-03/04 before naming.
+  diff) → **5 LAND** (git cadence, own files only) → **6 RECORD** (ledger) → **7 HARVEST**
+  (`/harden-then-harvest` on the shipped surface — now an official closing stage, not just a complement).
+  The human stays in the loop at stages 1, 4, and HTH's between-phase offers in 7 — that is what makes
+  it *semi*-autonomous. Proven on REQ-03/04 before naming.
 - **Driver (gate):** `scripts/navigator_spec_delivery_loop.py`  ·  **Runbook:**
   `docs/design/requirements-visualization/SPEC_DELIVERY_LOOP.md`
 - **Moving number:** specs delivered (build-ready → merged) with byte-identity preserved. Stage-0
@@ -147,13 +149,14 @@ a script and/or runbook.
   ```bash
   python3 scripts/navigator_spec_delivery_loop.py --status     # readiness of every REQ-*.md
   python3 scripts/navigator_spec_delivery_loop.py REQ-05       # gate one (exit 1 if blocked)
-  python3 scripts/navigator_spec_delivery_loop.py --checklist  # the 6-stage runbook
+  python3 scripts/navigator_spec_delivery_loop.py --checklist  # the 7-stage runbook
   ```
-- **Complement (Check→Act back-half):** **`/harden-then-harvest`** — run it on the surface this loop
-  ships. Delivery ends at RECORD; HTH begins there (code-review §1.5 value-path → python-code-refactor →
+- **Stage 7 (HARVEST) — Check→Act back-half:** **`/harden-then-harvest`** is now an official closing
+  stage (not just a complement) — run it on the surface this loop ships. Delivery's Plan→Do arc ends at
+  RECORD, which hands off to HARVEST (code-review §1.5 value-path → python-code-refactor →
   reflective-retrospective §2.5 dormant inventory → cumulative-enhancement → bus/Yokoten). It catches
-  built-but-unwired defects a green GATE-2 misses and harvests the standard + a ranked backlog. See the
-  runbook's "Complement" section.
+  built-but-unwired defects a green GATE-2 misses and harvests the standard + a ranked backlog; runs on
+  a substantial delivery (scale down / skip a trivial one). See the runbook's "Stage 7 — HARVEST" section.
 - **State:** the gate is stateless (reads the spec live); outcomes recorded in `SESSION_LEDGER`.
 - **Status:** ACTIVE. Build-ready: REQ-02/03/04/05/06/07/08; blocked: REQ-01 (`frs-named`), seat-req.
 
