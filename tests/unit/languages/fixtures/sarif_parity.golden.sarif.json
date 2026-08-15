@@ -1,0 +1,97 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "properties": {
+            "skipped": 2
+          }
+        }
+      ],
+      "results": [
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reqs/REQ-01.det-req.md"
+                },
+                "region": {
+                  "startLine": 14
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Touches names a non-existent module: game-engine"
+          },
+          "ruleId": "dangling_touches"
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reqs/REQ-02.det-req.md"
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "FR has no Risk annotation"
+          },
+          "ruleId": "risk_hygiene"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "reqs/REQ-03.det-req.md"
+                },
+                "region": {
+                  "startLine": 7
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Touches names a non-existent module: renderer"
+          },
+          "ruleId": "dangling_touches"
+        }
+      ],
+      "tool": {
+        "driver": {
+          "informationUri": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html",
+          "name": "sarif-parity",
+          "rules": [
+            {
+              "helpUri": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html",
+              "id": "dangling_touches",
+              "name": "dangling_touches",
+              "shortDescription": {
+                "text": "dangling touches"
+              }
+            },
+            {
+              "helpUri": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html",
+              "id": "risk_hygiene",
+              "name": "risk_hygiene",
+              "shortDescription": {
+                "text": "risk hygiene"
+              }
+            }
+          ],
+          "version": "parity/1"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

@@ -10,7 +10,10 @@ SecurityFinding-style object) and emits a valid 2.1.0 document.
 from __future__ import annotations
 
 import enum
+import json
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -181,3 +184,57 @@ def test_end_to_end_python_semantic_validator_to_sarif():
     assert checks == rule_ids
     for r in run["results"]:
         assert r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "svc/handler.py"
+
+
+# ---------------------------------------------------------------------------
+# Cross-repo PARITY guard: render_sarif_from_findings must stay byte-identical
+# to dev-os det-req-kit's vendored render_sarif() for a shared golden fixture.
+#
+# The golden fixture IS the contract; the kit's tests/test_extract.sh asserts the
+# SAME golden from render_sarif(). Parity holds when the SDK renderer is called with
+# matching tool_name+tool_version and NO corpus (corpus adds a property the kit lacks).
+# ---------------------------------------------------------------------------
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+_PARITY_FINDINGS = _FIXTURES / "sarif_parity.findings.json"
+_PARITY_GOLDEN = _FIXTURES / "sarif_parity.golden.sarif.json"
+# The vendored, dependency-free twin lives in dev-os; skip cleanly when absent.
+_DEVOS_KIT = Path("~/Documents/dev/dev-os/det-req-kit").expanduser()
+
+
+def _canonical(doc) -> str:
+    return json.dumps(doc, indent=2, sort_keys=True) + "\n"
+
+
+def test_sdk_renderer_reproduces_shared_golden():
+    """render_sarif_from_findings reproduces the shared golden byte-for-byte."""
+    findings = json.loads(_PARITY_FINDINGS.read_text())
+    golden = _PARITY_GOLDEN.read_text()
+    doc = render_sarif_from_findings(
+        findings, tool_name="sarif-parity", tool_version="parity/1"
+    )
+    assert _canonical(doc) == golden
+
+
+def test_cross_repo_byte_identity_with_vendored_kit():
+    """Belt-and-suspenders: the SDK renderer and the vendored dev-os kit renderer
+    produce byte-identical output for the shared fixture. Skips when dev-os is absent
+    so the SDK suite stays green on a machine without the kit checked out."""
+    if not _DEVOS_KIT.exists():
+        pytest.skip(f"dev-os det-req-kit not present at {_DEVOS_KIT}")
+    sys.path.insert(0, str(_DEVOS_KIT))
+    try:
+        from sarif import render_sarif  # vendored, dependency-free kit renderer
+    finally:
+        # leave sys.path as we found it once the import is resolved
+        if str(_DEVOS_KIT) in sys.path:
+            sys.path.remove(str(_DEVOS_KIT))
+
+    findings = json.loads(_PARITY_FINDINGS.read_text())
+    kit_doc = render_sarif(findings, tool_name="sarif-parity", tool_version="parity/1")
+    sdk_doc = render_sarif_from_findings(
+        findings, tool_name="sarif-parity", tool_version="parity/1"
+    )
+    assert _canonical(kit_doc) == _canonical(sdk_doc)
+    # and both equal the committed golden
+    assert _canonical(sdk_doc) == _PARITY_GOLDEN.read_text()
