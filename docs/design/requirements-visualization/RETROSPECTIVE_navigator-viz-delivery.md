@@ -20,6 +20,11 @@ REQ-02 tree · REQ-03 a11y + corpus index · REQ-04 lift-lenses · REQ-05 graph 
 
 Scanned ~12 symbols; **2 genuinely dormant**, 1 soft-only, rest wired.
 
+> **Update 2026-08-15 — both dormants CLOSED.** D-2 (`validate_graph_model`) wired via EB-1 (`1bd4bf95`);
+> D-1 (tree/a11y unlensed + `apply_node_lenses` thin-ice) closed via EB-2/REQ-09 (`90efe69f`), which also
+> moved `apply_node_lenses` export-only 0/1 → wired 2/1. The reachability probe (EB-3, `a7618250`) — now a
+> GATE-2 stage — reports no dormant lens symbols. The harvest→hardening cycle is complete.
+
 ## Phase 3 — Reflection (belief → actual)
 
 | Kind | What I believed | What the actuals revealed | So the standard is… |

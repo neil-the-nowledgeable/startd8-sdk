@@ -15,6 +15,7 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 | **REQ-03 a11y renderer + corpus index** | `render_a11y.py` + `render_index.py` ported standalone; `build --format a11y` + `navigator index --dir` | **built, +20 tests** (`d416fc38`) |
 | **REQ-04 lift lenses to shared transform** | `node_lenses.py` (`apply_node_lenses`/`apply_section_lenses`/`project_nodes`); compose is now a thin wrapper — byte-identity held | **built, 272 tests** (`5cb91c37`) |
 | **REQ-05 graph/network-topology renderer** | `graph_projection.py` (ported) + `render_graph.py` standalone SVG; deterministic layout, cycle-safe; `--renderer graph` + `--semantic-only/--full-graph` | **built, 284 tests** (`b39540bd`) — 1st Spec Delivery Loop delivery |
+| **REQ-09 shared-lens adoption** | tree + a11y inherit `node_lenses` via opt-in `--role`/`--fluency` (byte-identical default); `apply_node_lenses` wired 2/1 | **built, 302 tests** (`90efe69f`) — 2nd loop delivery; closes HTH dormant D-1 |
 | **Navigator debugging layer** | debug panel (structOnly / combined / hideScaffold / scaffold), provenance readout, layer legend, PF-1 status chips — all gated on `payload.profile` for byte-identity | built |
 | **5 loops + catalog** | pilot / content / origin-audit / cruft / inspect loops + `docs/LOOP_CATALOG.md` | built |
 | **Node-schema source (Kagami mirror)** | `sources_node_schema.py` introspects `Node` → Nodes | built |
