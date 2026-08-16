@@ -404,6 +404,17 @@ def test_cli_provenance_html_requires_out():
     assert res.exit_code != 0 and "--out is required" in res.output
 
 
+def test_cli_provenance_html_not_found_still_exits_nonzero(tmp_path):
+    """FR-9 exit-code contract, html quadrant (harvest gate): a not-found trace still exits 1 under
+    --format html (and writes the file) so CI distinguishes traced from unowned in either format."""
+    out = tmp_path / "nf.html"
+    res = RUNNER.invoke(
+        app, ["navigator", "provenance", "--query", "totally/unowned.py", "--format", "html", "--out", str(out)]
+    )
+    assert res.exit_code == 1
+    assert out.exists() and "pipeline-provenance" in out.read_text(encoding="utf-8")
+
+
 def test_cli_provenance_rejects_unknown_format():
     res = RUNNER.invoke(app, ["navigator", "provenance", "--query", "a/b.py", "--format", "yaml"])
     assert res.exit_code != 0 and "unknown --format" in res.output

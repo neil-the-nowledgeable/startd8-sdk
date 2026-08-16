@@ -60,3 +60,17 @@ report not-found. A query capability's reach is bounded by the domain model it q
 says so rather than implying every FR traces.
 
 **R8 backlog CLEARED** — R8-EB-1..6 all shipped.
+
+### Batch-2 HTH harvest 2026-08-16 (R8-EB-6 + R8-EB-3 + v0.4/v0.4.1 reconcile)
+
+A fresh harvest of the last batch. No new backlog rows — the surface held up. What it caught:
+- **XSS verified safe:** the new `provenance --format html` surface flows a user-controlled `--query` into
+  the HTML title + node text; the shared tree renderer escapes both (probe: raw `<script>` absent,
+  `&lt;script&gt;` present). Confirmation, not a fix.
+- **One claim>gate fixed inline:** FR-9's exit-code contract (traced→0 / not-found→1) was claimed for *both*
+  formats but only 3/4 quadrants were gated — the (html × not-found → exit 1) cell was untested (correct by
+  construction, both arms share `rc`). Added the test.
+
+**Retro lesson (Yokoten):** when a `Verify:` claims a contract across a **matrix** (format × outcome), gate
+every cell, not just the happy-path diagonal — the untested cell is where a later refactor silently breaks
+the claim.
