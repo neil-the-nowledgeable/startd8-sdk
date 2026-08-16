@@ -17,6 +17,7 @@ from .inputs import (
 from .plan import (
     ContentCoverageStats,
     CoverageStat,
+    EvidenceRef,
     Status,
     WireframeItem,
     WireframePlan,
@@ -33,6 +34,7 @@ __all__ = [
     "CATALOG_KEYS",
     "ContentCoverageStats",
     "CoverageStat",
+    "EvidenceRef",
     "RenderProfile",
     "Status",
     "StatusStyle",

@@ -1,0 +1,18 @@
+{
+  "name": "legal",
+  "extends": "base",
+  "vocabulary": {
+    "gap_noun": "provision",
+    "statuses": {
+      "enacted": {"label": "Enacted", "color": "#3d7a57", "meaning": "in force", "severity": 0},
+      "proposed": {"label": "Proposed", "color": "#6b6252", "meaning": "drafted, not enacted", "severity": 2},
+      "contested": {"label": "Contested", "color": "#a9781a", "meaning": "under challenge", "severity": 3, "is_gap": true}
+    }
+  },
+  "chrome": {
+    "title": "This statute — a first look",
+    "eyebrow": "This statute",
+    "section_lead": "What this statute enacts",
+    "headline": "A first look at this statute"
+  }
+}

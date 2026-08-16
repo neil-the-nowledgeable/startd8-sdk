@@ -14,7 +14,7 @@
 
 manifest_id: startd8.agent
 name: StartD8 LLM Orchestration Capabilities
-version: "2.1.0"
+version: "2.2.0"
 description: |
   Multi-LLM provider abstraction framework with cost tracking, workflow
   orchestration, multi-phase code generation, and OpenTelemetry observability.
@@ -2106,6 +2106,232 @@ capabilities:
       - Never hardcode which language a file set uses — resolve_language(files) returns the dominant profile
       - Don't assume a sixth language works — only python/go/nodejs/java/csharp profiles are registered via entry points
 
+  - capability_id: startd8.navigator.render
+    category: generate
+    maturity: beta
+    summary: Renders any Node corpus (requirements/capabilities) into HTML via a standalone renderer family
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        startd8 navigator build --source {requirements|capability-index|node-schema|nodes-json}
+        --renderer {wireframe|tree|graph} | --format {json|html|a11y}. Standalone renderers (own HTML
+        shell, no wireframe_view import, XSS-safe); masthead/chrome derived from the requirement's own
+        key/title/DIDL semantic name; status is evidence-grounded (a code Lives to an absent file reads
+        spec, not grounded). navigator index --dir drills to a per-doc a11y corpus index.
+      human: |
+        The cross-repo node-visualization renderer (forward home; adopters: legal · benchmark · dev-os).
+        One Node contract (NODE-SCHEMA) → wireframe navigator, N-level tree, accessible view + corpus
+        index, and offline graph. Masthead text is deterministically derived from the requirement, not
+        static; the status pill mechanically reflects whether evidence resolves in code.
+    triggers:
+      - navigator
+      - requirements visualization
+      - node renderer
+      - navig8r
+      - tree renderer
+      - a11y renderer
+      - graph renderer
+      - corpus index
+    evidence:
+      - type: code
+        ref: src/startd8/navigator/
+        description: renderers (render_tree/render_a11y/render_index/render_graph), sources, cli_navigator
+      - type: code
+        ref: src/startd8/navigator/sources_requirements.py
+        description: det-req → Nodes + deterministic masthead/chrome derivation + evidence-grounded status
+      - type: test
+        ref: tests/unit/navigator/
+        description: renderer + source + CLI tests
+    confidence: 0.85
+    anti_patterns:
+      - Never let a renderer import wireframe_view — each renderer owns its HTML shell (assert on import lines)
+      - Don't mark an FR grounded on a named path alone — grounding requires the code Lives to resolve on disk/git
+
+  - capability_id: startd8.navigator.lenses
+    category: transform
+    maturity: stable
+    summary: Shared audience×fluency lens transform every navigator renderer inherits without forking
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        node_lenses.apply_node_lenses / project_nodes: a pure Node→view-model transform (jargon filter,
+        label humanisation, gap floor, end-user section order) lifted out of compose so tree/a11y/graph
+        inherit it via an opt-in role/fluency seam (role=None → raw → byte-identical).
+      human: |
+        The audience×fluency "crown jewel" — end_user/architect × beginner/intermediate/advanced — lifted
+        to one shared transform so no renderer re-implements it. Opt-in per render; the default no-role
+        path is byte-identical to the deterministic app output.
+    triggers:
+      - lenses
+      - audience
+      - fluency
+      - node_lenses
+      - humanize labels
+    evidence:
+      - type: code
+        ref: src/startd8/wireframe_view/node_lenses.py
+        description: apply_node_lenses / apply_section_lenses / project_nodes
+      - type: test
+        ref: tests/unit/wireframe_view/test_node_lenses.py
+        description: parity + byte-identity tests
+    confidence: 0.9
+    anti_patterns:
+      - Never re-fork _display_label/has_jargon into a renderer — consume the shared transform (grep must be 0)
+      - Don't apply lenses by default — role=None must stay byte-identical to the app path
+
+  - capability_id: startd8.navigator.diff
+    category: transform
+    maturity: beta
+    summary: Node-corpus delta engine + standalone renderer (added/removed/changed, status transitions, new dangling refs)
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        diff_nodes(before, after) -> NodeDiff keyed on Node.key over a defined _DIFF_FIELDS set;
+        order-insensitive collection compare (no false "changed"); deterministic key-sorted buckets.
+        navigator diff --before X --after Y --out Z [--json] [--max-detail] [--role]. New-dangling =
+        after-only refs that don't resolve AND weren't dangling in before.
+      human: |
+        Diffs two states of a Node corpus for a reviewer audience — what was added/removed/changed, status
+        transitions, and newly-broken references — as a standalone a11y-safe delta render or JSON for CI.
+    triggers:
+      - diff
+      - delta
+      - node diff
+      - corpus diff
+      - what changed
+    evidence:
+      - type: code
+        ref: src/startd8/navigator/diff.py
+        description: diff_nodes / NodeDiff / FieldDelta / StatusTransition / DanglingRef
+      - type: code
+        ref: src/startd8/navigator/render_diff.py
+        description: standalone delta renderer
+      - type: test
+        ref: tests/unit/navigator/test_diff.py
+        description: engine + order-stability + XSS tests
+    confidence: 0.85
+    anti_patterns:
+      - Don't compare collection fields positionally — sort so cosmetic reordering isn't a false "changed"
+      - Don't list all dangling refs as "new" — diff the dangling-ness across states
+
+  - capability_id: startd8.navigator.govern
+    category: validate
+    maturity: beta
+    summary: Governs a requirements corpus (name-block, single-line-FR, dangling xref, coverage, index-freshness)
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        navigator govern --dir <corpus> [--format text|json]. Five checks with fail/advisory severities;
+        exit 0=clean / 1=drift / 2=error. Reuses det_req.parse_fr_lines + render_index (Kagami — one
+        parser). The Spec Delivery Loop's stage-0 gate is this, generalized to a whole corpus.
+      human: |
+        Corpus governance for a directory of requirement docs: asserts each has a deterministic name
+        block, single-line FRs that parse, no dangling cross-refs, per-doc coverage, and index freshness —
+        emitting a pass/fail report that plugs into the loop family, not a parallel mechanism.
+    triggers:
+      - govern
+      - corpus governance
+      - requirements linter
+      - spec compliance
+    evidence:
+      - type: code
+        ref: src/startd8/navigator/govern.py
+        description: govern_corpus + the 5 checks + gate_spec (consolidated from the loop's stage-0 gate)
+      - type: test
+        ref: tests/unit/navigator/test_govern.py
+        description: per-check + precision-gate tests
+    confidence: 0.85
+    anti_patterns:
+      - Don't build a second parser/health model — reuse det_req + render_index (one source, Kagami)
+      - Keep heuristic checks advisory unless zero-false-positive on the conformant corpus
+
+  - capability_id: startd8.navigator.view_definition
+    category: transform
+    maturity: beta
+    summary: Serializable presentation View Definition with a per-leaf cascade so a base design change propagates atomically
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        ViewDefinition (theme/vocabulary/chrome/glance/control/regions/lenses + extends) + resolve() =
+        deep_merge(resolve(extends), self) per leaf, keyed collections merged by id (atomic override +
+        base propagation); to_render_profile() projects the resolved definition to the existing
+        RenderProfile so renderers are unchanged and byte-identity holds. resolve() fails loud on cyclic/
+        unknown extends.
+      human: |
+        The presentation twin of NODE-SCHEMA: presentation is a separate, inheritable structure. A shared
+        base navig8r definition cascades to each domain — a base change propagates to every non-overriding
+        domain while each keeps its overrides, atomically. Content (Node graph) and presentation (View
+        Definition) meet only at the renderer. The keystone of the cross-domain visualization layer.
+    triggers:
+      - view definition
+      - presentation definition
+      - cascade
+      - inheritance
+      - cross-domain presentation
+      - design tokens
+    evidence:
+      - type: code
+        ref: src/startd8/navigator/view_definition.py
+        description: ViewDefinition + resolve cascade + base/domain definitions + to_render_profile
+      - type: test
+        ref: tests/unit/navigator/test_view_definition.py
+        description: cascade + atomic-override + propagation + byte-identity projection tests
+      - type: doc
+        ref: docs/design/requirements-visualization/ARCHITECTURE_navig8r-presentation-definition-inheritance.md
+        description: the architecture + 7-step roadmap
+    confidence: 0.8
+    anti_patterns:
+      - Never use positional lists for overridable collections — keyed maps merge by id (atomic)
+      - Don't build a bespoke parser/plugin system — grow from RenderProfile; project to it for byte-identity
+
+  - capability_id: startd8.navigator.spec_delivery_loop
+    category: validate
+    maturity: beta
+    summary: Disciplined spec→merged delivery loop with a build-readiness gate and a wired-not-just-built reachability probe
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        navigator_spec_delivery_loop.py: stage-0 GATE (name-block + single-line-FR + Name/Verify/Serves)
+        reusing det_req; --reachability <files.py> (GATE-2) flags public symbols with no call site in
+        src/+scripts/ (wired, not just built); --checklist prints the 7 stages (…→RECORD→HARVEST). The
+        Check→Act back-half is /harden-then-harvest.
+      human: |
+        A 7-stage loop (GATE→PREP→BUILD-in-worktree→GATE-2→REVIEW→LAND→RECORD→HARVEST) that turns a
+        build-ready det-req spec into merged code under discipline (byte-identity, git cadence). The
+        reachability probe catches built-but-unwired defects a green suite misses.
+    triggers:
+      - spec delivery loop
+      - reachability probe
+      - dormant symbol
+      - wired not just built
+      - build-readiness gate
+    evidence:
+      - type: code
+        ref: scripts/navigator_spec_delivery_loop.py
+        description: stage-0 gate + reachability probe + checklist
+      - type: doc
+        ref: docs/design/requirements-visualization/SPEC_DELIVERY_LOOP.md
+        description: the 7-stage runbook
+      - type: test
+        ref: tests/unit/navigator/test_spec_delivery_loop.py
+        description: gate + reachability tests
+    confidence: 0.85
+    anti_patterns:
+      - Don't scan only src/ for reachability — a symbol wired from scripts/ reads dormant; exclude tests/
+      - Don't treat a green test suite as proof a ported symbol is reached — grep for a call site in the real path
+
 # =============================================================================
 # DESIGN PRINCIPLES (10 total)
 # =============================================================================
@@ -2420,6 +2646,10 @@ gaps_identified:
 # =============================================================================
 
 changelog:
+  - version: "2.2.0"
+    date: "2026-08-15"
+    changes:
+      - "Added the startd8.navigator.* family (6 capabilities) for the requirements-visualization / navig8r arc: `render` (Node-corpus multi-renderer — wireframe/tree/a11y+corpus-index/graph, deterministic derived masthead, evidence-grounded status), `lenses` (audience×fluency shared transform, stable), `diff` (Node-corpus delta engine + renderer), `govern` (5-check corpus governance), `view_definition` (serializable presentation View Definition + per-leaf cascade — the cross-domain presentation-inheritance keystone), and `spec_delivery_loop` (build-readiness gate + wired-not-just-built reachability probe). Additive/non-breaking; each grounded in shipped src/startd8/navigator/ code + tests + the requirements-visualization design docs. Confidence 0.8–0.9. Captured via /capability-index during a /capture-insights pass."
   - version: "2.1.0"
     date: "2026-07-16"
     changes:

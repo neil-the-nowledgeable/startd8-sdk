@@ -1,0 +1,38 @@
+[
+  {
+    "dirty": [],
+    "results": [
+      {
+        "chrome_orphans": [],
+        "chrome_score": 1.0,
+        "cruft": [],
+        "cruft_count": 0,
+        "cruft_lint": [
+          "cruft_lint: cruft-capability-index.html \u2014 2 gap(s), 0 candidate(s)"
+        ],
+        "source": "capability-index"
+      },
+      {
+        "chrome_orphans": [],
+        "chrome_score": 1.0,
+        "cruft": [],
+        "cruft_count": 0,
+        "cruft_lint": [
+          "cruft_lint: cruft-node-schema.html \u2014 2 gap(s), 0 candidate(s)"
+        ],
+        "source": "node-schema"
+      },
+      {
+        "chrome_orphans": [],
+        "chrome_score": 1.0,
+        "cruft": [],
+        "cruft_count": 0,
+        "cruft_lint": [
+          "cruft_lint: cruft-requirements.html \u2014 2 gap(s), 0 candidate(s)"
+        ],
+        "source": "requirements"
+      }
+    ],
+    "when": "2026-08-14T21:17:33.683080+00:00"
+  }
+]

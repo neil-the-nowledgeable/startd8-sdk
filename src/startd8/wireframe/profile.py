@@ -14,8 +14,8 @@ built-in app strings.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import Mapping, Tuple
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,18 @@ class RenderProfile:
     section_lead: str = "What your app includes"
     headline: str = "A first look at your app"
     gap_noun: str = "part"  # "N parts not set up yet"
+    # Apex chrome for the *technical* masthead (architect voice). The app path leaves these
+    # empty and the template falls back to its built-in "Wireframe Preview" + WIREFRAME_META
+    # + describe_summary why/do. A non-app consumer supplies its own so the apex speaks its
+    # domain instead of bleeding "$0 generation / entity count IS the contract" onto a Node view.
+    summary_meta: Tuple[str, ...] = ()   # sub-headline lines (replaces WIREFRAME_META)
+    why: str = ""                        # the "Why" clause of the apex whybox
+    do: str = ""                         # the "Do" clause of the apex whybox
+    # REQ-11: theme design tokens (e.g. {"accent": "#3a6a94"}) projected from a resolved
+    # ViewDefinition's theme section. **Empty by default = the byte-identity guard** (SOTTO): an
+    # absent/empty map means the renderer emits no CSS override, so the app path — and any profile
+    # without a theme — is byte-identical. A non-empty map is emitted as an additive :root override.
+    theme_tokens: Mapping[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """JSON-safe payload the template's client renderer reads (``data.profile``)."""
@@ -60,6 +72,10 @@ class RenderProfile:
             "section_lead": self.section_lead,
             "headline": self.headline,
             "gap_noun": self.gap_noun,
+            "summary_meta": list(self.summary_meta),
+            "why": self.why,
+            "do": self.do,
+            "theme_tokens": dict(self.theme_tokens),
         }
 
 
