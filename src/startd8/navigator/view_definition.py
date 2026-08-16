@@ -307,6 +307,14 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
                              "outlineRegions": {"label": "Outline regions", "order": 1},
                              "hideScaffold": {"label": "Hide app-scaffold chrome", "order": 2},
                          }},
+            # REQ-view-definition-mode FR-8: the Debug group exposes the raw data + nodes being
+            # visualized in a panel below the export sign-off (Raw data = the payload variant, Node data
+            # = the node items). Additive, default off, profiled-navigator-only (app path byte-identical).
+            "debug": {"label": "Debug", "hint": "· raw", "order": 2,
+                      "toggles": {
+                          "rawData": {"label": "Raw data", "order": 0},
+                          "nodeData": {"label": "Node data", "order": 1},
+                      }},
         },
     },
     glance={"summary": "status-counts"},

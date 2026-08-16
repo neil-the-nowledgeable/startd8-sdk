@@ -163,6 +163,33 @@ def test_view_definition_shows_every_region_display_logic_template():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+def test_debug_group_and_raw_data_panel_ship_and_are_byte_safe():
+    # REQ-view-definition-mode FR-8: the Debug control group (Raw data / Node data) + a #rawdata panel
+    # positioned BELOW the sign-off (#signbar) ship in the profiled render, hidden by default; app-safe.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert 'data-group="debug"' in profiled                 # the Debug group header
+    assert 'id="rawData"' in profiled and 'id="nodeData"' in profiled   # the two debug toggles
+    assert "function renderRawData" in profiled             # the raw-data renderer
+    # the panel is placed below the sign-off (its element appears AFTER #signbar in the document)
+    assert profiled.index('id="rawdata"') > profiled.index('id="signbar"')
+    assert 'class="rawdata"' in profiled and "hidden" in profiled       # hidden until a toggle is on
+    # app path never emits the debug panel content / byte-identity holds
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_frame_provenance_reads_as_definition_summary_not_cruft():
+    # REQ-view-definition-mode FR-7: a bare frame (payload.frame) must NOT report its empty chrome slots
+    # as "cruft" — the readout reads as a definition summary. (Client-side: the frame-branch ships in JS.)
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    # the definition-summary branch is present and gated on payload.frame
+    assert "if(payload.frame){" in profiled
+    assert "View Definition · " in profiled and "regions · " in profiled   # the definition-summary text
+    # the app path stays byte-identical
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
 def test_chrome_provenance_readout_embeds_and_is_byte_safe():
     # FR-13: the debug panel's live provenance readout is fed by an embedded chrome summary; the app
     # path (no chrome) stays byte-identical.
