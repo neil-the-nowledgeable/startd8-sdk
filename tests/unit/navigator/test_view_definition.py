@@ -24,6 +24,7 @@ from startd8.navigator.view_definition import (
     ViewDefinition,
     definition_diff,
     resolve,
+    resolve_bindings,
     to_render_profile,
 )
 from startd8.wireframe.profile import RenderProfile, StatusStyle
@@ -367,3 +368,51 @@ def test_definition_diff_shows_only_what_a_domain_overrides_or_adds():
 
 def test_definition_diff_of_the_base_against_itself_is_empty():
     assert definition_diff(BASE_NAVIG8R_DEFINITION, BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY) == {}
+
+
+# ── REQ-12 — chrome-binding grammar ──────────────────────────────────────────────────────────────
+
+def test_resolve_bindings_substitutes_single_fields_only():
+    # FR-1: single-field substitution; unknown/empty → ""; no-placeholder unchanged.
+    assert resolve_bindings("What {key} defines", {"key": "REQ-01"}) == "What REQ-01 defines"
+    assert resolve_bindings("{missing}", {}) == ""
+    assert resolve_bindings("static text", {"key": "x"}) == "static text"
+
+
+def test_requirements_chrome_carries_the_fr17_bindings():
+    # FR-4: the masthead derivations are declarative bindings on the definition, not hardcoded Python.
+    bindings = REQUIREMENTS_DEFINITION.chrome["bindings"]
+    assert bindings["eyebrow"] == "{key}"
+    assert bindings["headline"] == "{title}"
+    assert bindings["section_lead"] == "What {key} defines"
+    assert bindings["summary_meta"] == ["{semantic_name}"]
+
+
+def test_chrome_bindings_are_context_gated_and_fall_back_when_empty():
+    # FR-3: no context → static; context with a field → derived; empty field → static fallback.
+    static = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
+    assert static.eyebrow == "This spec"                       # context=None → static (byte-identical)
+    bound = to_render_profile(
+        resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY),
+        context={"key": "REQ-9", "title": "Demo", "semantic_name": "does a thing"},
+    )
+    assert bound.eyebrow == "REQ-9"                             # {key} resolved
+    assert bound.section_lead == "What REQ-9 defines"          # template with embedded literal
+    assert bound.summary_meta == ("does a thing",)             # list template → tuple
+    empty = to_render_profile(
+        resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY), context={"key": ""},
+    )
+    assert empty.eyebrow == "This spec"                        # empty field → static fallback
+
+
+def test_bindings_ride_the_cascade_and_appear_in_the_resolved_dump():
+    # FR-6: bindings are part of the resolved chrome (inspectable via view-definition, cascade-merged).
+    resolved = resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY)
+    assert resolved.chrome["bindings"]["eyebrow"] == "{key}"
+
+
+def test_non_requirements_domains_have_no_bindings_and_ignore_context():
+    # capability has no bindings → a context can't change its chrome (byte-safe).
+    a = to_render_profile(resolve(CAPABILITY_DEFINITION, DEFINITION_REGISTRY))
+    b = to_render_profile(resolve(CAPABILITY_DEFINITION, DEFINITION_REGISTRY), context={"key": "X"})
+    assert a == b

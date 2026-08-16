@@ -23,10 +23,14 @@ resolver + base + a 2-domain proof + the RenderProfile projection, nothing more.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from startd8.wireframe.profile import RenderProfile, StatusStyle
+
+# REQ-12: a chrome-binding placeholder — ``{field}`` referencing a single content-context key.
+_BINDING = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
 # The seven scaffold-taxonomy sections a definition (and its resolution) carry.
 _SECTIONS = ("theme", "vocabulary", "chrome", "glance", "control", "regions", "lenses")
@@ -189,16 +193,53 @@ def definition_diff(
     return _diff_leaves(resolved_base, resolved_domain)
 
 
-def to_render_profile(resolved: ResolvedDefinition) -> RenderProfile:
+def resolve_bindings(template: str, context: Mapping[str, str]) -> str:
+    """REQ-12 FR-1: substitute ``{field}`` placeholders in a chrome ``template`` from ``context``.
+
+    Single-field substitution only — no functions, conditionals, or arithmetic (NR-2). An unknown or
+    empty field substitutes the empty string; a template with no placeholder is returned unchanged.
+    """
+    return _BINDING.sub(lambda m: str(context.get(m.group(1), "")), template)
+
+
+def _binding_fields(template: Any) -> List[str]:
+    """The context fields a template (str or list of str) references."""
+    parts = template if isinstance(template, list) else [template]
+    return [f for part in parts for f in _BINDING.findall(str(part))]
+
+
+def to_render_profile(
+    resolved: ResolvedDefinition,
+    context: Optional[Mapping[str, str]] = None,
+) -> RenderProfile:
     """Project a resolved definition to the existing :class:`RenderProfile` (renderers unchanged).
 
     Reads ``vocabulary`` (ordered ``statuses`` keyed map + ``gap_noun``), ``chrome`` (masthead + apex
-    strings), and — REQ-11 — ``theme`` (design tokens → ``theme_tokens``, emitted by the renderer as an
-    additive CSS custom-property override). ``lenses``/``control``/``glance``/``regions`` are still NOT
-    projected (later architecture steps). Any omitted chrome key falls back to the RenderProfile default.
+    strings), and — REQ-11 — ``theme`` (design tokens → ``theme_tokens``). ``lenses``/``control``/
+    ``glance``/``regions`` are still NOT projected (later steps). Any omitted chrome key falls back to
+    the RenderProfile default.
+
+    REQ-12: when a ``context`` is supplied, a chrome field named in ``chrome.bindings`` is derived by
+    substituting its ``{field}`` template against the context — but ONLY when every referenced field
+    resolves non-empty; otherwise the static chrome value stands. ``context=None`` ⇒ static chrome
+    (byte-identical). Bindings are consumed here, not carried on the RenderProfile.
     """
     vocab = resolved.vocabulary or {}
     chrome = resolved.chrome or {}
+    bindings = (chrome.get("bindings") or {}) if context else {}
+
+    def _chrome(field: str, static: Any) -> Any:
+        """The bound value for ``field`` if its binding fully resolves, else the static value."""
+        template = bindings.get(field)
+        if template is None:
+            return static
+        fields = _binding_fields(template)
+        if not fields or not all(context.get(f) for f in fields):
+            return static
+        if isinstance(template, list):
+            return tuple(resolve_bindings(str(t), context) for t in template)
+        return resolve_bindings(template, context)
+
     statuses = tuple(
         StatusStyle(
             key=sid,
@@ -212,14 +253,14 @@ def to_render_profile(resolved: ResolvedDefinition) -> RenderProfile:
     )
     return RenderProfile(
         statuses=statuses,
-        title=chrome.get("title", _PROFILE_DEFAULTS.title),
-        eyebrow=chrome.get("eyebrow", _PROFILE_DEFAULTS.eyebrow),
-        section_lead=chrome.get("section_lead", _PROFILE_DEFAULTS.section_lead),
-        headline=chrome.get("headline", _PROFILE_DEFAULTS.headline),
+        title=_chrome("title", chrome.get("title", _PROFILE_DEFAULTS.title)),
+        eyebrow=_chrome("eyebrow", chrome.get("eyebrow", _PROFILE_DEFAULTS.eyebrow)),
+        section_lead=_chrome("section_lead", chrome.get("section_lead", _PROFILE_DEFAULTS.section_lead)),
+        headline=_chrome("headline", chrome.get("headline", _PROFILE_DEFAULTS.headline)),
         gap_noun=vocab.get("gap_noun", _PROFILE_DEFAULTS.gap_noun),
-        summary_meta=tuple(chrome.get("summary_meta", _PROFILE_DEFAULTS.summary_meta)),
-        why=chrome.get("why", _PROFILE_DEFAULTS.why),
-        do=chrome.get("do", _PROFILE_DEFAULTS.do),
+        summary_meta=_chrome("summary_meta", tuple(chrome.get("summary_meta", _PROFILE_DEFAULTS.summary_meta))),
+        why=_chrome("why", chrome.get("why", _PROFILE_DEFAULTS.why)),
+        do=_chrome("do", chrome.get("do", _PROFILE_DEFAULTS.do)),
         theme_tokens=dict(resolved.theme or {}),
     )
 
@@ -277,6 +318,16 @@ REQUIREMENTS_DEFINITION = ViewDefinition(
             "Read top-down — grounded (green) reuses existing code; spec/awaiting needs a "
             "decision. Approve or flag each requirement below."
         ),
+        # REQ-12 FR-4: the FR-17/18 masthead derivations as declarative single-field bindings — applied
+        # (over the static values above) only when a per-doc content context is passed at projection.
+        # The compound page-title (`{key} — {title}` with 3-way degradation) is NOT here — it stays in
+        # requirements_profile_for (NR-2). why/do/gap_noun are intentionally not bound (ride static).
+        "bindings": {
+            "eyebrow": "{key}",
+            "headline": "{title}",
+            "section_lead": "What {key} defines",
+            "summary_meta": ["{semantic_name}"],
+        },
     },
 )
 

@@ -114,12 +114,15 @@ def requirements_profile_for(path: Path, text: Optional[str] = None) -> RenderPr
     ``gap_noun`` (domain vocabulary) — are intentionally NOT derived and ride through unchanged."""
     from dataclasses import replace
 
+    # REQ-12: the FR-17/18 single-field derivations (eyebrow/headline/section_lead/summary_meta) now
+    # live as declarative bindings on REQUIREMENTS_DEFINITION.chrome and resolve here against the doc's
+    # identity context (each degrades to the static base value when its field is empty — the projection
+    # enforces that). Only the compound page-title stays imperative (NR-2 — the single-field grammar
+    # can't express its 3-way degradation).
     idy = requirement_identity(path, text)
     key = idy["key"]
     title = idy["title"]
-    # section_lead names THIS requirement ("What REQ-01 defines"); page title is "{key} — {H1}".
-    # Both prefer the key (the stable, self-identifying handle); degrade gracefully when it's absent.
-    section_lead = f"What {key} defines" if key else REQUIREMENTS_PROFILE.section_lead
+    prof = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY), context=idy)
     if key and title:
         doc_title = f"{key} — {title}"
     elif key:
@@ -127,15 +130,8 @@ def requirements_profile_for(path: Path, text: Optional[str] = None) -> RenderPr
     elif title:
         doc_title = title
     else:
-        doc_title = REQUIREMENTS_PROFILE.title
-    return replace(
-        REQUIREMENTS_PROFILE,
-        eyebrow=key or REQUIREMENTS_PROFILE.eyebrow,
-        headline=title or REQUIREMENTS_PROFILE.headline,
-        summary_meta=(idy["semantic_name"],) if idy["semantic_name"] else REQUIREMENTS_PROFILE.summary_meta,
-        section_lead=section_lead,
-        title=doc_title,
-    )
+        doc_title = prof.title
+    return replace(prof, title=doc_title)
 
 
 def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Node]:

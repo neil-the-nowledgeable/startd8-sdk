@@ -23,6 +23,7 @@ from .view_definition import (
     ViewDefinition,
     definition_diff,
     resolve,
+    resolve_bindings,
     to_render_profile,
 )
 
@@ -40,5 +41,6 @@ __all__ = [
     "ViewDefinition",
     "definition_diff",
     "resolve",
+    "resolve_bindings",
     "to_render_profile",
 ]
