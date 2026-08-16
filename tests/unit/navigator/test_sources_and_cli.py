@@ -54,6 +54,12 @@ def test_view_definition_cli_diff_shows_only_the_domain_delta():
     assert "lenses" not in delta                      # inherited-unchanged omitted
 
 
+def test_view_definition_cli_validate_passes_on_the_shipped_registry():
+    res = RUNNER.invoke(app, ["navigator", "view-definition", "--validate"])
+    assert res.exit_code == 0, res.output
+    assert "definitions valid" in res.output
+
+
 # ---- FR-17: deterministic masthead identity (derived, not static profile copy) ----
 def test_requirement_identity_extracts_key_title_semantic():
     idy = requirement_identity(_REQ01)

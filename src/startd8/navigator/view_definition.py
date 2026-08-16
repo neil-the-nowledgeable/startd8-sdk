@@ -411,3 +411,30 @@ DEFINITION_REGISTRY: Dict[str, ViewDefinition] = {
     "capability": CAPABILITY_DEFINITION,
     "node-schema": NODE_SCHEMA_DEFINITION,
 }
+
+# REQ-12: the content-context fields a chrome binding may reference (from ``requirement_identity``).
+BINDING_CONTEXT_FIELDS = ("key", "title", "semantic_name", "initiative")
+
+
+def validate_definitions(registry: Mapping[str, ViewDefinition]) -> List[str]:
+    """EC-6: governance check for a definition registry — returns a list of issues (empty = clean).
+
+    Read-only. Catches the two classes an author can get wrong: (1) a definition whose ``extends``
+    chain is broken (unknown parent or a cycle — surfaced by :func:`resolve`'s guards); (2) a
+    ``chrome.bindings`` template referencing an unknown content-context field (not one of
+    :data:`BINDING_CONTEXT_FIELDS`), which would silently substitute the empty string at render.
+    """
+    issues: List[str] = []
+    for name, definition in registry.items():
+        try:
+            resolve(definition, registry)
+        except ValueError as exc:
+            issues.append(f"{name}: {exc}")
+        for field_name, template in (definition.chrome.get("bindings") or {}).items():
+            for ref in _binding_fields(template):
+                if ref not in BINDING_CONTEXT_FIELDS:
+                    issues.append(
+                        f"{name}: chrome.bindings.{field_name} references unknown context field "
+                        f"{ref!r} (known: {', '.join(BINDING_CONTEXT_FIELDS)})"
+                    )
+    return issues

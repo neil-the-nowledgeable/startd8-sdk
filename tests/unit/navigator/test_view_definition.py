@@ -26,6 +26,7 @@ from startd8.navigator.view_definition import (
     resolve,
     resolve_bindings,
     to_render_profile,
+    validate_definitions,
 )
 from startd8.wireframe.profile import RenderProfile, StatusStyle
 
@@ -416,3 +417,21 @@ def test_non_requirements_domains_have_no_bindings_and_ignore_context():
     a = to_render_profile(resolve(CAPABILITY_DEFINITION, DEFINITION_REGISTRY))
     b = to_render_profile(resolve(CAPABILITY_DEFINITION, DEFINITION_REGISTRY), context={"key": "X"})
     assert a == b
+
+
+# ── EC-6 (REQ-10 backlog) — validate_definitions governs the registry ────────────────────────────
+
+def test_shipped_registry_is_valid():
+    assert validate_definitions(DEFINITION_REGISTRY) == []
+
+
+def test_validate_flags_unknown_extends_and_unknown_binding_field():
+    orphan = ViewDefinition(name="orphan", extends="ghost")
+    bad_bind = ViewDefinition(
+        name="bad", extends="base",
+        chrome={"bindings": {"eyebrow": "{nope}"}},
+    )
+    reg = {**DEFINITION_REGISTRY, "orphan": orphan, "bad": bad_bind}
+    issues = validate_definitions(reg)
+    assert any("unknown definition 'ghost'" in i for i in issues)
+    assert any("unknown context field 'nope'" in i for i in issues)

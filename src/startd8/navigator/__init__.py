@@ -25,6 +25,7 @@ from .view_definition import (
     resolve,
     resolve_bindings,
     to_render_profile,
+    validate_definitions,
 )
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "resolve",
     "resolve_bindings",
     "to_render_profile",
+    "validate_definitions",
 ]

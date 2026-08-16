@@ -39,6 +39,7 @@ from .view_definition import (
     DEFINITION_REGISTRY,
     definition_diff,
     resolve,
+    validate_definitions,
 )
 
 navigator_app = typer.Typer(
@@ -445,14 +446,28 @@ def view_definition(
         False, "--diff",
         help="With --name: dump only the leaves this domain overrides/adds vs the base (its delta).",
     ),
+    validate: bool = typer.Option(
+        False, "--validate",
+        help="Govern the registry: check every definition resolves + bindings reference known fields. "
+        "Exit 0=clean, 1=issues (EC-6).",
+    ),
 ) -> None:
     """Dump a View Definition (REQ-10) as JSON — the cross-repo ``VIEW-SCHEMA`` export seam (EC-1).
 
     Serializes via the definition's own ``to_dict`` so an off-repo adopter (legal · benchmark · dev-os)
     can author its presentation as a base + a thin delta and consume it without importing Python.
     ``--name`` selects one definition; omitted, it dumps every definition in the registry. ``--diff``
-    (with ``--name``) shows only what that domain overrides/adds vs the base (EC-4).
+    (with ``--name``) shows only what that domain overrides/adds vs the base (EC-4). ``--validate``
+    governs the whole registry (EC-6).
     """
+    if validate:
+        issues = validate_definitions(DEFINITION_REGISTRY)
+        if issues:
+            for issue in issues:
+                console.print(f"[red]definition:[/red] {issue}")
+            raise typer.Exit(_EXIT_ERR)
+        console.print(f"[green]ok:[/green] {len(DEFINITION_REGISTRY)} definitions valid")
+        raise typer.Exit(_EXIT_OK)
     try:
         if name is not None:
             key = name.strip().lower()
