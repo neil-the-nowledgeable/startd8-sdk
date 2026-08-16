@@ -287,9 +287,46 @@ CAPABILITY_DEFINITION = ViewDefinition(
     },
 )
 
+# EC-2 (REQ-10 backlog): a THIRD real domain extending the same base — the node-schema (Kagami) view.
+# Widens the cross-domain proof from 2 to 3 real domains and de-dups the former standalone
+# ``NODE_SCHEMA_PROFILE`` literal (now projected from here). Overrides no theme → inherits the base
+# tokens, so its rendered colours are unchanged (byte-safe); it now shares the activated theme (REQ-11).
+NODE_SCHEMA_DEFINITION = ViewDefinition(
+    name="node-schema",
+    extends="base",
+    vocabulary={
+        "gap_noun": "field",
+        "statuses": {
+            "authored": {"label": "Authored", "color": "#3d7a57", "meaning": "a human writes this field", "severity": 0},
+            "derived": {"label": "Derived", "color": "#2b7382", "meaning": "computed from evidence × maturity", "severity": 1},
+            "computed": {"label": "Computed", "color": "#6b6252", "meaning": "assembled by the harness", "severity": 1},
+            "meta": {"label": "Meta", "color": "#948b78", "meaning": "open extension bag", "severity": 2},
+        },
+    },
+    chrome={
+        "title": "Node structure — a first look",
+        "eyebrow": "NODE-SCHEMA",
+        "section_lead": "What a Node is made of",
+        "headline": "A first look at the Node structure",
+        "summary_meta": [
+            "The Node model rendered as Nodes — a Kagami mirror of models.py (field names/types/defaults "
+            "introspected, not hand-drawn).",
+        ],
+        "why": (
+            "Each field IS a node: what it holds, its type/default (from the code), and who fills it "
+            "(authored · derived · computed · meta)."
+        ),
+        "do": (
+            "Read by group — identity, descriptive, evidence, axes, hierarchy, derived, meta. A field "
+            "present in models.py but missing an annotation below is a gap to fill."
+        ),
+    },
+)
+
 # The definition registry the resolver consults for ``extends`` lookups.
 DEFINITION_REGISTRY: Dict[str, ViewDefinition] = {
     "base": BASE_NAVIG8R_DEFINITION,
     "requirements": REQUIREMENTS_DEFINITION,
     "capability": CAPABILITY_DEFINITION,
+    "node-schema": NODE_SCHEMA_DEFINITION,
 }

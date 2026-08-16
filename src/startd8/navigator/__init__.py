@@ -18,6 +18,7 @@ from .models import (
 )
 from .view_definition import (
     BASE_NAVIG8R_DEFINITION,
+    NODE_SCHEMA_DEFINITION,
     ResolvedDefinition,
     ViewDefinition,
     resolve,
@@ -33,6 +34,7 @@ __all__ = [
     "default_confidence",
     "derive_status",
     "BASE_NAVIG8R_DEFINITION",
+    "NODE_SCHEMA_DEFINITION",
     "ResolvedDefinition",
     "ViewDefinition",
     "resolve",

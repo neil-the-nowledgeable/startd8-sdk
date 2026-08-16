@@ -14,35 +14,22 @@ import dataclasses
 from pathlib import Path
 from typing import List, Optional
 
-from startd8.wireframe.profile import RenderProfile, StatusStyle
-
 from .git_lives import prefer_git_ref
 from .models import Node, NodeEvidence, NodeStatus, node_field_names  # noqa: F401
 from .naming import name_forms
+from .view_definition import (
+    DEFINITION_REGISTRY,
+    NODE_SCHEMA_DEFINITION,
+    resolve,
+    to_render_profile,
+)
 
 MODELS_REL = "src/startd8/navigator/models.py"
 
-NODE_SCHEMA_PROFILE = RenderProfile(
-    statuses=(
-        StatusStyle("authored", "Authored", "#3d7a57", "a human writes this field", 0),
-        StatusStyle("derived", "Derived", "#2b7382", "computed from evidence × maturity", 1),
-        StatusStyle("computed", "Computed", "#6b6252", "assembled by the harness", 1),
-        StatusStyle("meta", "Meta", "#948b78", "open extension bag", 2),
-    ),
-    title="Node structure — a first look",
-    eyebrow="NODE-SCHEMA",
-    section_lead="What a Node is made of",
-    headline="A first look at the Node structure",
-    gap_noun="field",
-    summary_meta=(
-        "The Node model rendered as Nodes — a Kagami mirror of models.py (field names/types/defaults "
-        "introspected, not hand-drawn).",
-    ),
-    why="Each field IS a node: what it holds, its type/default (from the code), and who fills it "
-        "(authored · derived · computed · meta).",
-    do="Read by group — identity, descriptive, evidence, axes, hierarchy, derived, meta. A field "
-       "present in models.py but missing an annotation below is a gap to fill.",
-)
+# EC-2 (REQ-10 backlog): the node-schema domain is now a thin ``NODE_SCHEMA_DEFINITION`` delta over the
+# same base as requirements + capability (the 3rd real domain), PROJECTED to the RenderProfile — byte-
+# for-byte equal to the former standalone literal, and it now inherits the activated theme (REQ-11).
+NODE_SCHEMA_PROFILE = to_render_profile(resolve(NODE_SCHEMA_DEFINITION, DEFINITION_REGISTRY))
 
 # Curated annotation per Node field. Structural truth (type/default) comes from introspection; this
 # supplies the semantic name, meaning, group, and provenance class. Keyed by dataclass field name.

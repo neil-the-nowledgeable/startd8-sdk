@@ -12,11 +12,13 @@ from dataclasses import replace
 import pytest
 
 from startd8.navigator.sources_capability import CAPABILITY_PROFILE
+from startd8.navigator.sources_node_schema import NODE_SCHEMA_PROFILE
 from startd8.navigator.sources_requirements import REQUIREMENTS_PROFILE
 from startd8.navigator.view_definition import (
     BASE_NAVIG8R_DEFINITION,
     CAPABILITY_DEFINITION,
     DEFINITION_REGISTRY,
+    NODE_SCHEMA_DEFINITION,
     REQUIREMENTS_DEFINITION,
     ResolvedDefinition,
     ViewDefinition,
@@ -277,6 +279,7 @@ def test_resolved_definition_is_a_distinct_flattened_type():
 _PROFILE_BY_DOMAIN = {
     "requirements": REQUIREMENTS_PROFILE,
     "capability": CAPABILITY_PROFILE,
+    "node-schema": NODE_SCHEMA_PROFILE,
 }
 
 
@@ -327,3 +330,23 @@ def test_base_theme_change_propagates_to_projected_tokens():
     assert req.theme_tokens["ink"] == "#010101"      # non-overriding domain follows the base
     assert cap.theme_tokens["ink"] == "#010101"      # capability didn't override ink → follows too
     assert cap.theme_tokens["accent"] == "#3a6a94"   # …but keeps its own accent override
+
+
+# ── EC-2 (REQ-10 backlog) — node-schema is the 3rd real domain ───────────────────────────────────
+
+def test_node_schema_is_a_thin_delta_over_the_same_base():
+    assert NODE_SCHEMA_DEFINITION.extends == "base"
+    assert NODE_SCHEMA_DEFINITION.theme == {}                       # no theme override → inherits base
+    ns = resolve(NODE_SCHEMA_DEFINITION, DEFINITION_REGISTRY)
+    assert ns.lenses == BASE_NAVIG8R_DEFINITION.lenses             # shares the base lenses/control/…
+    assert ns.control == BASE_NAVIG8R_DEFINITION.control
+
+
+def test_node_schema_projection_reproduces_the_former_literal_and_inherits_theme():
+    # The derived NODE_SCHEMA_PROFILE reproduces the former standalone literal's vocabulary + chrome…
+    assert NODE_SCHEMA_PROFILE.eyebrow == "NODE-SCHEMA"
+    assert NODE_SCHEMA_PROFILE.gap_noun == "field"
+    assert tuple(s.key for s in NODE_SCHEMA_PROFILE.statuses) == ("authored", "derived", "computed", "meta")
+    assert NODE_SCHEMA_PROFILE.statuses[1].color == "#2b7382"      # 'derived' teal, unchanged
+    # …and now inherits the activated base theme (REQ-11), overriding nothing.
+    assert NODE_SCHEMA_PROFILE.theme_tokens == BASE_NAVIG8R_DEFINITION.theme
