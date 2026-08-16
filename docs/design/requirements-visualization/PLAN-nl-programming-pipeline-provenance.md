@@ -22,7 +22,7 @@
 | Attributes render in tree | `render_tree.py:50,151` | Arbitrary `attributes` become meta rows — so the FR-7 "artifact-chain annotation" is just a stage-Node attribute; **no renderer edit**. Graph (`render_graph.py:401`) reads attributes only for href, so the chain surfaces in *tree*, not graph. |
 | Verify clause is prose | `det_req.py:19-21` `_VERIFY_LABEL` → `fr["verify"]` (a string) | The oracle classifies this string. **Crucially, real clauses mix a backtick command with a prose assertion** (see D-3) — the classifier can't treat the whole clause as one atomic kind. |
 | chrome_provenance row shape | `provenance.py:27-48` | rows are `{element, origin, value, present}`, signature `(nodes, plan, profile)`. `pipeline_provenance` is a **sibling** with a related-but-different row + signature — "extends provenance.py" (same module/idea) but not shape-identical (see D-4). |
-| Registry governance test | `tests/unit/navigator/test_sources_and_cli.py:60` | asserts substring `"definitions valid"` (count-agnostic) → adding the `pipeline` domain keeps it green, but re-run `test_view_definition.py` after. |
+| Registry governance test | `tests/unit/navigator/test_sources_and_cli.py:60` | asserts substring `"definitions valid"` (count-agnostic) → adding the `pipeline` domain keeps it green, but re-run `test_view_definition.py` after. **Caveat (R1-S3):** `validate_definitions` (`view_definition.py:421-442`) checks only `extends` chains + `chrome.bindings` — NOT status-map well-formedness; FR-8 must add its own status-vocab assertion. |
 
 ---
 
@@ -31,15 +31,33 @@
 ### FR-1 + FR-2 — `sources_pipeline.py` (Stage projection + DEPENDS-ON edges)
 - **New:** `src/startd8/navigator/sources_pipeline.py`, modeled line-for-line on `sources_node_schema.py`.
 - A module-level `_STAGES` table: 6 rows `(key, ordinal, human_form, sdk_artifact, compiler_analogue, essence, does, child_keys)`.
-  - `stage:intent`(0) → `stage:functional`(1) → `stage:contract`(2) → {`stage:impl`(3), `stage:test`(4), `stage:doc`(5)}.
+  Concrete `sdk_artifact` per stage, resolved via `(repo_root / sdk_artifact).exists()` where
+  `repo_root = Path(__file__).resolve().parents[3]` (as `sources_node_schema._repo_root`) **(R1-S2):**
+
+  | key | ord | sdk_artifact (primary) | compiler_analogue | essence |
+  |-----|-----|------------------------|-------------------|---------|
+  | `stage:intent` | 0 | `src/startd8/seeds/` | source text (the prose brief) | essential |
+  | `stage:functional` | 1 | `src/startd8/navigator/det_req.py` | lexer/parser → FR tokens | essential |
+  | `stage:contract` | 2 | `src/startd8/forward_manifest.py` | IR (the contract/Node) | essential |
+  | `stage:impl` | 3 | `src/startd8/backend_codegen/` | code-gen back-end / interpreter | accidental |
+  | `stage:test` | 4 | `src/startd8/backend_codegen/test_emitter.py` | oracle (tests from `Verify:`) | accidental |
+  | `stage:doc` | 5 | `docs/` | man-page | accidental |
+
+  Edges: `stage:intent`(0) → `stage:functional`(1) → `stage:contract`(2) → {`stage:impl`(3), `stage:test`(4), `stage:doc`(5)}.
+  Resolution: `.exists()` **exact path** for status; **provenance ownership (FR-6) uses longest-prefix match**
+  of the queried path against the `sdk_artifact` set (R1-S8).
 - `nodes_from_pipeline()` builds one `Node` per row: `category="pipeline-stage"`, `child_keys=<edges>`,
   `attributes={kind:"stage", ordinal:str(n), human_form, sdk_artifact, compiler_analogue, essence, …}`.
-- **Status (D-2):** each stage's `sdk_artifact` (e.g. `src/startd8/backend_codegen/`) resolves on disk → a
-  `code` Lives → `derive_status(has_code_evidence=True)` = BUILT, exactly like node-schema grounds fields
-  in `models.py`. Stages whose artifact is absent fall to SPEC. This needs a status **vocabulary** in the
-  pipeline `ViewDefinition` (built/spec), which the v0.1 spec didn't name.
+- **Status (D-2), corrected API (R1-S1):** `sdk_artifact` resolving on disk → a `code` Lives →
+  `derive_status(has_code_evidence=True, maturity="stable")` — the **real** signature is
+  `derive_status(*, has_code_evidence: bool, maturity: str)` (`models.py:98`; `sources_requirements.py:184`
+  passes `maturity="stable"`) → BUILT; artifact absent → SPEC. The constant `maturity="stable"` closes the
+  vocabulary to {built, spec} (never THIN).
 - `PIPELINE_DEFINITION` added to `view_definition.py` + registered in `DEFINITION_REGISTRY`;
-  `PIPELINE_PROFILE = to_render_profile(resolve(PIPELINE_DEFINITION, DEFINITION_REGISTRY))`.
+  `PIPELINE_PROFILE = to_render_profile(resolve(PIPELINE_DEFINITION, DEFINITION_REGISTRY))`. Its
+  `vocabulary.statuses` is **keyed by the `NodeStatus` ids** `derive_status` emits (`built`, `spec`) — not
+  prose labels — matching every domain (`view_definition.py:245-254`) so the legend resolves each stage's
+  real status (R1-S4).
 - **Verify (topo-sort, per REQ FR-2 v0.1.1):** `graphlib.TopologicalSorter` over the stage graph — succeeds,
   order agrees with ordinals.
 - **Deps:** none. First to build.
@@ -53,31 +71,52 @@
 - **New:** `src/startd8/navigator/verify_oracle.py`. Reads FRs via `det_req.parse_fr_lines_prefer_kit` (import only — `det_req.py` unedited, per REQ v0.1.1).
 - Classifier operates on the clause and **extracts** the runnable span rather than bucketing the whole
   clause atomically:
-  - `command` — clause contains a backtick-quoted span whose first token is an allow-listed verb
-    (`startd8 …`; optionally `$ …`) **and** contains no unresolved placeholder (`<doc>`, `…`, `<…>`).
+  - `command` — clause contains **exactly one** backtick-quoted span whose first token is an allow-listed
+    verb (`startd8 …`; optionally `$ …`) **and** no unresolved placeholder.
+  - **Multi-span rule (R1-S5):** a clause with **two or more** runnable backtick spans, or a `;`/`&&`/`|`-joined
+    command inside one span, classifies as `manual` (reason "multi-command") — deterministic, never guesses which wins.
+  - **Placeholder grammar — closed set (R1-F5):** a span is disqualified (→ `manual`, reason "unresolved placeholder")
+    if it contains any of: `<…>` (angle), `…`/`...` (ellipsis), `${…}`/`$WORD` (shell var), `{…}` (brace), `[…]` (bracket).
   - `assertion` — prose acceptance with no runnable span.
-  - `manual` — explicitly human (`Approve?:`-style / "by inspection") or a command with unresolved placeholders.
+  - `manual` — explicitly human (`Approve?:`-style / "by inspection"), multi-command, or unresolved-placeholder.
 - Descriptor: `{fr_id, kind, command_argv|None, assertion_text, reason}`.
 - **Deps:** none (parallel with FR-1).
 
 ### FR-5 — `startd8 navigator verify` + opt-in evaluate  *(revised by D-3, D-6)*
 - New `@navigator_app.command("verify")` in `cli_navigator.py`; `--requirements <doc>`, `--run-oracle` (default OFF), `--format json|html`.
 - Default inert: every descriptor → `skip`, **no subprocess**.
-- `--run-oracle`: for `command`-kind only, run `command_argv` via `subprocess.run(argv, shell=False, timeout=…)`
-  with **no network** and a **verb allow-list** (only `startd8 …`; refuse anything else → `skip`, reason
-  "non-allowlisted verb"). **pass = exit 0 of the extracted command; fail = non-zero.** The prose
-  `assertion_text` is *not* asserted by the run — it is emitted alongside as the human-checkable residue.
-- **Self-exec guard:** refuse to run a command that is itself `startd8 navigator verify … --run-oracle`
-  (prevents recursion when a Verify clause cites the verify command).
-- Aggregate exit code (REQ FR-5 v0.1.1): 0 when no `fail`, non-zero iff any `fail`.
+- `--run-oracle`: for `command`-kind only, run `command_argv` via `subprocess.run(argv, shell=False, timeout=…)`.
+  **pass = exit 0 of the extracted command; fail = non-zero.** The prose `assertion_text` is *not* asserted
+  by the run — it rides alongside as the human-checkable residue.
+- **Read-only subcommand allow-list (R1-S6/R1-F7):** the allow-list gates the *verb AND the subcommand* — only
+  read-only `startd8 navigator …` invocations that **write nothing** run; any command with a write flag
+  (`--out`, `--fix`), a non-`navigator` verb (`generate`, `deploy`, …), or a non-`startd8` verb → `skip`
+  (reason "side-effecting/non-allowlisted"). This — not "no network" — is what preserves the O-4/NR-1
+  "models, does not mutate" invariant.
+- **No-network honesty (R1-F6):** network-denial for the child is *not* argv-enforceable (a `startd8`
+  subcommand could open a socket); the real, stated guarantee is the read-only allow-list + no-shell, and the
+  chosen read-only navigator subcommands don't hit the network.
+- **Self-exec guard (R1-S7):** matched on **resolved argv tokens** (`argv[:3] == ["startd8","navigator","verify"]`),
+  not a substring of the raw clause — so quoting/whitespace variants can't evade and a clause merely *mentioning*
+  the phrase doesn't false-trip.
+- **Timeout (R1-S9):** `timeout=60` default (exposed as `--oracle-timeout`); a timeout is a **distinct** verdict
+  (`fail`, reason "timeout"), not conflated with rc≠0.
+- **Missing-path (R1-S5):** a command whose referenced fixture path is absent → a distinct `error` verdict
+  (reason "missing input"), *not* a silent assertion `fail`.
+- Aggregate exit code (REQ FR-5 v0.1.1): 0 when no `fail` (and no `error`), non-zero iff any `fail`/`error`.
 - **Deps:** FR-4.
 
 ### FR-6 — `pipeline_provenance()` in `provenance.py`  *(revised by D-4)*
 - Add `pipeline_provenance(nodes, stages)` **beside** `chrome_provenance` (same module — Mottainai).
 - Row schema: `{element, stage, origin, value, present}` — keeps `value` for parity with the sibling,
   adds `stage`. (v0.1 said "same element→origin→value shape"; it's a sibling schema, now stated so.)
-- For a given FR (or a `Touches`/`Lives` file): walk artifact → the stage whose `sdk_artifact`/kind owns it
-  → … → the requirement, emitting an ordered chain whose stage ordinals are a subsequence of FR-1's.
+- For a given FR (or a `Touches`/`Lives` file): walk artifact → the stage that owns it → … → the requirement,
+  emitting an ordered chain whose stage ordinals are a subsequence of FR-1's.
+- **Ownership tie-break + not-found (R1-S8):** an artifact is owned by the stage with the **longest-prefix**
+  `sdk_artifact` match (deterministic when one path is a prefix of another); an artifact matching **no** stage
+  yields a single row with `present=False` (reason "unowned"), never an empty chain.
+- **SPEC stages still surface (R1-S10):** a chain passing through an un-built (SPEC) stage still emits that
+  stage's row (with its not-built status) so the trace *shows the gap* rather than silently skipping it (Mieruka).
 - **Deps:** FR-1 (needs the stage table).
 
 ### FR-7 — render surface
@@ -92,6 +131,10 @@
 - **Added by planning:** also assert `validate_definitions(DEFINITION_REGISTRY)` stays clean with the new
   `pipeline` domain, and re-run `test_view_definition.py` / `test_sources_and_cli.py` (the registry now has
   5 domains; the governance assertion is substring-based so it holds, but confirm).
+- **`validate_definitions` is NOT a status-vocab guard (R1-S3):** it only checks `extends` chains +
+  `chrome.bindings` (`view_definition.py:421-442`) — it does **not** validate status-map well-formedness.
+  So FR-8 adds its **own** assertion: iterate `PIPELINE_PROFILE.statuses` and require each has a non-empty
+  `label`/`meaning`/`color` and an int `severity`. Do not lean on `validate_definitions` for this.
 - **Deps:** all.
 
 ---
@@ -119,6 +162,13 @@ FR-1 and FR-4 are independent roots and can go in parallel.
 | D-6 | `--run-oracle` uses "read-only cwd" | The harness can't enforce an FS-readonly cwd; real mitigation is a **verb allow-list** (`startd8 …` only) + no-shell + no-net + self-exec guard | FR-5 mitigation strengthened to a command allow-list |
 
 *v1.0 — plan mapped every FR to real `navigator/` seams; 6 discoveries (D-1..D-6) folded into REQ-08 v0.2. FR-1 and FR-4 are independent build roots.*
+*v1.1 — CRP R1 triage applied (all 10 S-suggestions ACCEPTED; dispositions in Appendix A): S1 fixed the
+`derive_status` signature (+`maturity="stable"`); S2 added the concrete `_STAGES` `sdk_artifact` table +
+resolution rule; S3 corrected the `validate_definitions` over-claim (FR-8 adds its own status-vocab assertion);
+S4 keyed the status vocab by `NodeStatus` ids; S5 defined multi-command/missing-path handling; S6 restricted
+`--run-oracle` to read-only navigator subcommands; S7 argv-token self-exec guard; S8 longest-prefix ownership +
+not-found row; S9 `--oracle-timeout` (60s) distinct verdict; S10 SPEC-stage rows surface. Paired REQ items
+F1..F7 applied in REQ-08 v0.3.*
 
 ---
 
