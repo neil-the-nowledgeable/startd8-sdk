@@ -345,6 +345,14 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
     border-radius:16px;padding:5px 13px;cursor:pointer}
   .pagebar .pg-btn:hover:not([disabled]){background:var(--accent2)}
   .pagebar .pg-btn[disabled]{opacity:.4;cursor:default}
+  /* FR-10: per-cell inspector — the node's data + field→element display mapping under each card. */
+  .node-inspect{margin-top:9px;padding-top:8px;border-top:1px dashed var(--line2);font-family:var(--mono);font-size:11px}
+  .node-inspect .ni-cap{color:var(--faint);text-transform:uppercase;letter-spacing:.08em;font-size:9.5px;margin-bottom:5px}
+  .node-inspect .ni-row{display:grid;grid-template-columns:104px 1fr auto;gap:8px;padding:2px 0;align-items:baseline}
+  .node-inspect .ni-k{color:var(--accent);font-weight:600}
+  .node-inspect .ni-v{color:var(--ink2);white-space:pre-wrap;word-break:break-word}
+  .node-inspect .ni-d{color:var(--faint);text-align:right;white-space:nowrap}
+  @media (max-width:560px){.node-inspect .ni-row{grid-template-columns:1fr}.node-inspect .ni-d{text-align:left}}
 
   /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
   .status-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
@@ -635,7 +643,7 @@ __PLAN_DATA__
 
   // ---------- items ----------
   function renderItem(k,item,nav){
-    var w=document.createElement("div"); w.className="item";
+    var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
     // PF-1: expose the item's status as a data attribute when a domain profile is active so the
     // filter machinery (data-status selectors) can show/hide items without touching the app path.
     if(payload.profile && item.status) w.setAttribute("data-status", item.status);
@@ -884,6 +892,7 @@ __PLAN_DATA__
       '<div class="dbg-group" data-group="debug">Debug <span class="dbg-hint">· raw</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="rawData"><span>Raw data</span></label>'+
       '<label class="dbg-opt"><input type="checkbox" id="nodeData"><span>Node data</span></label>'+
+      '<label class="dbg-opt"><input type="checkbox" id="inspectCells"><span>Inspect cells</span></label>'+
       // ── PAGING: show N requirement nodes at a time + page through the rest (FR-9, pick-one) ──────
       '<div class="dbg-group" data-group="paging">Paging <span class="dbg-hint">· show N at a time</span></div>'+
       '<label class="dbg-opt"><input type="radio" name="pagepick" id="pageAll" checked><span>All</span></label>'+
@@ -940,7 +949,8 @@ __PLAN_DATA__
     hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
     // FR-8: raw-data debug panel below the sign-off — Raw data = the current variant being visualized;
     // Node data = just the node items (flattened from the variant's sections). Rebuilt on each toggle.
-    var rawData=document.getElementById("rawData"), nodeData=document.getElementById("nodeData");
+    var rawData=document.getElementById("rawData"), nodeData=document.getElementById("nodeData"),
+        inspectCells=document.getElementById("inspectCells");
     function nodeItems(){
       var out=[]; (data.sections||[]).forEach(function(sec){ (sec.items||[]).forEach(function(it){ out.push(it); }); });
       return out;
@@ -955,6 +965,33 @@ __PLAN_DATA__
       el.innerHTML=blocks; el.hidden=!(rawData.checked||nodeData.checked);
     }
     rawData.onchange=renderRawData; nodeData.onchange=renderRawData;
+    // FR-10: per-cell inspector — under each card, show the node's data (every field + value) next to HOW
+    // each field is displayed (field→element mapping, or "not displayed"). Uses each card's stashed
+    // _nodeData (exact, not order-guessed). Re-applied after each renderAll (combined into the hook below).
+    var INSPECT_MAP={label:"→ .lbl (title)", key:"→ .lbl-key (bare key)", status:"→ status badge",
+      detail:"→ .det (body text)", lives:"→ .lives (type: ref)", was:"→ .was (former state)",
+      meta:"→ .node-meta (via Show node metadata)"};
+    function buildInspect(item){
+      var d=document.createElement("div"); d.className="node-inspect";
+      var rows=Object.keys(item).map(function(k){
+        var v=item[k], val=(v==null||v==="")?"∅":(typeof v==="object"?JSON.stringify(v):String(v));
+        return '<div class="ni-row"><span class="ni-k">'+esc(k)+'</span>'+
+          '<span class="ni-v">'+esc(val)+'</span>'+
+          '<span class="ni-d">'+esc(INSPECT_MAP[k]||"— not displayed")+'</span></div>';
+      }).join("");
+      d.innerHTML='<div class="ni-cap">node data · value · how it’s displayed</div>'+rows;
+      return d;
+    }
+    function syncInspect(on){
+      var cards=Array.prototype.filter.call(document.querySelectorAll("#outline .item"),
+        function(el){ return !el.closest(".vd-template"); });
+      cards.forEach(function(card){
+        var existing=card.querySelector(".node-inspect");
+        if(on && !existing && card._nodeData){ card.appendChild(buildInspect(card._nodeData)); }
+        else if(!on && existing){ existing.parentNode.removeChild(existing); }
+      });
+    }
+    inspectCells.onchange=function(){ syncInspect(inspectCells.checked); };
     // FR-9: paging over the requirement nodes — pick-one page size shows N cards at a time; the #pagebar
     // pages through the rest, down to one at a time. Runs after each renderAll (via _pagingHook) so it
     // survives a lens/depth re-render. Operates on the real node cards (not the frame display template).
@@ -991,7 +1028,8 @@ __PLAN_DATA__
       if(nx) nx.onclick=function(){ _page++; applyPaging(); };
     }
     pageAll.onchange=page10.onchange=page5.onchange=page1.onchange=function(){ _page=0; applyPaging(); };
-    _pagingHook=applyPaging;   // renderAll re-applies paging after rebuilding the cards
+    // renderAll re-applies paging + the per-cell inspector after rebuilding the cards (FR-9/FR-10).
+    _pagingHook=function(){ applyPaging(); syncInspect(inspectCells.checked); };
     // `--source frame`: reflect the requirement-free frame in the picker so toggling back works.
     if(payload.frame){ viewDef.checked=true; viewReq.checked=false; }
     syncView();

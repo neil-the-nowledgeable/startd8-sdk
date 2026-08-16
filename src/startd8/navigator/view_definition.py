@@ -314,6 +314,9 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
                       "toggles": {
                           "rawData": {"label": "Raw data", "order": 0},
                           "nodeData": {"label": "Node data", "order": 1},
+                          # FR-10: per-cell inspector — under each card, the node's data + how each field
+                          # is displayed (field→element mapping).
+                          "inspectCells": {"label": "Inspect cells", "order": 2},
                       }},
             # REQ-view-definition-mode FR-9: Paging — the first FUNCTIONAL display capability the View
             # Definition owns. A pick-one page size shows N requirement nodes at a time; a prev/next bar
