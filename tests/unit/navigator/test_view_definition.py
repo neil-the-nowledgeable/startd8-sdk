@@ -470,3 +470,42 @@ def test_resolve_external_does_not_mutate_the_shipped_registry():
     before = set(DEFINITION_REGISTRY)
     resolve_external(load_definition(_LEGAL_FIXTURE))
     assert set(DEFINITION_REGISTRY) == before                        # NR-2: registry untouched
+
+
+# ── REQ-14 — control + region model in the definition (data layer; consumption deferred) ─────────
+
+def test_base_models_the_debug_control_panel_as_groups_of_toggles():
+    # FR-1: the base control section carries the 3 debug groups with their current toggles.
+    control = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).control
+    assert control["panel"] == "top-right"
+    assert set(control["groups"]) == {"view", "overlays", "template-anatomy"}
+    assert control["groups"]["view"]["label"] == "View"
+    assert control["groups"]["view"]["first"] is True
+    toggle_ids = {tid for g in control["groups"].values() for tid in g["toggles"]}
+    assert toggle_ids == {"structOnly", "combined", "hideScaffold", "scaffold", "scaffoldOnly"}
+    assert control["groups"]["template-anatomy"]["toggles"]["scaffoldOnly"]["sub"] is True
+
+
+def test_base_models_the_region_layer_taxonomy():
+    # FR-4: the base regions section carries each region's layer + scaffold anatomy label.
+    regions = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).regions
+    b = regions["bindings"]
+    assert b["mast"]["layer"] == "descriptive"
+    assert b["mast"]["scaffold"] == "masthead — profile chrome (eyebrow · headline · why/do)"
+    assert b["outline"]["layer"] == "node"
+    assert regions["layers"] == ["node", "derived", "computed", "scaffold"]
+
+
+def test_control_and_regions_ride_the_cascade_by_id():
+    # a domain can override one control group label / one region anatomy label atomically (keyed merge).
+    child = ViewDefinition(
+        name="ctlchild", extends="base",
+        control={"groups": {"template-anatomy": {"label": "Structure"}}},
+        regions={"bindings": {"outline": {"scaffold": "the requirements list"}}},
+    )
+    reg = {**DEFINITION_REGISTRY, "ctlchild": child}
+    resolved = resolve(child, reg)
+    assert resolved.control["groups"]["template-anatomy"]["label"] == "Structure"      # overridden
+    assert resolved.control["groups"]["view"]["label"] == "View"                        # sibling kept
+    assert resolved.regions["bindings"]["outline"]["scaffold"] == "the requirements list"  # overridden
+    assert resolved.regions["bindings"]["mast"]["layer"] == "descriptive"               # sibling kept

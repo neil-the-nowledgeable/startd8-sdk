@@ -282,9 +282,48 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
     # byte-identity anchor. (REQ-10 shipped placeholder values here; those recoloured every domain.)
     theme={"ink": "#241f17", "paper": "#f4efe4", "accent": "#1b545f"},
     lenses={"axes": ["role", "fluency"]},
-    control={"panel": "top-right", "groups": ["view", "overlays", "template-anatomy"]},
+    # REQ-14 FR-1: the debug control panel modelled as ordered groups of toggles — populated with the
+    # EXACT groups/toggles/labels the template hardcodes today (`_template.py` ~774-793), so projecting
+    # + consuming them (FR-2/FR-3) reproduces the current panel byte-for-byte. Keyed maps (merged by id);
+    # `order` gives the render sequence, `first` = the `dbg-group-first` class, `sub` = `dbg-sub`.
+    control={
+        "panel": "top-right",
+        "groups": {
+            "view": {"label": "View", "hint": "· pick one (Full is default)", "order": 0, "first": True,
+                     "toggles": {
+                         "structOnly": {"label": "Structure only", "order": 0},
+                         "combined": {"label": "Combined (structure + content)", "order": 1},
+                     }},
+            "overlays": {"label": "Overlays", "hint": "· additive", "order": 1,
+                         "toggles": {
+                             "hideScaffold": {"label": "Hide app-scaffold chrome", "order": 0},
+                         }},
+            "template-anatomy": {"label": "Template anatomy", "hint": "· debug", "order": 2,
+                                 "toggles": {
+                                     "scaffold": {"label": "Scaffold mode (template anatomy)", "order": 0},
+                                     "scaffoldOnly": {"label": "Scaffold only (hide node content)", "order": 1, "sub": True},
+                                 }},
+        },
+    },
     glance={"summary": "status-counts"},
-    regions={"layers": ["node", "derived", "computed", "scaffold"]},
+    # REQ-14 FR-4: the scaffold region/layer taxonomy modelled as ordered region bindings — each region
+    # (keyed by its element id) carries its `layer` + the `scaffold` anatomy label the template hardcodes
+    # today (`_template.py` data-layer/data-scaffold). Populated verbatim so consuming them (FR-5) is
+    # byte-identical; a domain delta can override one region's label atomically. `layers` = the legend.
+    regions={
+        "layers": ["node", "derived", "computed", "scaffold"],
+        "bindings": {
+            "mast": {"layer": "descriptive", "scaffold": "masthead — profile chrome (eyebrow · headline · why/do)", "order": 0},
+            "glance": {"layer": "computed", "scaffold": "glance band — computed summary (status_counts · plan.shape)", "order": 1},
+            "toolbar": {"layer": "control", "scaffold": "control layer — audience × fluency lenses", "order": 2},
+            "legend": {"layer": "descriptive", "scaffold": "status legend — profile.statuses[].meaning", "order": 3},
+            "seclead": {"layer": "descriptive", "scaffold": "section lead — profile.section_lead", "order": 4},
+            "outline": {"layer": "node", "scaffold": "outline — node sections + cards (the node-driven layer)", "order": 5},
+            "whybox": {"layer": "descriptive", "scaffold": "reading guidance — profile.why / profile.do", "order": 6},
+            "shape": {"layer": "computed", "scaffold": "shape — plan.shape (dialect-aware)", "order": 7},
+            "glance-status-cell": {"layer": "computed", "scaffold": "status roll-up — status_counts (+ PF-1 grounding filter)", "order": 8},
+        },
+    },
 )
 
 # FR-4: the requirements domain — ``extends: base`` + a thin delta (its vocabulary/statuses + chrome).
