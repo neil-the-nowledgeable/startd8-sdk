@@ -352,16 +352,22 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .node-inspect .ni-table{width:100%;border-collapse:collapse}
   .node-inspect thead th{text-align:left;color:var(--faint);text-transform:uppercase;letter-spacing:.07em;
     font-size:9.5px;font-weight:600;padding:0 8px 5px 0;border-bottom:1px solid var(--line2)}
-  .node-inspect thead th:last-child{text-align:right}
   .node-inspect td{padding:3px 8px 3px 0;vertical-align:top;border-bottom:1px solid var(--line)}
   .node-inspect .ni-k{color:var(--accent);font-weight:600;white-space:nowrap;width:104px}
   .node-inspect .ni-v{color:var(--ink2);white-space:pre-wrap;word-break:break-word;width:100%}
-  .node-inspect .ni-d{color:var(--faint);text-align:right;white-space:nowrap}
+  .node-inspect .ni-d{color:var(--faint);white-space:nowrap}
   .node-inspect .ni-edit{border:1px dashed var(--accent);border-radius:3px;padding:2px 6px;cursor:text;
     min-width:70px;color:var(--ink);background:rgba(120,90,40,.05)}
   .node-inspect .ni-edit:focus{outline:2px solid var(--accent);background:var(--card)}
   .node-inspect .ni-edit:empty::before{content:"click to add";color:var(--faint);font-style:italic}
-  .ni-added{color:var(--accent2) !important;font-family:var(--mono);font-size:12px}
+  /* FR-12: the inline on/off switch */
+  .node-inspect .ni-sw{position:relative;display:inline-block;width:26px;height:15px;vertical-align:middle;margin-right:8px}
+  .node-inspect .ni-sw input{opacity:0;width:0;height:0;position:absolute;margin:0}
+  .node-inspect .ni-sw .sw{position:absolute;inset:0;background:var(--line2);border-radius:15px;cursor:pointer;transition:background .15s}
+  .node-inspect .ni-sw .sw::before{content:"";position:absolute;width:11px;height:11px;left:2px;top:2px;background:#fff;border-radius:50%;transition:transform .15s}
+  .node-inspect .ni-sw input:checked+.sw{background:var(--accent)}
+  .node-inspect .ni-sw input:checked+.sw::before{transform:translateX(11px)}
+  .ni-added{color:var(--accent2);font-family:var(--mono);font-size:12px;margin:6px 0 0}
   @media (max-width:560px){.node-inspect td,.node-inspect .ni-k,.node-inspect .ni-v{display:block;width:auto}}
 
   /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
@@ -978,15 +984,18 @@ __PLAN_DATA__
     // FR-10: per-cell inspector — under each card, show the node's data (every field + value) next to HOW
     // each field is displayed (field→element mapping, or "not displayed"). Uses each card's stashed
     // _nodeData (exact, not order-guessed). Re-applied after each renderAll (combined into the hook below).
-    var INSPECT_MAP={label:"→ .lbl (title)", key:"→ .lbl-key (bare key)", status:"→ status badge",
-      detail:"→ .det (body text)", lives:"→ .lives (type: ref)", was:"→ .was (former state)",
-      meta:"→ .node-meta (via Show node metadata)"};
+    // Each displayed field maps to how it renders + the card SELECTOR its on/off switch toggles (FR-12).
+    var INSPECT_MAP={
+      label:{how:"→ .lbl (title)", sel:".lbl"}, key:{how:"→ .lbl-key (bare key)", sel:".lbl-key"},
+      status:{how:"→ status badge", sel:".badge"}, detail:{how:"→ .det (body text)", sel:".det"},
+      lives:{how:"→ .lives (type: ref)", sel:".lives"}, was:{how:"→ .was (former state)", sel:".was"},
+      meta:{how:"→ .node-meta (Show node metadata)", sel:".node-meta"}};
     // FR-11: editing a not-displayed field is NON-PERSISTENT — it updates the card's in-memory node data
     // and surfaces the field as a line in the card, affecting only the shown HTML (never written to disk).
     function updateAddedLine(card, field, val){
       var line=card.querySelector('[data-ni-add="'+field+'"]');
       if(val&&val.trim()){
-        if(!line){ line=document.createElement("div"); line.className="det ni-added";
+        if(!line){ line=document.createElement("div"); line.className="ni-added";
           line.setAttribute("data-ni-add",field); card.insertBefore(line, card.querySelector(".node-inspect")); }
         line.textContent=field+": "+val;
       } else if(line){ line.parentNode.removeChild(line); }
@@ -994,10 +1003,15 @@ __PLAN_DATA__
     function buildInspect(card){
       var item=card._nodeData||{}, d=document.createElement("div"); d.className="node-inspect";
       var rows=Object.keys(item).map(function(k){
-        var v=item[k], val=(v==null)?"":(typeof v==="object"?JSON.stringify(v):String(v)), how=INSPECT_MAP[k];
-        var cell=how ? '<td class="ni-v">'+(esc(val)||"∅")+'</td>'
-          : '<td class="ni-v ni-edit" contenteditable="true" data-ni-field="'+esc(k)+'">'+esc(val)+'</td>';
-        return '<tr><td class="ni-k">'+esc(k)+'</td>'+cell+'<td class="ni-d">'+esc(how||"not displayed — editable")+'</td></tr>';
+        var v=item[k], val=(v==null)?"":(typeof v==="object"?JSON.stringify(v):String(v)), m=INSPECT_MAP[k];
+        if(m){   // displayed field: read-only value + an on/off switch that toggles the element in the card
+          return '<tr><td class="ni-k">'+esc(k)+'</td><td class="ni-v">'+(esc(val)||"∅")+'</td>'+
+            '<td class="ni-d"><label class="ni-sw"><input type="checkbox" checked data-ni-toggle="'+esc(m.sel)+'">'+
+            '<span class="sw"></span></label>'+esc(m.how)+'</td></tr>';
+        }        // not-displayed field: editable value (FR-11)
+        return '<tr><td class="ni-k">'+esc(k)+'</td>'+
+          '<td class="ni-v ni-edit" contenteditable="true" data-ni-field="'+esc(k)+'">'+esc(val)+'</td>'+
+          '<td class="ni-d">not displayed — editable</td></tr>';
       }).join("");
       d.innerHTML='<table class="ni-table"><thead><tr><th>node data</th><th>value</th>'+
         '<th>how it’s displayed</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -1006,6 +1020,16 @@ __PLAN_DATA__
           var f=cell.getAttribute("data-ni-field");
           card._nodeData[f]=cell.textContent;            // non-persistent, in-memory only
           updateAddedLine(card, f, cell.textContent);     // reflect the edit in the card view
+        });
+      });
+      // FR-12: the on/off switch toggles that element's display in THIS card (non-persistent, per-card)
+      Array.prototype.forEach.call(d.querySelectorAll("[data-ni-toggle]"), function(inp){
+        inp.addEventListener("change", function(){
+          var sel=inp.getAttribute("data-ni-toggle");
+          Array.prototype.forEach.call(card.querySelectorAll(sel), function(el){
+            if(el.closest(".node-inspect")) return;      // never toggle the inspector's own nodes
+            el.style.display = inp.checked ? "" : "none";
+          });
         });
       });
       return d;
