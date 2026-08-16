@@ -155,8 +155,9 @@ def test_view_definition_shows_every_region_display_logic_template():
         assert src in profiled, src
     # the node-card (outline) template still ships in region_templates (its ndt-cap caption survives ASCII)
     assert "ndt-cap" in profiled
-    # templates stay visible through frame-bare, and force-reveal the normally-hidden key+meta slots
-    assert "body.frame-bare .vd-template" in profiled
+    # frame-bare hides real content with display:none (collapses space) and EXCLUDES the vd-template so
+    # it always shows; the template force-reveals the normally-hidden key+meta slots
+    assert "body.frame-bare [data-scaffold] > *:not(.vd-template){display:none}" in profiled
     assert ".vd-template .lbl-key{display:inline" in profiled
     # JS-injected only — NOT pre-rendered into the served HTML (a normal render is unchanged)
     assert 'class="vd-template"' not in profiled

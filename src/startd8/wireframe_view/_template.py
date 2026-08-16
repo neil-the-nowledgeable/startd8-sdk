@@ -154,21 +154,17 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
      the frame" intent is now the View Definition pick (frame-bare, below), with finer control via the
      per-layer disclosure toggles. */
   #debug .dbg-opt.dbg-sub{margin-left:16px}
-  /* REQ-15 FR-1/FR-4: frame-bare — hide EVERY region's content (keep the region outline + its ::before
-     meta-description), so the frame source shows only the scaffolding + control surface. A per-layer
-     toggle sets body.show-layer-<id>, which reveals that one layer's content (progressive disclosure). */
-  body.frame-bare [data-scaffold] *{visibility:hidden}
-  body.frame-bare [data-scaffold]{visibility:visible}
-  body.frame-bare.show-layer-control [data-layer="control"] *,
-  body.frame-bare.show-layer-descriptive [data-layer="descriptive"] *,
-  body.frame-bare.show-layer-computed [data-layer="computed"] *,
-  body.frame-bare.show-layer-node [data-layer="node"] *{visibility:visible}
-  /* FR-6: display-logic templates — injected into EVERY region when the View Definition is on, so the
-     frame shows HOW and FROM WHAT each region renders (its field slots) via the REAL render classes. Must
-     stay visible through frame-bare's content-hiding, and force-reveal the normally-hidden key + meta
-     slots. Absent from every normal render (JS-injected only in frame mode) → served HTML / app path
-     byte-identical. */
-  body.frame-bare .vd-template, body.frame-bare .vd-template *{visibility:visible}
+  /* REQ-15 FR-1/FR-4: frame-bare — hide EVERY region's real content (keep the region outline + its
+     ::before meta-description + the vd-template), so the frame shows only the scaffolding + control
+     surface. Uses **display:none** (not visibility:hidden) so hidden content takes NO SPACE — the old
+     visibility approach removed the text but kept its full height, leaving a large empty region (e.g. a
+     paged-in node card's blank height). A per-layer toggle sets body.show-layer-<id>, restoring that one
+     layer's content (progressive disclosure). The vd-template is excluded (:not) so it always shows. */
+  body.frame-bare [data-scaffold] > *:not(.vd-template){display:none}
+  body.frame-bare.show-layer-control [data-layer="control"] > *:not(.vd-template),
+  body.frame-bare.show-layer-descriptive [data-layer="descriptive"] > *:not(.vd-template),
+  body.frame-bare.show-layer-computed [data-layer="computed"] > *:not(.vd-template),
+  body.frame-bare.show-layer-node [data-layer="node"] > *:not(.vd-template){display:revert}
   .vd-template{display:block;margin-top:2px;font-style:italic;color:var(--ink2)}
   .vd-template .vd-t{font-size:13px;line-height:1.7}
   .vd-template .vd-h{font-family:var(--serif);font-size:21px;color:var(--ink2);margin:3px 0}
