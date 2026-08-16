@@ -24,11 +24,10 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-#: The SARIF 2.1.0 JSON-schema URL (top-level ``$schema``; validators key on this + ``version``).
-#: Kept identical to ``engine.SARIF_SCHEMA_URI`` so both renderers advertise the same schema.
-SARIF_SCHEMA_URI = (
-    "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
-)
+# Single-source the schema URL from the coverage renderer (identical value; both renderers must
+# advertise the same 2.1.0 schema). Re-exported here so `coverage_map/__init__` and existing
+# consumers importing it from this module are unaffected.
+from .engine import SARIF_SCHEMA_URI  # noqa: F401 (re-exported)
 
 _DEFAULT_INFO_URI = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html"
 

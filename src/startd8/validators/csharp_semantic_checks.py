@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
+from .rule_catalog import rule_severity
 from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _SQL_KW = r'(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|EXECUTE|TRUNCATE)\b'
@@ -58,7 +59,7 @@ def _check_console_writeline(source: str) -> List[SemanticIssue]:
         if re.search(r'\bConsole\s*\.\s*Write(?:Line)?\s*\(', line):
             issues.append(SemanticIssue(
                 check="console_writeline_in_service",
-                severity="warning",
+                severity=rule_severity("console_writeline_in_service"),
                 message=(
                     f"Console.Write/WriteLine detected — "
                     f"use ILogger<T> via constructor DI instead"
@@ -139,7 +140,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
         if matched_pattern == "interpolation":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
-                severity="error",
+                severity=rule_severity("sql_injection_risk"),
                 message=(
                     "SQL injection risk: string interpolation in SQL query — "
                     "use parameterized queries instead"
@@ -149,7 +150,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
         elif matched_pattern == "concatenation":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
-                severity="error",
+                severity=rule_severity("sql_injection_risk"),
                 message=(
                     "SQL injection risk: string concatenation in SQL query — "
                     "use parameterized queries instead"
@@ -159,7 +160,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
         elif matched_pattern == "clause":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
-                severity="error",
+                severity=rule_severity("sql_injection_risk"),
                 message=(
                     "SQL injection risk: interpolated variable in SQL clause — "
                     "use parameterized queries (e.g. cmd.Parameters.AddWithValue)"
@@ -169,7 +170,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
         elif matched_pattern == "quoted":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
-                severity="error",
+                severity=rule_severity("sql_injection_risk"),
                 message=(
                     "SQL injection risk: quoted interpolated variable in SQL — "
                     "use parameterized queries instead of quoting"
@@ -211,7 +212,7 @@ def _check_interface_file_contains_class(
         ):
             issues.append(SemanticIssue(
                 check="interface_file_contains_class",
-                severity="warning",
+                severity=rule_severity("interface_file_contains_class"),
                 message=(
                     f"Interface file `{name}` contains a class declaration — "
                     f"IFoo.cs should contain ONLY the interface definition. "
@@ -241,7 +242,7 @@ def _check_missing_nullable_in_csproj(
 
     return [SemanticIssue(
         check="missing_nullable_in_csproj",
-        severity="warning",
+        severity=rule_severity("missing_nullable_in_csproj"),
         message=(
             f"`{name}` is missing `<Nullable>enable</Nullable>` in PropertyGroup"
         ),
@@ -281,7 +282,7 @@ def _check_empty_catch_blocks(source: str) -> List[SemanticIssue]:
         if not any(iss.line == line_num for iss in issues):
             issues.append(SemanticIssue(
                 check="empty_catch_block",
-                severity="warning",
+                severity=rule_severity("empty_catch_block"),
                 message=(
                     "Empty catch block — exceptions should be logged or re-thrown"
                 ),
@@ -318,7 +319,7 @@ def _check_missing_async_await(source: str) -> List[SemanticIssue]:
             if not found_await and started:
                 issues.append(SemanticIssue(
                     check="missing_async_await",
-                    severity="warning",
+                    severity=rule_severity("missing_async_await"),
                     message=(
                         "Async method without `await` — "
                         "consider making synchronous or adding await"
@@ -339,7 +340,7 @@ def _check_missing_access_modifiers(source: str) -> List[SemanticIssue]:
             if not _CS_ACCESS_MODIFIER_RE.search(stripped):
                 issues.append(SemanticIssue(
                     check="missing_access_modifier",
-                    severity="warning",
+                    severity=rule_severity("missing_access_modifier"),
                     message="Class declaration missing explicit access modifier",
                     line=i,
                 ))
@@ -356,7 +357,7 @@ def _check_wildcard_usings(source: str) -> List[SemanticIssue]:
         if re.match(r'^\s*global\s+using\s+static\b', stripped):
             issues.append(SemanticIssue(
                 check="global_using_static",
-                severity="warning",
+                severity=rule_severity("global_using_static"),
                 message="Global using static pollutes namespace — use explicit imports",
                 line=i,
             ))
@@ -383,7 +384,7 @@ def run_csharp_semantic_checks(
         if "namespace " in source or "using System" in source:
             issues.append(SemanticIssue(
                 check="wrong_file_content",
-                severity="error",
+                severity=rule_severity("wrong_file_content"),
                 message=(
                     "Solution file contains C# code instead of MSBuild solution format. "
                     "Expected: 'Microsoft Visual Studio Solution File, Format Version 12.00'"
@@ -457,7 +458,7 @@ def _check_namespace_filepath_alignment(
     if actual_ns.lower() == expected_ns.lower():
         return [SemanticIssue(
             check="namespace_case_mismatch",
-            severity="warning",
+            severity=rule_severity("namespace_case_mismatch"),
             message=(
                 f"Namespace case mismatch: declared `{actual_ns}` "
                 f"but directory structure implies `{expected_ns}` — "
@@ -467,7 +468,7 @@ def _check_namespace_filepath_alignment(
 
     return [SemanticIssue(
         check="namespace_filepath_mismatch",
-        severity="warning",
+        severity=rule_severity("namespace_filepath_mismatch"),
         message=(
             f"Namespace `{actual_ns}` does not match expected "
             f"`{expected_ns}` derived from file path `{file_path}`"
