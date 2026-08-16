@@ -75,7 +75,7 @@ no autonomous revision.
 
 ## Non-requirements
 
-- **NR-1:** Does NOT autonomously modify an upstream node — the `revises` edge is a PROPOSAL; applying it requires a human `accepted` status (the DATA MODEL bookend gate). The IR holds the proposal; the human closes the loop.
+- **NR-1:** Does NOT autonomously modify an upstream node — the `revises` edge is a PROPOSAL; applying it requires a human `accepted` status (the DATA MODEL bookend gate). The IR holds the proposal; the human closes the loop. **(Amended by REQ-21:** a narrow, byte-identity-proven, reversible, above-confidence-floor, audited auto-tier may apply a revise *without* human accept — the **default remains human**, and every **product-changing** revise stays gated. The exception is a mechanical guard, not a triviality judgment.**)**
 - **NR-2:** Does NOT build the general Kaizen lesson-contract bridge (OQ-R4) — this increment models ONE outcome type (the REQ-19 determinism regression); lifting `kaizen-suggestions` / other outcomes is the follow-on.
 - **NR-3:** Does NOT add a Node field or a new dataclass — Lesson = `category`+`attributes` (Kagami); `revises` = a relation value on REQ-16's edge (no new edge structure).
 - **NR-4:** Does NOT automate loop termination (OQ-R5) — the human accept/reject gate is the terminator; no auto-fire of revisions.
