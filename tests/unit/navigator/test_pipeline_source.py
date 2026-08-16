@@ -7,9 +7,11 @@ guards, the status-vocab well-formedness assertion (FR-8), and the classifier/or
 
 from __future__ import annotations
 
+import graphlib
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from startd8.cli import app
@@ -99,6 +101,21 @@ def test_stage_depends_on_edges_and_topo_sort():
     for n in nodes.values():
         for ck in n.child_keys:
             assert pos[ck] < pos[n.key]
+
+
+def test_topo_order_raises_on_cycle():
+    """R8-EB-3: topo_order is fail-loud — a cyclic stage graph raises graphlib.CycleError."""
+    a = Node(key="A", does="", child_keys=("B",), category="pipeline-stage")
+    b = Node(key="B", does="", child_keys=("A",), category="pipeline-stage")
+    with pytest.raises(graphlib.CycleError):
+        topo_order([a, b])
+
+
+def test_nodes_from_pipeline_runs_the_acyclicity_guard():
+    """R8-EB-3: nodes_from_pipeline calls topo_order (the guard) — a real build validates acyclicity,
+    so topo_order is no longer a test-only dormant. The real graph is acyclic, so the build succeeds."""
+    nodes = nodes_from_pipeline()   # would raise graphlib.CycleError if _STAGES held a cycle
+    assert len(nodes) == 6
 
 
 def test_spec_stage_when_artifact_missing(tmp_path):

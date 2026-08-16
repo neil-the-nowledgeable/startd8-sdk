@@ -167,6 +167,10 @@ def nodes_from_pipeline(repo: Optional[Path] = None) -> List[Node]:
             child_keys=st.child_keys,
             attributes=attrs,
         ))
+    # Fail-loud build-time acyclicity guard (R8-EB-3): validate the stage DAG is acyclic at construction,
+    # not only in a test. Raises graphlib.CycleError if an edit ever introduces a cycle in _STAGES. Pass
+    # the freshly-built nodes so topo_order does not re-enter nodes_from_pipeline.
+    topo_order(nodes)
     return nodes
 
 
