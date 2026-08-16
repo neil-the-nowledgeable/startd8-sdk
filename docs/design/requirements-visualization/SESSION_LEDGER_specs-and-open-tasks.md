@@ -38,6 +38,8 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 | **REQ-08 NL-programming pipeline provenance** | 8 FRs; `Stage`-as-Node (extend, don't fork), `Verify:`-as-oracle, extends `provenance.py` | **specced, not built** |
 | **REQ-14 Control-schema formalization** (`feature/…-control-panel-cc54b3a8`) | 5 FRs; architecture §7 step 4 — formalize `control` as a keyed group schema (panel + groups {label/hint/order}) reconciled to the renderer's real headers; cascade-able + validated (`validate_definitions`) + inspectable (`view-definition --dump`/`--diff`). §0 reflective insight: the panel is JS-generated with bespoke per-toggle handlers, so renderer consumption is DEFERRED (NR-1) — this step is DATA only (mirrors REQ-10 formalizing theme before REQ-11 activated it), so byte-identical everywhere. Authored via `/reflective-requirements`. **BUILD-READY** (stage-0 ✓, 5/5 named FRs) — prepared for build | **specced, not built** |
 
+> **REQ-14 numbering resolution (2026-08-15):** `REQ-14` = **control-schema formalization** (this row; `REQ-14-control-schema-formalization.md`, landed `fe0c006b`). A concurrent branch `spec/req-14-control-region-unification` (`REQ-14-control-region-unification.md`, commit `8cf38087`) also claimed REQ-14 for a broader *control + region* unification (steps 4+5) — that work should **renumber to REQ-15** to avoid the clash. `REQ-14` is taken.
+
 ---
 
 ## 🔧 Open follow-ups (mentioned, not started)
