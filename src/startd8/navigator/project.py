@@ -279,12 +279,15 @@ def render_nodes_html(
     role: str = "architect",
     fluency: str = "intermediate",
     profile: Optional[RenderProfile] = None,
+    frame: bool = False,
 ) -> Path:
-    """Render nodes via wireframe_view (FR-10)."""
+    """Render nodes via wireframe_view (FR-10). ``frame`` (REQ-15) renders scaffold-only bare frame."""
     from startd8.wireframe_view import render_to_file
 
     plan = nodes_to_wireframe_plan(nodes, project_root=project_root, group_by=group_by)
     kwargs: Dict[str, Any] = {"role": role, "fluency": fluency}
+    if frame:
+        kwargs["frame"] = True
     if profile is not None:
         kwargs["profile"] = profile
         # Live chrome-provenance readout for the debug panel: "all content is cruft until proven"

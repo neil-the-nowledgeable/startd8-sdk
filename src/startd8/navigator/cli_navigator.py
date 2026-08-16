@@ -41,6 +41,7 @@ from .view_definition import (
     load_definition,
     resolve,
     resolve_external,
+    to_render_profile,
     validate_definitions,
 )
 
@@ -98,6 +99,7 @@ def build(
     """Project a source into Nodes and write JSON or HTML."""
     source = source.strip().lower()
     fmt = fmt.strip().lower()
+    frame_mode = False  # REQ-15: bare-frame render (scaffold-on, region content hidden)
     try:
         if source == "capability-index":
             path = capability_index or default_capability_index_path()
@@ -117,6 +119,14 @@ def build(
             nodes = nodes_from_node_schema()
             profile = NODE_SCHEMA_PROFILE
             project_root = "."
+        elif source == "frame":
+            # REQ-15: the domain-neutral bare frame — the View Definition's scaffolding, free of any
+            # requirement. Zero nodes + the base profile (theme/control/regions), rendered scaffold-on
+            # with all region content hidden (only the region meta-descriptions + control surface show).
+            nodes = []
+            profile = to_render_profile(resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY))
+            project_root = "."
+            frame_mode = True
         elif source == "nodes-json":
             if nodes_json is None:
                 console.print("[red]error:[/red] --nodes-json is required for source=nodes-json")
@@ -128,7 +138,7 @@ def build(
         else:
             console.print(
                 f"[red]error:[/red] unknown --source {source!r} "
-                "(expected capability-index|requirements|node-schema|nodes-json)"
+                "(expected capability-index|requirements|node-schema|frame|nodes-json)"
             )
             raise typer.Exit(_EXIT_ERR)
     except (FileNotFoundError, ValueError, OSError) as exc:
@@ -181,6 +191,7 @@ def build(
                     project_root=project_root,
                     group_by=group_by,
                     profile=profile,
+                    frame=frame_mode,
                 )
         except OSError as exc:
             console.print(f"[red]error:[/red] {exc}")
