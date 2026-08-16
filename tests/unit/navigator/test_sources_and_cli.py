@@ -342,3 +342,32 @@ def test_projection_reliability_fields_mirror_the_render_attrs(tmp_path):
     n = nodes_from_requirements(doc, repo=tmp_path)[0]
     assert n.verify == n.attributes["verify"]                      # same raw clause on both channels
     assert " · ".join(n.approve) == n.attributes["approve_prompts"]
+
+
+# ── EB-1 (0.4.0 wire-format) — the promoted fields survive JSON round-trip, presence-gated ──────────
+
+def test_eb1_reliability_fields_survive_json_roundtrip():
+    """EB-1: verify/approve/was + the derivation edge round-trip through nodes_to_json/from_json."""
+    from startd8.navigator.models import DerivationEdge, Node
+    from startd8.navigator.project import nodes_from_json, nodes_to_json
+
+    n = Node(
+        key="FR-1", does="sign in",
+        verify="`pytest` passes", approve=("safe?", "locks out"), was=("log-in",),
+        derivation=(DerivationEdge(from_key="stage:contract"),),
+    )
+    got = nodes_from_json(nodes_to_json([n]))[0]
+    assert got.verify == "`pytest` passes"
+    assert got.approve == ("safe?", "locks out")
+    assert got.was == ("log-in",)
+    assert got.derivation == (DerivationEdge(from_key="stage:contract", relation="derived-from", regime=None),)
+    assert got.derivation[0].regime is None
+
+
+def test_eb1_presence_gated_byte_identical_when_empty():
+    """EB-1 SOTTO: a node with no reliability fields emits NO new keys (byte-identical to pre-0.4.0)."""
+    from startd8.navigator.models import Node
+    from startd8.navigator.project import nodes_to_json
+
+    d = nodes_to_json([Node(key="cap.x", does="bare")])[0]
+    assert "verify" not in d and "approve" not in d and "was" not in d and "derivation" not in d

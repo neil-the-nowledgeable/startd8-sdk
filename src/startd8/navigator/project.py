@@ -18,7 +18,7 @@ from startd8.wireframe import (
 )
 from startd8.wireframe.profile import RenderProfile
 
-from .models import Node, NodeEvidence, NodeStatus
+from .models import DerivationEdge, Node, NodeEvidence, NodeStatus
 
 _STATUS_MAP = {
     NodeStatus.BUILT: "planned",
@@ -216,8 +216,14 @@ def nodes_to_wireframe_plan(
 
 
 def _node_to_json(n: Node) -> Dict[str, Any]:
-    """One Node → JSON dict, recursing ``children`` so the full tree round-trips (REQ-02 FR-4)."""
-    return {
+    """One Node → JSON dict, recursing ``children`` so the full tree round-trips (REQ-02 FR-4).
+
+    EB-1 (NODE-SCHEMA 0.4.0 wire-format): the promoted reliability fields + the typed derivation edge
+    are serialized **presence-gated** — a key is emitted only when the field is non-empty. So a node
+    that lacks them (every pipeline / node-schema / capability node) is **byte-identical** to the
+    pre-0.4.0 export, while a requirements Node carries its oracle/gate/history/derivation through JSON.
+    """
+    d: Dict[str, Any] = {
         "key": n.key,
         "does": n.does,
         "status": n.status,
@@ -233,6 +239,19 @@ def _node_to_json(n: Node) -> Dict[str, Any]:
         "route_state": n.route_state,
         "attributes": dict(n.attributes),
     }
+    # 0.4.0 additive, presence-gated (byte-identical when absent — SOTTO).
+    if n.verify:
+        d["verify"] = n.verify
+    if n.approve:
+        d["approve"] = list(n.approve)
+    if n.was:
+        d["was"] = list(n.was)
+    if n.derivation:
+        d["derivation"] = [
+            {"from_key": e.from_key, "relation": e.relation, "regime": e.regime}
+            for e in n.derivation
+        ]
+    return d
 
 
 def nodes_to_json(nodes: Sequence[Node]) -> List[Dict[str, Any]]:
@@ -265,6 +284,20 @@ def nodes_from_json(data: Sequence[Dict[str, Any]]) -> List[Node]:
                 orientation=str(d.get("orientation", "")),
                 route_state=str(d.get("route_state", "")),
                 attributes=dict(d.get("attributes") or {}),
+                # EB-1 (0.4.0): read back the reliability fields + derivation edge when present (absent
+                # → empty defaults, so pre-0.4.0 NODE-SCHEMA-JSON still loads unchanged).
+                verify=str(d.get("verify", "")),
+                approve=tuple(d.get("approve") or ()),
+                was=tuple(d.get("was") or ()),
+                derivation=tuple(
+                    DerivationEdge(
+                        from_key=str(e.get("from_key", "")),
+                        relation=str(e.get("relation", "derived-from")),
+                        regime=(str(e["regime"]) if e.get("regime") is not None else None),
+                    )
+                    for e in (d.get("derivation") or [])
+                    if isinstance(e, dict) and e.get("from_key")
+                ),
             )
         )
     return out
