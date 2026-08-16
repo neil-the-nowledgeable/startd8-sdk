@@ -147,3 +147,61 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | (none yet) |  |  |  |  |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-08-16 04:05:00 UTC
+- **Scope**: Plan-side review (S-prefix), weighted per sponsor focus toward the per-FR seam mapping / build order, the D-3 Verify-oracle design, and the FR-5 security surface. Grounded against `src/startd8/navigator/{models.py,view_definition.py,det_req.py,cli_navigator.py,provenance.py}` (targeted reads, no edits). Respects settled D-1..D-6.
+
+**Executive summary (top plan risks/gaps):**
+- The FR-1 seam text ("`derive_status(has_code_evidence=True)`") does not match the real signature `derive_status(*, has_code_evidence, maturity)` (models.py:98) — the plan's status-derivation line will not compile as written and omits how `maturity` (BUILT vs THIN) is chosen.
+- The plan never names the concrete `sdk_artifact` path per stage nor the resolution rule (dir vs file, exact vs prefix), yet FR-1 status derivation and FR-6 provenance both hinge on it. This is the load-bearing, un-specified table.
+- FR-8's acceptance (and §-seam-map row for `test_sources_and_cli.py:60`) treats `validate_definitions` as governing the new domain's status vocabulary; it does not (only extends-chains + bindings) — the guard is weaker than the plan implies.
+- The D-3 extract-the-runnable-span logic has no plan-level handling for multi-command / `;`-joined clauses or for a command referencing a fixture path that doesn't exist (rc≠0 → spurious `fail`). Build order puts FR-4/FR-5 on the critical path with these unresolved.
+- FR-5's verb allow-list gates the *verb* `startd8` but not the *subcommand*; the plan has no step to distinguish read-only (`navigator build --format json`) from mutating (`generate backend`, `--out`) subcommands — a repo-mutation escape from the "modeling only" invariant.
+- FR-6's `pipeline_provenance(nodes, stages)` walk ("artifact → the stage whose `sdk_artifact`/kind owns it") has no tie-break when two stages could own an artifact, and no plan step for the not-found case.
+- The self-exec guard is specified by string-matching the command; the plan should say it matches on resolved argv tokens (verb+subcommand), not a substring, to avoid trivial evasion/false-trip.
+
+**Numbered suggestions (S-prefix):**
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-S1 | Data | high | Fix the FR-1 status-derivation line to the real API and add `maturity`. The plan writes `derive_status(has_code_evidence=True)`; the actual signature is `derive_status(*, has_code_evidence: bool, maturity: str)` (models.py:98) and maturity picks BUILT vs THIN. Specify the per-stage (or constant) maturity the projection passes. | As written the call is wrong and would fail at build time; the built/spec vocabulary story (D-2) silently breaks if a stage resolves THIN. | "Per-FR implementation → FR-1 → Status (D-2)" bullet | Grep the code for `derive_status(` signature; unit-assert stage statuses ∈ {built, spec}. |
+| R1-S2 | Data | high | Add the concrete `_STAGES` `sdk_artifact` column with real paths and the resolution rule. The plan names the 8-tuple `(key, ordinal, human_form, sdk_artifact, compiler_analogue, essence, does, child_keys)` but gives only one example (`backend_codegen/`); FR-1 status + FR-6 provenance both depend on exact paths and whether resolution is dir-exists / file-exists / prefix-match, relative to which root (`project_root="."`). | This is the single most load-bearing un-specified artifact; two implementers will pick different paths and roots, and FR-6's "stage that owns the artifact" is undefined without it. | New sub-bullet under FR-1 (`_STAGES` table) | Fixture repo → assert each stage's `sdk_artifact` resolves as documented and yields the expected status. |
+| R1-S3 | Validation | high | Correct the FR-8 / seam-map claim that `validate_definitions` proves the pipeline vocabulary clean. Per view_definition.py:421-442 it validates only `extends` chains + `chrome.bindings`; it does not check status-map well-formedness (label/meaning/color/severity). Either add an explicit status-vocab assertion to the FR-8 step or drop the implication. | The plan (FR-8 "also assert `validate_definitions` stays clean") and the seam-map governance row over-state the guard, risking a false green when the pipeline status map is malformed. | "Per-FR implementation → FR-8" + seam-map row `test_sources_and_cli.py:60` | Add an assertion iterating the resolved profile's statuses for non-empty required fields. |
+| R1-S4 | Interfaces | high | Require the pipeline status vocabulary to be keyed by the `NodeStatus` ids emitted by `derive_status` (`built`/`spec`/`thin`), matching how every domain keys `vocabulary.statuses` (view_definition.py:245-254). Add this to the FR-1 build step. | If the `PIPELINE_DEFINITION` keys statuses by prose labels, the legend/status band won't resolve the stage's real status — an orphan chrome the D-1 audit is supposed to prevent. | FR-1 `PIPELINE_DEFINITION` bullet | Assert resolved `profile.statuses` keys ⊇ the set of statuses `nodes_from_pipeline()` emits. |
+| R1-S5 | Risks | high | Add a plan step for multi-span and non-existent-path Verify clauses in FR-4/FR-5. Define: (a) multiple backtick / `;`/`&&`-joined commands → documented rule (first allow-listed span, or `manual`); (b) an extracted command whose fixture path is absent → rc≠0 → decide `fail` vs a distinct `error`/`skip` so a missing-fixture doesn't masquerade as an assertion failure. | The sponsor flags these exact cases; both are on the FR-4→FR-5 critical path and undefined, so `pass`/`fail` semantics are non-deterministic. | FR-4 classifier bullets + FR-5 evaluate bullet | Fixtures: 2-command clause, `;`-joined clause, missing-path command → assert documented verdicts. |
+| R1-S6 | Security | high | Split the FR-5 allow-list into verb **and** subcommand policy. The plan allow-lists the verb `startd8` but a subcommand can mutate the repo (`generate backend`, `navigator build --out …`). Add a step to restrict `--run-oracle` to read-only subcommands (or explicitly document mutation as accepted risk). | The verb allow-list does not preserve the O-4 / NR-1 "models, does not mutate" invariant for the oracle path; an authored clause can smuggle a side-effecting `startd8` subcommand. | FR-5 "verb allow-list" bullet | Fixture clause `startd8 generate …` under `--run-oracle` → assert refused/flagged, repo unchanged. |
+| R1-S7 | Security | medium | Specify the self-exec guard as an argv-token match (verb+subcommand = `startd8 navigator verify`), not a substring of the raw clause. The plan says "refuse a command that is itself `startd8 navigator verify … --run-oracle`". | A substring match both under-matches (quoting/whitespace variants evade) and over-matches (a doc *mentioning* the string trips it); argv-token comparison is deterministic. | FR-5 "Self-exec guard" bullet | Unit test: argv `["startd8","navigator","verify",...]` refused; a clause merely quoting the phrase is not. |
+| R1-S8 | Interfaces | medium | Define FR-6's artifact→stage ownership tie-break and not-found case. "walk artifact → the stage whose `sdk_artifact`/kind owns it" is ambiguous when an artifact path is a prefix of two stages' artifacts, and undefined when no stage owns it. | Provenance rows are meaningless if ownership is nondeterministic; a not-found artifact needs a defined row (`present=False`) rather than an empty chain. | FR-6 walk bullet | Fixtures: overlapping-path artifact (assert deterministic owner), unowned artifact (assert `present=False` row). |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-S9 | Risks | medium | Add a `--timeout` default and behavior-on-timeout to FR-5. The plan shows `subprocess.run(argv, shell=False, timeout=…)` with `…` unfilled; a hung allow-listed command would block the whole `verify` run. Define the default and the timeout verdict (`fail` with reason, distinct from rc≠0). | An unspecified timeout is a real DoS/hang surface on the review machine, and conflating timeout with rc≠0 loses signal. | FR-5 evaluate bullet | Fixture command that sleeps > timeout → assert a bounded, distinctly-labeled verdict. |
+| R1-S10 | Ops | low | Note that FR-6's "stage ordinals are a subsequence of FR-1's" must hold even when stages are SPEC (artifact absent). A provenance chain through an un-built stage should still emit the stage row (present flag) so the trace shows the gap rather than skipping it. | The most useful provenance output is one that surfaces the *missing* stage; silently dropping SPEC stages hides exactly the gap an operator wants (Mieruka). | FR-6 walk bullet / FR-7 render | Fixture where an intermediate stage is SPEC → assert its row appears with a not-built marker. |
+
+**Endorsements & Disagreements:** none — this is R1; Appendix C had no prior untriaged rounds. (Cross-doc note: S-suggestions R1-S1/S3/S4 pair with requirements items R1-F1/F3/F2 respectively; S5 pairs with F4; S6 pairs with F7 — the orchestrator may triage them together.)
+
+---
+
+## Requirements Coverage Matrix — R1
+
+Analysis only (not triage). Each REQ-08 FR/objective → the plan section that implements it → Covered / Partial / Gap. "Partial" rows generated the correspondingly-numbered S-suggestion above.
+
+| Requirement (REQ-08) | Plan Section / Task | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| FR-1 — `Stage` node projection + status vocabulary (D-1/D-2) | Per-FR → FR-1+FR-2; seam-map rows 1-2 | Partial | `derive_status` call signature wrong + `maturity` unspecified (R1-S1); concrete per-stage `sdk_artifact` paths + resolution rule absent (R1-S2); status vocab must key by `NodeStatus` ids (R1-S4). |
+| FR-2 — Stage DEPENDS-ON edges (topo-sort) | Per-FR → FR-1+FR-2 (edges); build order | Full | Edges + `graphlib.TopologicalSorter` acceptance are concrete and grounded to `child_keys`. |
+| FR-3 — `--source pipeline` CLI seam | Per-FR → FR-3; seam-map CLI-routing row | Full | Additive `elif` + help/error string edits at real line ranges; existing-source non-regression asserted. |
+| FR-4 — Verify-oracle parse + classify (D-3) | Per-FR → FR-4 | Partial | No rule for multi-command / `;`-joined clauses (R1-S5); placeholder grammar not a closed set (see REQ R1-F5). |
+| FR-5 — opt-in evaluate + pass/fail (D-3/D-6) | Per-FR → FR-5 | Partial | Subcommand (not just verb) mutation risk (R1-S6); self-exec guard match method (R1-S7); non-existent-path → spurious `fail` (R1-S5); `--timeout` default/verdict unset (R1-S9). |
+| FR-6 — Pipeline provenance sibling schema (D-4) | Per-FR → FR-6 | Partial | Artifact→stage ownership tie-break + not-found row undefined (R1-S8); SPEC-stage rows should still surface (R1-S10). |
+| FR-7 — verify/provenance render surface (D-5) | Per-FR → FR-7 | Full | Reuses tree meta-rows + graph DAG at real seams (`render_tree.py:151`); no new shell — well-grounded. |
+| FR-8 — byte-identity + field-compat guard (D-1) | Per-FR → FR-8 | Partial | `validate_definitions` does not check status-vocab well-formedness — over-claimed as a guard (R1-S3). |
+| O-1 — pipeline as Nodes, rendered | FR-1/FR-2/FR-3/FR-7 | Full | Covered by the above. |
+| O-2 — `Verify:` as acceptance oracle | FR-4/FR-5/FR-7 | Partial | Inherits FR-4/FR-5 gaps (multi-span, security, timeout). |
+| O-3 — artifact→stage→requirement trace | FR-6/FR-7 | Partial | Inherits FR-6 ownership/not-found gaps. |
+| O-4 — standalone/additive, byte-identical | FR-8 | Partial | Byte-identity golden is solid; the "no mutation" invariant is not actually enforced for the `--run-oracle` path (R1-S6). |
