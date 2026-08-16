@@ -53,3 +53,31 @@ A thin end-to-end demo is possible after FR-4 on a small hand-authored generated
 | D-5 | oracle-pass ≈ satisfied | D-3 honesty boundary; residue preserved, uncompared | FR-6/FR-7 coverage + Goodhart gate |
 
 *v1.0 — every FR mapped to a real seam; the loop's novel core is FR-1 (sandboxed runner) + FR-2 (greenfield grammar) + FR-3 (spec-derived rung), wiring FR-4 into Prime's existing regen. Reuses sandbox/ladder/Prime/classify; forks nothing.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)

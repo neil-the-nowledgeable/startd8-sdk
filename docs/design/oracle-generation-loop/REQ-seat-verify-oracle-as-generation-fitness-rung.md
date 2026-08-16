@@ -123,3 +123,31 @@ Read-only reuse (not modified): `src/startd8/navigator/verify_oracle.py` (`class
 *v0.2 — Post-planning self-reflective update. 5 assumptions overturned (D-1 repair→regenerate, D-2 new runner not evaluate(), D-3 extend the ladder not a new harness, D-4 runnable-Verify is greenfield, D-5 oracle-pass≠satisfied), 3 OQs resolved, 9 FRs grounded to real seams. The feature's own name changed (repair → regenerate-with-feedback).*
 *v0.3 — Lessons hardening: phantom-reference audit clean, env-failure-degrades rule (FR-1), stall guard (FR-5), single-line/semantic-name FRs.*
 *v0.3.1 — Principle hardening: Mottainai (reuse the 4 seams), accidental-complexity (separate runner, don't generalize the shipped oracle), Genchi Genbutsu (real spec × real app × real sandbox), and Context-Correctness — folded the spec→Prime-seed plan-ingestion step into FR-8. Ready for CRP.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) add suggestions to Appendix C; once validated, the orchestrator records the final disposition in Appendix A (applied) or Appendix B (rejected with rationale). **Do not delete A/B** — they are the cross-model memory that stops later reviewers from re-proposing settled or rejected ideas.
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append a `#### Review Round R{n}` block under Appendix C (n = highest existing round + 1, or 1), with unique suggestion IDs `R{n}-S{k}` (plan) / `R{n}-F{k}` (requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged item from a prior round, list it in an **Endorsements** section instead of restating it. Multi-reviewer endorsements raise triage priority.
+- **When validating (orchestrator)**: For each suggestion, append a row to Appendix A (applied) or Appendix B (rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future reviewers don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|-----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
