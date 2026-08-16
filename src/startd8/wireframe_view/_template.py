@@ -80,24 +80,12 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .section-lead{font-family:var(--serif);font-size:13px;letter-spacing:.02em;color:var(--faint);
     text-transform:uppercase;margin:0 0 12px}
 
-  /* Structure-only view (profiled navigator): strip the descriptive layer, leaving just the
-     section groups + node labels — the underlying node structure with no other text. */
-  body.structure-only .meta, body.structure-only .whybox, body.structure-only .lead,
-  body.structure-only .glance, body.structure-only #legend, body.structure-only #signbar,
-  body.structure-only #warn, body.structure-only .det, body.structure-only .lives,
-  body.structure-only .was, body.structure-only .narr, body.structure-only .needlist,
-  body.structure-only .sec-one, body.structure-only .needs, body.structure-only .allset,
-  body.structure-only .badge, body.structure-only .signoff, body.structure-only .todos-box,
-  body.structure-only .item .row details, body.structure-only .sig-mark{display:none !important}
-  body.structure-only .item{padding:4px 0}
-  body.structure-only .sec-body{padding-top:6px}
-  /* structure-only shows the bare node key, not the full descriptive label */
-  .lbl-key{display:none}
-  body.structure-only .lbl{display:none}
-  body.structure-only .lbl-key{display:inline;font-weight:600;font-size:14px}
-  /* the available structural metadata per node — hidden normally, revealed in structure-only + combined */
+  /* REQ-view-definition-mode: the old content-density modes are retired (their reason — "show structure
+     not prose" — is now owned by the View Definition pick). Their one unique payload, the per-node
+     structural metadata (item.meta), survives as the additive "Show node metadata" overlay. */
+  .lbl-key{display:none}   /* the bare-key span stays in the DOM but hidden (no longer a mode) */
   .node-meta{display:none;font-family:var(--mono);font-size:11.5px;color:var(--ink2);margin:3px 0 0 1px}
-  body.structure-only .node-meta, body.combined .node-meta{display:block}
+  body.show-node-meta .node-meta{display:block}
 
   /* ---------- debugging layer: fixed top-right view-mode panel ---------- */
   #debug:empty{display:none}
@@ -158,11 +146,9 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.scaffold [data-layer="computed"]::before{border-left-color:var(--ochre)}
   body.scaffold [data-layer="node"]{outline-color:var(--planned)}
   body.scaffold [data-layer="node"]::before{border-left-color:var(--planned)}
-  /* Scaffold-only (FR-16): isolate the anatomy — hide the node-driven CONTENT filling the node layer
-     while keeping the region's outline + label (an empty labelled skeleton). Non-node regions keep
-     their content; only the node layer's descendants are hidden. Pairs with scaffold mode. */
-  body.scaffold-only [data-layer="node"] *{visibility:hidden}
-  body.scaffold-only [data-layer="node"]{visibility:visible}
+  /* REQ-view-definition-mode: the isolate-anatomy CSS is retired — its "hide requirement content, keep
+     the frame" intent is now the View Definition pick (frame-bare, below), with finer control via the
+     per-layer disclosure toggles. */
   #debug .dbg-opt.dbg-sub{margin-left:16px}
   /* REQ-15 FR-1/FR-4: frame-bare — hide EVERY region's content (keep the region outline + its ::before
      meta-description), so the frame source shows only the scaffolding + control surface. A per-layer
@@ -620,9 +606,9 @@ __PLAN_DATA__
     if(item.was&&item.was.length&&!EU){
       wasHtml='<div class="was"><span class="lk">Was</span>'+esc(item.was.join(" · "))+'</div>';
     }
-    var metaHtml=(item.meta&&!EU)?'<div class="node-meta">'+esc(item.meta)+'</div>':'';  // structure-only reveal
+    var metaHtml=(item.meta&&!EU)?'<div class="node-meta">'+esc(item.meta)+'</div>':'';  // revealed by "Show node metadata"
     w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
-      (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // structure-only: bare node key
+      (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // bare node key (kept in DOM, hidden)
       badge(item.status)+'</div>'+det+livesHtml+wasHtml+metaHtml;
     if(mock||k==="pages"){
       var d=document.createElement("details");
@@ -765,9 +751,10 @@ __PLAN_DATA__
         });
       }
     }
-    // REQ-15 FR-1: the frame source renders scaffold-mode-on with every layer's content hidden — only the
-    // region meta-descriptions (::before) + the control surface show. Per-layer toggles reveal a layer.
-    if(payload.frame){ document.body.classList.add("scaffold","frame-bare"); }
+    // REQ-15 FR-1 / REQ-view-definition-mode FR-1+FR-4: the requirement-free frame (scaffold + frame-bare)
+    // is now driven by the panel's VIEW pick (syncView), which initialises from `payload.frame` and owns
+    // the classes thereafter — so a re-render (lens toggle) can't re-force the frame after the operator
+    // switches back to Requirement. Per-layer toggles still reveal a layer.
   }
 
   // ---------- QW-1 + EC-4: the role (base voice + delivery kits) / depth toggle + open/close ----------
@@ -803,9 +790,11 @@ __PLAN_DATA__
   document.getElementById("co").onclick=function(){ document.querySelectorAll("details.sec").forEach(function(d){d.open=false;}); };
 
   // ---------- debugging layer: top-right view-mode panel (profiled navigator only) ----------
-  // Three modes over the node view: content (default) · structure only (keys + metadata, no prose) ·
-  // combined (content AND the structural metadata together). Gated to a profile so the app path is
-  // byte-identical (FR-8). Structure-only and Combined are mutually exclusive.
+  // REQ-view-definition-mode: two clean axes. (1) VIEW — pick one: Requirement (default) vs the
+  // requirement-free View Definition frame OF THIS renderer (scaffold + frame-bare, its own resolved
+  // definition's regions/meta). (2) OVERLAYS — additive: Show node metadata (the item.meta reveal) ·
+  // Outline regions (the template-anatomy outline overlay) · Hide app-scaffold chrome · the per-layer
+  // disclosure toggles. Gated to a profile so the app path is byte-identical.
   if(payload.profile){
     // Live provenance readout — "all content is cruft until proven otherwise": chrome that traces to
     // a source is proven; an orphan (no source) is cruft. Green when clean, ochre when cruft remains.
@@ -815,36 +804,22 @@ __PLAN_DATA__
       prov='<div class="dbg-prov '+cls+'">provenance '+ch.score+' · '+ch.present+'/'+ch.total+' proven'+
         (cruft?' · <b>'+cruft+' cruft</b>: '+esc((ch.orphans||[]).join(", ")):' · no cruft ✓')+'</div>';
     }
-    // The panel carries three logically-distinct KINDS of control, now grouped under labelled
-    // headers (FR-19): VIEW (mutually-exclusive content-presentation modes) · OVERLAYS (orthogonal,
-    // additive filters) · TEMPLATE ANATOMY (the debug overlay of the template itself + its legend).
-    // The PROVENANCE readout stays at the bottom. This is REORGANIZATION + labelling only — every
-    // checkbox id and its body-class toggle is unchanged.
+    // Default HTML = the base taxonomy; applyDefinitionOverride() relabels groups/toggles from the
+    // resolved definition's `control` over these ids (a domain delta can rename a group/toggle).
     document.getElementById("debug").innerHTML=
       '<div class="dbg-title">View mode</div>'+
-      // ── VIEW: mutually-exclusive content-presentation modes ──────────────────────────────────
-      // Full (default, no control) · Structure only · Combined. Structure-only and Combined clear
-      // each other (radio-like), so they belong under one "pick one" heading.
-      '<div class="dbg-group dbg-group-first" data-group="view">View <span class="dbg-hint">· pick one (Full is default)</span></div>'+
-      '<label class="dbg-opt"><input type="checkbox" id="structOnly"><span>Structure only</span></label>'+
-      '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>'+
-      // ── OVERLAYS: orthogonal, additive filters (independent of the VIEW mode) ─────────────────
-      // Multi-stage cruft purge: an orthogonal filter (not a view mode) that HIDES the app-scaffold
-      // chrome the fresh-eyes audit flagged (sign-off subsystem · mockups · delivery-role kits) —
-      // non-destructive so a downstream consumer opts in and elements can resurface later in a
-      // different light. Default off (nothing hidden until selected).
+      // ── VIEW: pick one — what am I looking at? the Requirement, or the View Definition ─────────
+      '<div class="dbg-group dbg-group-first" data-group="view">View <span class="dbg-hint">· pick one</span></div>'+
+      '<label class="dbg-opt"><input type="radio" name="viewpick" id="viewRequirement" checked><span>Requirement</span></label>'+
+      '<label class="dbg-opt"><input type="radio" name="viewpick" id="viewDefinition"><span>View Definition</span></label>'+
+      // ── OVERLAYS: additive filters, independent of the VIEW pick ───────────────────────────────
+      // Show node metadata = the per-node item.meta reveal (the retired density modes' only unique
+      // payload). Outline regions = the template-anatomy outline overlay (was "Scaffold mode"). Hide
+      // app-scaffold chrome = the non-destructive cruft-purge. Per-layer toggles append below.
       '<div class="dbg-group" data-group="overlays">Overlays <span class="dbg-hint">· additive</span></div>'+
+      '<label class="dbg-opt"><input type="checkbox" id="nodeMeta"><span>Show node metadata</span></label>'+
+      '<label class="dbg-opt"><input type="checkbox" id="outlineRegions"><span>Outline regions</span></label>'+
       '<label class="dbg-opt"><input type="checkbox" id="hideScaffold"><span>Hide app-scaffold chrome</span></label>'+
-      // ── TEMPLATE ANATOMY: the debug overlay of the TEMPLATE itself (+ its layer legend) ───────
-      // Scaffold mode: the meta-debugging view of the TEMPLATE itself. As this renderer becomes the
-      // de-facto multi-domain node visualizer (requirements first; legal · benchmark · dev-os next),
-      // an adopter needs to see the template's anatomy — each region labelled with its scaffold role +
-      // data source (data-scaffold). Orthogonal overlay, not a view mode.
-      '<div class="dbg-group" data-group="template-anatomy">Template anatomy <span class="dbg-hint">· debug</span></div>'+
-      '<label class="dbg-opt"><input type="checkbox" id="scaffold"><span>Scaffold mode (template anatomy)</span></label>'+
-      // FR-16: scaffold-only — a sub-option of scaffold mode that empties the node-driven content so
-      // the adopter sees just the labelled template skeleton. Checking it also turns scaffold mode on.
-      '<label class="dbg-opt dbg-sub"><input type="checkbox" id="scaffoldOnly"><span>Scaffold only (hide node content)</span></label>'+
       // REQ-15 FR-4: host for the per-layer disclosure toggles (built from the definition's layer schema
       // by applyDefinitionOverride). Empty in the served HTML; populated at runtime, byte-safe.
       '<div id="layerToggles"></div>'+
@@ -853,25 +828,24 @@ __PLAN_DATA__
         '<span class="ll node">node-driven</span></div>'+
       // ── PROVENANCE: the live readout stays at the bottom ──────────────────────────────────────
       prov;
-    var struct=document.getElementById("structOnly"), comb=document.getElementById("combined");
-    var hide=document.getElementById("hideScaffold"), scaf=document.getElementById("scaffold");
-    function syncModes(){
-      document.body.classList.toggle("structure-only", struct.checked);
-      document.body.classList.toggle("combined", comb.checked);
+    var viewReq=document.getElementById("viewRequirement"), viewDef=document.getElementById("viewDefinition");
+    var nodeMeta=document.getElementById("nodeMeta"), outline=document.getElementById("outlineRegions");
+    var hide=document.getElementById("hideScaffold");
+    // ONE frame mechanism (FR-4): the View Definition pick and `--source frame` both drive
+    // scaffold + frame-bare. `scaffold` (region outlines + ::before meta + legend) is on when EITHER
+    // the View Definition pick OR the Outline-regions overlay is active; `frame-bare` (hide all region
+    // CONTENT, leaving only the meta-descriptions) is on only for the View Definition pick.
+    function syncView(){
+      var vd=viewDef.checked;
+      document.body.classList.toggle("scaffold", vd || outline.checked);
+      document.body.classList.toggle("frame-bare", vd);
     }
-    struct.onchange=function(){ if(struct.checked) comb.checked=false; syncModes(); };
-    comb.onchange=function(){ if(comb.checked) struct.checked=false; syncModes(); };
+    viewReq.onchange=syncView; viewDef.onchange=syncView; outline.onchange=syncView;
+    nodeMeta.onchange=function(){ document.body.classList.toggle("show-node-meta", nodeMeta.checked); };
     hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
-    var scafOnly=document.getElementById("scaffoldOnly");
-    scaf.onchange=function(){
-      document.body.classList.toggle("scaffold", scaf.checked);
-      if(!scaf.checked){ scafOnly.checked=false; document.body.classList.remove("scaffold-only"); }
-    };
-    scafOnly.onchange=function(){
-      var on=scafOnly.checked;
-      document.body.classList.toggle("scaffold-only", on);
-      if(on){ scaf.checked=true; document.body.classList.add("scaffold"); }  // labels/outlines need scaffold
-    };
+    // `--source frame`: reflect the requirement-free frame in the picker so toggling back works.
+    if(payload.frame){ viewDef.checked=true; viewReq.checked=false; }
+    syncView();
   }
 
   renderAll();

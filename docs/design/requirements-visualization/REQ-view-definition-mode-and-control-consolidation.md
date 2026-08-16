@@ -1,0 +1,114 @@
+# View Definition View Mode & Control-Surface Consolidation — Requirements
+
+**Project:** startd8-sdk   **Criticality:** medium
+**Version:** 0.2 (post-planning — self-reflective update)   **Date:** 2026-08-16
+**Format:** det-req/0.1
+**Backend:** python-cli-surface
+**Pairs with:** *(plan deferred — spec-only; delivered via the Spec Delivery Loop)* · architecture `ARCHITECTURE_navig8r-presentation-definition-inheritance.md` (§3 regions/layers · §7 steps 4/5)
+**Inherits standards:** det-req-kit · NODE-SCHEMA v0.3.9 · NAMING_CONVENTION · REQ-10-view-definition-cascade (keystone) · REQ-14-control-region-unification (parent — this reshapes its `control` groups) · REQ-15-frame-scaffolding-view (parent — this promotes its frame from a CLI source to an in-render mode) · SOTTO_DESIGN_PRINCIPLE
+**Audience:** operator / SDK contributors / cross-repo adopters (legal · benchmark · dev-os)
+**Trust boundary:** local render only; no network; no LLM
+**Data classification:** internal
+
+> **Readable handle:** `feature/sdk-navigator-view-definition-mode-and-control-consolidation`
+> **Semantic name:** *SDK navigator exposes the View Definition as an in-render pick in the primary View picker — showing the current renderer's own requirement-free frame in place opposite the Requirement render — and collapses the top-right control surface to one View picker plus one additive Overlays stack, retiring the Structure/Combined density modes (their per-node metadata preserved as a Show-node-metadata overlay) and the scaffold-only duplicate, with the taxonomy and labels owned by the View Definition.*
+> **Canonical ref:** `cc:intent:requirements-visualization:feature:view-definition-mode-and-control-consolidation`
+
+## 0. Why this exists — see the View Definition of the thing you're looking at
+
+REQ-14 lifted the control panel + region anatomy into the View Definition; REQ-15 added a domain-neutral
+**frame** (`--source frame`) that renders the bare scaffolding free of any requirement. Two gaps remain:
+
+1. **The frame is only reachable as a separate CLI invocation with zero nodes.** There is no way, while
+   looking at an actual render (say REQ-10 visualized), to say *"show me the View Definition this view is
+   built from"* — the requirement-free frame **of that renderer**, in place. The operator wants to flip
+   between the requirement and its underlying View Definition.
+2. **The top-right control panel has accreted overlapping controls.** `Structure only` (View picker),
+   `Scaffold mode` (Template anatomy), and `Scaffold only` were three separate early gropings toward the
+   same idea REQ-15's frame now expresses maturely — *"show the structure/definition, not the requirement
+   content."* The `View · pick one (Full default)` group and the `Template anatomy · debug` group overlap,
+   and the labels are stale. They need consolidating onto clean axes — **without losing any distinct
+   control** (the operator wants maximum controls, just no duplicates).
+
+This REQ (a) promotes the frame into a first-class **"View Definition" view mode** driven from the control
+surface, using the **current renderer's own resolved definition**; and (b) consolidates the control panel
+onto four non-overlapping axes, retiring the true duplicates and reframing the rest, with the taxonomy
+owned by the definition (extending REQ-14) so the consolidation is data, not a hardcoded panel.
+
+## 0. Planning Insights (self-reflective update)
+
+> Grounding the ask against the real control surface (`view_definition.py` `control`, `_template.py`
+> `#debug` panel, the `body.structure-only`/`body.scaffold`/`body.frame-bare` classes) revealed:
+
+| v0.1 assumption | Planning discovery | Impact |
+|-----------------|--------------------|--------|
+| "Expose the View Definition view" = surface the existing `--source frame` | `--source frame` renders **`BASE_NAVIG8R_DEFINITION` only** (`cli_navigator.py` frame branch). "The View Definition **of a renderer**" means the frame of the **current domain's resolved definition** (requirements/capability/…), not base. | **FR-1**: the in-render mode renders the frame of the *current* resolved definition; `--source frame` (base) stays as the domain-neutral CLI entry (**FR-4** — one shared mechanism, two entry points) |
+| The overlapping controls are just mislabeled | The panel tangles **two distinct axes** into one picker: **(1) what am I looking at** — the Requirement vs the requirement-free View Definition (high-value, binary); **(2) how much of the requirement** — Full/`structOnly`/`combined` density. `structOnly`/`scaffold`/`scaffoldOnly` were all early attempts to answer axis 1 with axis-2 tools. The only *unique content* the two density modes add is `item.meta` (a per-node structural-metadata string; `_template.py:623`) — both reveal it, they differ only in prose. | **FR-2**: separate the axes and **collapse axis 2** — the picker becomes the binary **Requirement / View Definition**; `combined` is dropped (Full + meta), `structOnly`'s only unique payload (`item.meta`) survives as an **additive "Show node metadata" overlay**, and `scaffoldOnly` folds into "View Definition". Net panel = **1 pick-one + 1 overlay stack** (was 3 overlapping groups) |
+| The consolidation preserves byte-identity like REQ-14/15 | REQ-14/15 were **additive-override** (panel unchanged → literal-string test unedited). This REQ **intentionally changes the panel** (relabels groups, removes `scaffoldOnly`, adds "Show View Definition"). The debug-panel literal-string test **cannot** stay unedited — it is the one deliberate, reviewed change. | **FR-5**: the load-bearing byte-identity (app-scaffold path + domain **node content**) still holds — the debug panel is profiled/navigator-only, never in a generated app — but the **panel test is updated on purpose** (the change under review), not preserved |
+
+**Resolved open questions:** OQ-1 (does "Show View Definition" use base or the current definition?) →
+the **current** resolved definition (FR-1); base stays on `--source frame`. OQ-2 (does consolidation drop
+controls?) → yes, deliberately — the `combined` and `structOnly` *density modes* are retired (their
+only unique payload, `item.meta`, becomes a "Show node metadata" overlay); `scaffoldOnly` folds into
+"View Definition"; the one intentional loss is prose-stripping-for-compactness (NR-3). OQ-3 (can the app
+path change?) → no — the debug panel is navigator-only; the app path + node content stay byte-identical (FR-5).
+
+## Overview
+
+Add a **"View Definition"** entry to the top-right control panel's primary picker that renders the
+**current renderer's** resolved View Definition as a requirement-free frame **in place** (scaffold-on,
+node content hidden, regions + their definition-owned meta-descriptions + the control surface — no
+requirement nodes), reusing REQ-15's frame mechanism. The existing `--source frame` (base definition) and
+this in-render mode share **one** render path (FR-4). Reshape `BASE_NAVIG8R_DEFINITION.control.groups` from
+the current three overlapping groups (`view` / `overlays` / `template-anatomy`) into **one pick-one picker
++ one additive overlay stack**: **View** (pick one: **Requirement** [default] · **View Definition**) and
+**Overlays** (additive: **Show node metadata** · **Outline regions** · the REQ-15 **per-layer disclosure**
+· **Hide app-scaffold chrome**). This retires the `combined` and `structOnly` *density modes* — folding
+their only unique payload (`item.meta`) into the **Show node metadata** overlay — and folds `scaffoldOnly`
+into the View Definition view. All taxonomy/labels are owned by the definition and rendered via the REQ-14
+additive-override seam. Additive to generated apps; the navigator's own debug panel is the one surface
+that (deliberately) changes.
+
+## Objectives
+
+- **O-1:** Expose the View Definition of a renderer in-render — target: a control toggle renders the current domain's requirement-free frame in place, and flips back to the requirement.
+- **O-2:** Consolidate the control surface — target: one pick-one **View** picker (Requirement / View Definition) + one additive **Overlays** stack; the `combined`/`structOnly` density modes retired (their `item.meta` payload preserved as a "Show node metadata" overlay) and `scaffoldOnly` folded; stale labels fixed.
+- **O-3:** Definition-owned taxonomy — target: the consolidated groups/toggles/labels are `control` data in the View Definition (extending REQ-14); a domain delta can relabel them; nothing panel-facing is hardcoded.
+- **O-4:** One frame mechanism — target: the in-render "Show View Definition" mode and `--source frame` share a single render path (current-definition vs base are the only difference).
+- **O-5:** No app regression — target: the app-scaffold path and domain **node content** are byte-identical; only the navigator debug panel changes (its literal-string test updated under review).
+
+## Risks
+
+| Type | Description | Mitigation | Priority |
+|------|-------------|------------|----------|
+| quality | Reshaping the panel silently changes the app-scaffold render | FR-5: the debug panel is profiled/navigator-only — the app path has none; assert app-path + node-content byte-identity unedited | high |
+| scope | Over-collapsing merges away a useful control | NR-3 + FR-2: "max controls, no duplicates" — keep every distinct effect (Full/Structure/Combined/Outline regions/Hide chrome/per-layer); fold **only** the `scaffoldOnly` true duplicate | high |
+| quality | The in-render frame leaks the domain's requirement nodes (defeats "requirement-free") | FR-1 + NR-4: the mode reuses REQ-15's content-hidden frame; it renders the definition's scaffolding, never the domain nodes | medium |
+| scope | Building a control DSL / storing toggle JS in the definition | NR-1: the definition declares *what* controls exist; the class-toggling interaction JS stays renderer-specific (REQ-14/15 NR-1 carried) | high |
+| quality | Two frame render paths drift | FR-4: one shared mechanism; in-render passes the current resolved definition, `--source frame` passes base | medium |
+
+## Functional requirements
+
+- **FR-1 — "View Definition" as an in-render pick (of the current renderer).** The top-right panel's primary **View** picker gains a **View Definition** option (pick-one against **Requirement**, the default) that re-renders the current view as its **own** resolved definition's requirement-free frame in place — scaffold-on, node content hidden, showing each region's definition-owned meta-description (`regions.bindings[id].scaffold`) + the control surface — and selecting **Requirement** restores the requirement render. Name: The navigator View picker offers a View Definition option that renders the current renderer's requirement-free frame in place and Requirement restores it. Touches: `src/startd8/wireframe_view/_template.py`, `src/startd8/navigator/view_definition.py`, `tests/unit/wireframe/test_render_profile.py`. Lives: code src/startd8/wireframe_view/_template.py. Approve?: can the operator flip a live requirement render to its underlying View Definition frame and back?. Verify: a profiled requirements-domain render exposes a `data-view="view-definition"` pick; selecting it adds the frame body classes (`scaffold` + content-hidden) and hides FR node content while the region meta-descriptions remain; selecting Requirement restores the requirement render. Serves: O-1
+- **FR-2 — Collapse the control panel to one View picker + one Overlays stack.** `BASE_NAVIG8R_DEFINITION.control.groups` is reshaped from `view`/`overlays`/`template-anatomy` into exactly two groups: **`view`** (pick-one: **Requirement** [default] · **View Definition**) and **`overlays`** (additive: **Show node metadata** — reveals the per-node `item.meta`, the sole unique payload of the retired density modes · **Outline regions** — the region-outline annotation, was `scaffold` · the REQ-15 **per-layer disclosure** · **Hide app-scaffold chrome**); the `structOnly` and `combined` *density modes* and the `scaffoldOnly` toggle no longer exist as controls. Name: The control panel collapses to one pick-one View group Requirement or View Definition plus one additive Overlays group with density modes retired and item.meta preserved as a Show node metadata overlay. Touches: `src/startd8/navigator/view_definition.py`, `tests/unit/navigator/test_view_definition.py`. Lives: code src/startd8/navigator/view_definition.py. Approve?: is the panel one View picker plus one Overlays stack, with density modes retired and item.meta preserved as an overlay?. Verify: `resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).control["groups"]` keys equal `{"view", "overlays"}`; the `view` group's toggles are `{"requirement", "view-definition"}`; the `overlays` group holds a `nodeMeta` toggle and no `structOnly`/`combined`/`scaffoldOnly` toggle exists in any group; enabling `nodeMeta` reveals `item.meta` on the current render. Serves: O-2
+- **FR-3 — The consolidated taxonomy + labels are definition-owned.** The reshaped groups/toggles/labels/hints live in the definition's `control` section and render via the REQ-14 additive-override seam, not hardcoded panel HTML; a domain delta can relabel a group or toggle. Name: The consolidated control taxonomy and labels are owned by the View Definition and render via the additive-override seam. Touches: `src/startd8/navigator/view_definition.py`, `src/startd8/wireframe_view/_template.py`, `tests/unit/wireframe/test_render_profile.py`. Lives: code src/startd8/wireframe_view/_template.py. Approve?: is the panel taxonomy/labels definition data a delta can override, not hardcoded?. Verify: the rendered panel's group/toggle labels equal `profile.control` values; a definition delta renaming the `content` group's label to "Density" renders "Density" in the panel; removing the delta renders the base label. Serves: O-3
+- **FR-4 — One frame mechanism, two entry points.** The in-render "Show View Definition" mode and `navigator build --source frame` share a single frame-render path; the only difference is the definition supplied — the **current** resolved definition for the in-render mode, `BASE_NAVIG8R_DEFINITION` for the CLI source. Name: The in-render View Definition mode and the frame CLI source share one render path differing only by which definition is supplied. Touches: `src/startd8/navigator/cli_navigator.py`, `src/startd8/wireframe_view/_template.py`, `tests/unit/navigator/test_sources_and_cli.py`. Lives: code src/startd8/navigator/cli_navigator.py. Approve?: is there one frame mechanism, not two?. Verify: rendering `--source frame` and selecting the View Definition pick on a base-definition render produce the same frame body classes + region-meta structure; no second frame renderer/template exists (grep: one content-hidden frame path). Serves: O-4
+- **FR-5 — Additive to apps; panel change is the one reviewed edit.** The app-scaffold path and domain **node content** stay byte-identical (the debug panel is profiled/navigator-only, never emitted into a generated app); the byte-identity self-comparison + node-field goldens pass unedited, while the debug-panel literal-string test is **updated** to the consolidated taxonomy as the deliberate change under review. Name: The consolidation is additive to generated apps and node content with only the navigator debug-panel test updated on purpose. Touches: `tests/unit/wireframe/test_render_profile.py`, `tests/unit/navigator/test_view_definition.py`. Lives: test tests/unit/wireframe/test_render_profile.py. Approve?: are apps + node content byte-identical, with only the panel test intentionally changed?. Verify: `test_no_profile_is_byte_identical` + `node_field_names()` golden pass UNEDITED; a requirements-domain render's **node content** is byte-identical to its pre-REQ golden; the debug-panel test is updated (not deleted) and asserts the new four-axis taxonomy. Serves: O-5
+
+## Non-requirements
+
+- **NR-1:** No control DSL. The definition declares *what* groups/toggles exist and their labels; the class-toggling **interaction JS** (including the Show-View-Definition flip and per-layer disclosure) stays renderer-specific in `_template.py` — the should-we boundary carried from REQ-14/15 NR-1. No per-toggle JavaScript is stored in the definition.
+- **NR-2:** No new layers, regions, anatomy, view modes, or debug capabilities beyond promoting the existing frame to an in-render toggle and reshaping the existing controls — a reshape + expose, not new machinery.
+- **NR-3:** Deliberate density-mode retirement, value preserved. The `combined` and `structOnly` *density modes* are retired by design (they answered "show structure not prose" with the wrong axis, now owned by the View Definition pick); their only unique payload — the per-node `item.meta` — is preserved as the additive **Show node metadata** overlay, and `scaffoldOnly` folds into the View Definition view. The single intentional loss is **prose-stripping-for-compactness** (bare-key skeleton of the requirement), judged not worth a standing control. Every other distinct effect (Requirement render · the frame · node metadata · region outlines · per-layer disclosure · hide app-scaffold chrome) remains reachable.
+- **NR-4:** The in-render View Definition mode is **content-free by design** even though it uses a domain's definition — it renders that definition's regions/meta/control surface, never the domain's requirement nodes. It is not a new per-domain content view.
+
+## Appendix A — Accepted (with where merged)
+*(none yet — CRP incoming)*
+
+## Appendix B — Rejected (with rationale)
+*(none yet — CRP incoming)*
+
+## Appendix C — Incoming review rounds
+*(none yet)*
+
+*v0.3 — Control axis resolved with the operator: panel collapses to one View picker (Requirement / View Definition) + one Overlays stack; the Structure/Combined density modes are retired (their `item.meta` payload preserved as a Show-node-metadata overlay), `scaffoldOnly` folded; "View Definition" uses the current renderer's resolved definition (not base); byte-identity holds for apps + node content while the navigator panel test is the one deliberate edit.*

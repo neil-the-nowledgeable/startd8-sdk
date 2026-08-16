@@ -68,7 +68,7 @@ def test_chrome_provenance_flags_an_orphan():
 
 
 def test_node_schema_items_carry_structure_only_metadata():
-    """Each field-node's WireframeItem carries the compact meta shown in structure-only."""
+    """Each field-node's WireframeItem carries the compact meta shown by the "Show node metadata" overlay."""
     from startd8.navigator.project import nodes_to_wireframe_plan
 
     plan = nodes_to_wireframe_plan(nodes_from_node_schema())

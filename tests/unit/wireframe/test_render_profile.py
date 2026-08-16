@@ -99,34 +99,37 @@ def _keyed_plan() -> WireframePlan:
 
 
 def test_debug_view_mode_panel_is_profiled_and_byte_safe():
-    # FR-11/FR-12: the debugging layer ships — a top-right view-mode panel (Structure only + Combined)
-    # with body-class CSS and per-item bare-key/metadata spans. It is RUNTIME-gated to a profile
-    # (so the app path renders an empty, hidden panel) and the no-profile render is byte-identical.
+    # REQ-view-definition-mode FR-2/FR-5 (the ONE deliberate panel edit): the debugging layer collapses
+    # to a top-right panel with a pick-one VIEW picker (Requirement / View Definition) + an additive
+    # OVERLAYS stack (Show node metadata · Outline regions · Hide app-scaffold chrome · per-layer). It is
+    # RUNTIME-gated to a profile (app path renders an empty, hidden panel) and no-profile is byte-identical.
     prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
     profiled = render_html(_keyed_plan(), profile=prof)
     assert 'id="debug"' in profiled                      # the debug panel container
-    assert 'id="structOnly"' in profiled                 # Structure only switch
-    assert 'id="combined"' in profiled                   # Combined switch
-    assert "body.structure-only" in profiled and "body.combined" in profiled  # both modes' CSS
-    assert 'class="lbl-key"' in profiled                 # structure-only bare key
-    assert 'class="node-meta"' in profiled or "node-meta" in profiled          # metadata line
-    assert 'id="hideScaffold"' in profiled               # FR-14 multi-stage cruft-purge toggle
+    # VIEW picker — Requirement (default) vs the requirement-free View Definition frame
+    assert 'id="viewRequirement"' in profiled and "checked" in profiled  # Requirement is the default pick
+    assert 'id="viewDefinition"' in profiled             # the in-render View Definition pick (FR-1)
+    # OVERLAYS — additive
+    assert 'id="nodeMeta"' in profiled                   # Show node metadata (the retired modes' item.meta payload)
+    assert "body.show-node-meta .node-meta" in profiled  # the metadata reveal CSS
+    assert 'class="node-meta"' in profiled or "node-meta" in profiled          # metadata line renders
+    assert 'id="outlineRegions"' in profiled             # Outline regions (was "Scaffold mode")
+    assert 'id="hideScaffold"' in profiled               # multi-stage cruft-purge toggle
     assert "body.hide-scaffold .signoff" in profiled     # purge hides the app-scaffold sign-off subsystem
-    assert 'id="scaffold"' in profiled                   # FR-15 scaffold mode (template anatomy)
-    assert "body.scaffold [data-scaffold]" in profiled   # scaffold-mode region overlay CSS
+    assert "body.scaffold [data-scaffold]" in profiled   # region-outline overlay CSS (Outline regions / View Definition)
+    assert "body.frame-bare [data-scaffold]" in profiled # frame-bare CSS drives the View Definition pick
     assert "data-scaffold=" in profiled                  # regions carry their scaffold role
     assert 'data-layer=' in profiled                     # regions carry their layer classification
-    assert 'class="dbg-layers"' in profiled              # the scaffold-mode layer legend
+    assert 'class="dbg-layers"' in profiled              # the layer legend
     assert 'body.scaffold [data-layer="computed"]' in profiled  # layer-aware colouring
-    assert 'id="scaffoldOnly"' in profiled               # FR-16 scaffold-only (anatomy isolation) toggle
-    assert 'body.scaffold-only [data-layer="node"]' in profiled  # FR-16 hides node content, keeps skeleton
-    # FR-19: the panel's three logically-distinct kinds of control are grouped under labelled headers
-    # (VIEW modes · OVERLAYS · TEMPLATE ANATOMY) — reorganization + labelling only, no behavior change.
+    # the density modes + scaffoldOnly are retired — their ids must be gone
+    assert 'id="structOnly"' not in profiled and 'id="combined"' not in profiled and 'id="scaffoldOnly"' not in profiled
+    # two clean axes under labelled headers
     assert 'class="dbg-group' in profiled                # group-header markup is present
     assert "#debug .dbg-group{" in profiled              # group-header CSS is present (inert on app path)
-    assert ">View <span" in profiled                     # VIEW group header (Structure only + Combined)
-    assert ">Overlays <span" in profiled                 # OVERLAYS group header (Hide app-scaffold chrome)
-    assert ">Template anatomy <span" in profiled         # TEMPLATE ANATOMY group header (scaffold + legend)
+    assert ">View <span" in profiled                     # VIEW group header (pick one)
+    assert ">Overlays <span" in profiled                 # OVERLAYS group header (additive)
+    assert ">Template anatomy <span" not in profiled     # the retired standalone group header is gone
     assert "if(payload.profile)" in profiled             # the panel is gated on a profile
     # Byte-safe: the app path is byte-identical with/without an explicit None (FR-8 preserved).
     assert render_html(_plan()) == render_html(_plan(), profile=None)
@@ -197,14 +200,14 @@ def test_req14_control_and_region_override_embed_and_render_byte_safe():
     # strings). The default (no-delta) render + app path stay byte-identical.
     prof = RenderProfile(
         statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),),
-        control={"groups": {"template-anatomy": {"label": "Structure", "toggles": {}}}},
+        control={"groups": {"overlays": {"label": "Filters", "toggles": {}}}},
         regions={"bindings": {"outline": {"layer": "node", "scaffold": "the requirements list"}}},
     )
     html = render_html(_plan(), profile=prof)
-    assert '"Structure"' in html                     # control-group override embedded in the payload
+    assert '"Filters"' in html                        # control-group override embedded in the payload
     assert '"the requirements list"' in html         # region-anatomy override embedded in the payload
     assert "applyDefinitionOverride" in html         # the additive-override machinery is present
-    assert 'data-group="template-anatomy"' in html   # the control DOM hook exists
+    assert 'data-group="overlays"' in html           # the control DOM hook exists
     assert 'id="outline"' in html                    # the region DOM hook exists
     # a profile WITHOUT control/regions injects an inert (empty) override — app path byte-identical.
     assert render_html(_plan()) == render_html(_plan(), profile=None)

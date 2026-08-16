@@ -288,23 +288,25 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
     # EXACT groups/toggles/labels the template hardcodes today (`_template.py` ~774-793), so projecting
     # + consuming them (FR-2/FR-3) reproduces the current panel byte-for-byte. Keyed maps (merged by id);
     # `order` gives the render sequence, `first` = the `dbg-group-first` class, `sub` = `dbg-sub`.
+    # REQ-view-definition-mode: collapsed to one pick-one VIEW picker + one additive OVERLAYS stack.
+    # VIEW answers "what am I looking at" — the Requirement (default) vs the requirement-free View
+    # Definition frame of THIS renderer (FR-1). The Structure/Combined density modes are retired; their
+    # only unique payload (per-node `item.meta`) survives as the `nodeMeta` overlay, and `scaffoldOnly`
+    # folds into the View Definition pick (FR-2). `Scaffold mode` becomes the `outlineRegions` overlay.
     control={
         "panel": "top-right",
         "groups": {
-            "view": {"label": "View", "hint": "· pick one (Full is default)", "order": 0, "first": True,
+            "view": {"label": "View", "hint": "· pick one", "order": 0, "first": True,
                      "toggles": {
-                         "structOnly": {"label": "Structure only", "order": 0},
-                         "combined": {"label": "Combined (structure + content)", "order": 1},
+                         "viewRequirement": {"label": "Requirement", "order": 0},
+                         "viewDefinition": {"label": "View Definition", "order": 1},
                      }},
             "overlays": {"label": "Overlays", "hint": "· additive", "order": 1,
                          "toggles": {
-                             "hideScaffold": {"label": "Hide app-scaffold chrome", "order": 0},
+                             "nodeMeta": {"label": "Show node metadata", "order": 0},
+                             "outlineRegions": {"label": "Outline regions", "order": 1},
+                             "hideScaffold": {"label": "Hide app-scaffold chrome", "order": 2},
                          }},
-            "template-anatomy": {"label": "Template anatomy", "hint": "· debug", "order": 2,
-                                 "toggles": {
-                                     "scaffold": {"label": "Scaffold mode (template anatomy)", "order": 0},
-                                     "scaffoldOnly": {"label": "Scaffold only (hide node content)", "order": 1, "sub": True},
-                                 }},
         },
     },
     glance={"summary": "status-counts"},
