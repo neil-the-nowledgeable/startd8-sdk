@@ -52,7 +52,7 @@ CLI consumer by design). One new row:
 
 | ID | Effort | Row | Evidence | Status |
 |----|--------|-----|----------|--------|
-| **R8-EB-6** | S | Give `navigator provenance` a `--format html` (project the chain rows to Nodes → existing tree renderer, mirroring `verify --format html`) — today it is JSON-only | `cli_navigator.py` `provenance` emits only JSON | open |
+| ~~**R8-EB-6**~~ ✅ | S | Give `navigator provenance` a `--format html` (project the chain rows to Nodes → existing tree renderer, mirroring `verify --format html`) | `cli_navigator.py` `provenance` | **DONE** (`499694f0`) — `--format json\|html`; html renders `pipeline-provenance` Nodes; REQ-08 reconciled to v0.4 (FR-6 signature + FR-9 provenance CLI). +4 tests |
 
 **Retro surprise (belief→actual):** an FR-id traces only when its file falls under a *modeled compiler
 stage* — so a spec's own FRs implemented outside those stages (e.g. REQ-08's, in `navigator/`) honestly
