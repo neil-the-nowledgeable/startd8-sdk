@@ -992,7 +992,10 @@ __PLAN_DATA__
       meta:{how:"→ .node-meta (Show node metadata)", sel:".node-meta"}};
     // FR-11: editing a not-displayed field is NON-PERSISTENT — it updates the card's in-memory node data
     // and surfaces the field as a line in the card, affecting only the shown HTML (never written to disk).
-    function updateAddedLine(card, field, val){
+    function updateAddedLine(card, field, raw){
+      // coerce ANY value to a string first — a node field can be a list/number/bool (approve_prompts,
+      // confidence, technical, paths), and calling .trim() on those threw (the toggle silently failed).
+      var val=(raw==null)?"":(typeof raw==="object"?JSON.stringify(raw):String(raw));
       var line=card.querySelector('[data-ni-add="'+field+'"]');
       if(val&&val.trim()){
         if(!line){ line=document.createElement("div"); line.className="ni-added";
@@ -1038,8 +1041,8 @@ __PLAN_DATA__
       // FR-12 (not-displayed): the switch SURFACES the field's value as a card line — reveal what isn't shown
       Array.prototype.forEach.call(d.querySelectorAll("[data-ni-show]"), function(inp){
         inp.addEventListener("change", function(){
-          var f=inp.getAttribute("data-ni-show");
-          updateAddedLine(card, f, inp.checked ? (card._nodeData[f]||"") : "");
+          var f=inp.getAttribute("data-ni-show");   // pass the RAW value; updateAddedLine coerces (bool/num/list)
+          updateAddedLine(card, f, inp.checked ? card._nodeData[f] : "");
         });
       });
       return d;
