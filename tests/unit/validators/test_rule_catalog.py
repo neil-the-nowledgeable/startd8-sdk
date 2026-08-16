@@ -43,15 +43,14 @@ def _emitted_check_literals() -> set[str]:
 
 
 def test_catalog_imports_and_validates():
-    """Importing rule_catalog runs `_validate_catalog()` (D2 no-dot + severity checks) at import.
-
-    Re-importing must not raise; and the module-level validator must be present.
-    """
+    """Importing rule_catalog validates the catalog at import (D2 no-dot + severity) via its shared
+    `RuleCatalog` authority. Re-importing must not raise; the module still exposes the public API."""
     import importlib
 
-    importlib.reload(rule_catalog)  # re-runs _validate_catalog() — must not raise
-    assert callable(rule_catalog._validate_catalog)
-    rule_catalog._validate_catalog()  # explicit re-run, belt-and-suspenders
+    importlib.reload(rule_catalog)  # re-runs RuleCatalog(...) validation at import — must not raise
+    assert rule_catalog.RULE_CATALOG  # data loaded
+    assert callable(rule_catalog.rule_severity) and callable(rule_catalog.qualified_id)
+    assert rule_catalog.qualified_id("bare_except_pass") == "startd8-semantic.bare_except_pass"
 
 
 def test_completeness():
