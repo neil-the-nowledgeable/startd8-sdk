@@ -927,22 +927,9 @@ __PLAN_DATA__
     // FR-6: display-logic templates — when the View Definition is shown, EVERY region renders a
     // slot-annotated skeleton of WHAT it displays and FROM WHAT it derives (built from the real render
     // classes), so no region is blank. Injected client-side in frame mode only; removed on leaving it.
-    var FRAME_TEMPLATES={
-      mast:'<span class="eyebrow">‹eyebrow›</span><div class="vd-h">‹headline›</div>'+
-           '<div class="vd-sub">‹why› · ‹do›  — reading guidance (profile.why / profile.do)</div>',
-      glance:'<div class="vd-t">‹status roll-up ← status_counts›  ·  ‹shape ← plan.shape›  ·  ‹content›  ·  ‹cascade›</div>',
-      toolbar:'<div class="vd-t">‹View ← audience / delivery-role›  ·  ‹Depth ← fluency lens›</div>',
-      legend:'<div class="vd-t">‹● dot› ‹meaning›  — one per profile.statuses[]</div>',
-      seclead:'‹section lead ← profile.section_lead›',
-      outline:'<div class="ndt-cap">node card — how a requirement value renders</div>'+
-        '<div class="item"><div class="row">'+
-          '<span class="lbl">‹label / name›</span>'+
-          '<span class="lbl-key">‹key›</span>'+
-          '<span class="badge ndt-badge">‹status›</span></div>'+
-        '<div class="det">‹detail — the node body text›</div>'+
-        '<div class="lives"><span class="lk">Lives</span>‹type›: ‹ref›</div>'+
-        '<div class="node-meta">‹meta — structural metadata (Show node metadata)›</div></div>'
-    };
+    // FR-13: the region display templates now come FROM the View Definition (payload.profile.region_templates,
+    // projected by to_render_profile) — no longer hardcoded here. The interaction below stays template-side.
+    var FRAME_TEMPLATES=(payload.profile&&payload.profile.region_templates)||{};
     function syncFrameTemplates(on){
       Object.keys(FRAME_TEMPLATES).forEach(function(id){
         var el=document.getElementById(id); if(!el) return;
@@ -984,12 +971,9 @@ __PLAN_DATA__
     // FR-10: per-cell inspector — under each card, show the node's data (every field + value) next to HOW
     // each field is displayed (field→element mapping, or "not displayed"). Uses each card's stashed
     // _nodeData (exact, not order-guessed). Re-applied after each renderAll (combined into the hook below).
-    // Each displayed field maps to how it renders + the card SELECTOR its on/off switch toggles (FR-12).
-    var INSPECT_MAP={
-      label:{how:"→ .lbl (title)", sel:".lbl"}, key:{how:"→ .lbl-key (bare key)", sel:".lbl-key"},
-      status:{how:"→ status badge", sel:".badge"}, detail:{how:"→ .det (body text)", sel:".det"},
-      lives:{how:"→ .lives (type: ref)", sel:".lives"}, was:{how:"→ .was (former state)", sel:".was"},
-      meta:{how:"→ .node-meta (Show node metadata)", sel:".node-meta"}};
+    // FR-13: the field→element mapping now comes FROM the View Definition (payload.profile.field_display,
+    // projected by to_render_profile) — no longer hardcoded. Each entry = {how it renders, card selector}.
+    var INSPECT_MAP=(payload.profile&&payload.profile.field_display)||{};
     // FR-11: editing a not-displayed field is NON-PERSISTENT — it updates the card's in-memory node data
     // and surfaces the field as a line in the card, affecting only the shown HTML (never written to disk).
     function updateAddedLine(card, field, raw){

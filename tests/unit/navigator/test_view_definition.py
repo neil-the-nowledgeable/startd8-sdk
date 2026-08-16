@@ -549,6 +549,26 @@ def test_base_models_the_region_layer_taxonomy():
     assert used == set(regions["layers"]), "every used layer must be declared in the layer schema"
 
 
+def test_display_logic_data_lives_in_the_definition_and_projects_to_the_profile():
+    # FR-13: the field→element mapping + region display templates are DEFINITION data, projected onto
+    # the profile (not hardcoded in the template). A domain delta can reconfigure either via the cascade.
+    resolved = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+    assert resolved.field_display["status"]["sel"] == ".badge"          # the inspector mapping
+    assert resolved.field_display["detail"]["sel"] == ".det"
+    assert "node card — how a requirement value renders" in resolved.region_templates["outline"]
+    # projected onto the RenderProfile
+    prof = to_render_profile(resolved)
+    assert prof.field_display["status"]["sel"] == ".badge"
+    assert set(prof.region_templates) == {"mast", "glance", "toolbar", "legend", "seclead", "outline"}
+    assert "field_display" in prof.to_dict() and "region_templates" in prof.to_dict()
+    # a domain delta overrides one field's selector atomically (keyed cascade), siblings kept
+    child = ViewDefinition(name="fdchild", extends="base",
+                           field_display={"status": {"sel": ".status-pill", "how": "→ pill"}})
+    rc = resolve(child, {**DEFINITION_REGISTRY, "fdchild": child})
+    assert rc.field_display["status"]["sel"] == ".status-pill"          # overridden
+    assert rc.field_display["detail"]["sel"] == ".det"                  # sibling kept
+
+
 def test_control_and_regions_ride_the_cascade_by_id():
     # a domain can override one control group label / one region anatomy label atomically (keyed merge).
     child = ViewDefinition(
