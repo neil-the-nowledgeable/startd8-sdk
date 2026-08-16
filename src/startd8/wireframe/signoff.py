@@ -50,6 +50,12 @@ def load_signoff(path: Path) -> dict:
             "title": s.get("title") or s["key"],
             "status": status if status in _STATUSES else "unreviewed",
             "note": (s.get("note") or "").strip(),
+            # Phase 2: optional APPROVE? prompts carried from the navigator export.
+            "approve_prompts": [
+                str(q).strip()
+                for q in (s.get("approve_prompts") or [])
+                if str(q).strip()
+            ],
         })
     return {
         "app": data.get("app") or "(unknown app)",
@@ -127,6 +133,14 @@ def format_signoff(signoff: dict) -> str:
     if unrev:
         titles = ", ".join(s["title"] for s in secs if s["status"] == "unreviewed")
         lines.append(f"[yellow]Not yet reviewed:[/yellow] {titles}")
+    prompted = [s for s in secs if s.get("approve_prompts")]
+    if prompted:
+        lines.append("")
+        lines.append("[bold]Approve? prompts (from the navigator):[/bold]")
+        for s in prompted:
+            lines.append(f"  · {s['title']}")
+            for q in s["approve_prompts"]:
+                lines.append(f"      — {q}")
     if not flagged and not unrev:
         lines.append("[green]✓ fully signed off — every section approved.[/green]")
     return "\n".join(lines)

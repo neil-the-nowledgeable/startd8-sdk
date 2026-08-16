@@ -48,6 +48,7 @@ from .cli_consult import consult_app
 from .cli_kickoff_panel import kickoff_panel_app
 from .cli_assist import assist_app
 from .cli_nav import nav_app
+from .navigator.cli_navigator import navigator_app
 from .cli_polish import polish_app
 from .cli_openapi import openapi_app
 from .cli_validate import validate_command
@@ -1296,6 +1297,7 @@ app.command("validate")(validate_command)
 # ──────────────────────────────────────────────────────────────────────────
 app.add_typer(assist_app, name="assist")
 app.add_typer(nav_app, name="nav")
+app.add_typer(navigator_app, name="navigator")
 app.add_typer(polish_app, name="polish")
 app.add_typer(capdevpipe_app, name="capdevpipe")
 app.add_typer(fde_app, name="fde")

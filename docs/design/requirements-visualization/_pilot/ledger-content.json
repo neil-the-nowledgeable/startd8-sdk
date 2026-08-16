@@ -1,0 +1,129 @@
+{
+  "FR-1": [
+    {
+      "metrics": {
+        "approve_prompts": true,
+        "canonical": "cc:intent:sdk-node-home:requirement:fr-1",
+        "confidence": 0.6,
+        "content_score": 0.9,
+        "does": "The SDK exposes a frozen Node + NodeEvidence + derive_status surface field-compatible with ContextCore's `navigator/models.py` and NODE-SCHEMA (`key`, `does`, `wont`, `lives[]`, `ships_when`, `confidence`, `triggers`, `children`, `category`, `orientation`, `route_state`; optional `status_facets` / `attributes` for compatibility).",
+        "fr": "FR-1",
+        "fr_health": "n/a",
+        "handle": "requirement/sdk-exposes-a-node-schema-compatible-node-5a728ad3",
+        "lives_count": 1,
+        "lives_resolve": 1,
+        "lives_types": {
+          "code": 1
+        },
+        "name": "SDK exposes a NODE-SCHEMA-compatible Node \u00b7 NodeEvidence \u00b7 derive_status surface so navigators keep typed grounding without ContextCore",
+        "pilot_score": 0.8,
+        "serves": "O-2",
+        "ships_when": false,
+        "status_key": "grounded",
+        "title": "Node model in the SDK",
+        "touches": "`src/startd8/navigator/models.py`",
+        "verify": "`derive_status(has_code_evidence=True, maturity=\"beta\")` returns **`built`**; `maturity=\"alpha\"` (or development/experimental) returns **`thin`**; a field-compat golden (shared field names/types vs a pinned NODE-SCHEMA / frozen fixture \u2014 **no** `import contextcore`) passes",
+        "wont": []
+      },
+      "phase": "baseline",
+      "top_gap": "WONT \u2014 no authored non-goals/constraints (WON'T) for this node.",
+      "when": "2026-08-14T20:08:01.868087+00:00"
+    }
+  ],
+  "FR-4": [
+    {
+      "metrics": {
+        "approve_prompts": true,
+        "canonical": "",
+        "confidence": 0.9,
+        "content_score": 0.6,
+        "does": "When confidence is unset, `default_confidence(lives)` (\u2605 SDK-owned \u2014 **not** a CC port) computes the wireframe-navigator rubric (0.9 code+test \u00b7 0.6 partial/doc-only \u00b7 0.4 pure spec).",
+        "fr": "FR-4",
+        "fr_health": "n/a",
+        "handle": "",
+        "lives_count": 2,
+        "lives_resolve": 2,
+        "lives_types": {
+          "code": 1,
+          "test": 1
+        },
+        "name": "",
+        "pilot_score": 1.0,
+        "serves": "O-2",
+        "ships_when": false,
+        "status_key": "grounded",
+        "title": "Default confidence heuristic (SDK-owned)",
+        "touches": "`src/startd8/navigator/models.py`, `tests/unit/navigator/test_models.py`",
+        "verify": "code+test lives and no authored confidence \u21d2 0.9 (\u00b1\u03b5); helper exists only under `startd8.navigator`",
+        "wont": []
+      },
+      "phase": "baseline",
+      "top_gap": "NAME \u2014 no deterministic semantic name (Name:); identifying this by its key alone is the anti-pattern. Author actor \u00b7 action \u00b7 object \u00b7 outcome (handle + canonical derive).",
+      "when": "2026-08-14T20:08:55.409828+00:00"
+    }
+  ],
+  "FR-6": [
+    {
+      "metrics": {
+        "approve_prompts": true,
+        "canonical": "",
+        "confidence": 0.9,
+        "content_score": 0.6,
+        "does": "Project a det-req/0.1 file into FR Nodes (does / Verify / Touches / optional evidence locators / derived fr_health). Default coupling = **vendor_thin** evidence/`fr_health` helper with SCHEMA/extract cite; optional `DET_REQ_KIT` subprocess; forbid required sibling-path import; do not fork the kit schema. Full V-1..V-5 plan-DAG parity is out of scope.",
+        "fr": "FR-6",
+        "fr_health": "n/a",
+        "handle": "",
+        "lives_count": 3,
+        "lives_resolve": 3,
+        "lives_types": {
+          "code": 2,
+          "test": 1
+        },
+        "name": "",
+        "pilot_score": 1.0,
+        "serves": "O-1",
+        "ships_when": false,
+        "status_key": "grounded",
+        "title": "Minimal det-req requirements source",
+        "touches": "`src/startd8/navigator/sources_requirements.py`, `tests/unit/navigator/test_sources_and_cli.py`, navigator-build",
+        "verify": "fixture REQ with a commit-anchored code locator builds exit 0 with typed evidence; done-claim without locator \u2260 grounded; unit tests pass with det-req-kit **absent** from `sys.path`",
+        "wont": []
+      },
+      "phase": "baseline",
+      "top_gap": "NAME \u2014 no deterministic semantic name (Name:); identifying this by its key alone is the anti-pattern. Author actor \u00b7 action \u00b7 object \u00b7 outcome (handle + canonical derive).",
+      "when": "2026-08-14T20:08:52.993537+00:00"
+    }
+  ],
+  "FR-8": [
+    {
+      "metrics": {
+        "approve_prompts": true,
+        "canonical": "",
+        "confidence": 0.9,
+        "content_score": 0.6,
+        "does": "Classic app-scaffold wireframe with no Node fields / no profile remains byte-identical (HTML profile path **and** compose JSON omit-when-empty).",
+        "fr": "FR-8",
+        "fr_health": "n/a",
+        "handle": "",
+        "lives_count": 3,
+        "lives_resolve": 3,
+        "lives_types": {
+          "code": 1,
+          "test": 2
+        },
+        "name": "",
+        "pilot_score": 1.0,
+        "serves": "O-2",
+        "ships_when": false,
+        "status_key": "grounded",
+        "title": "App-path byte identity",
+        "touches": "`src/startd8/wireframe/plan.py`, `tests/unit/wireframe/test_render_profile.py`, `tests/unit/wireframe/test_determinism_and_json.py`",
+        "verify": "`test_no_profile_is_byte_identical` + canonical JSON determinism pass without golden edits; classic compose JSON keyset unchanged",
+        "wont": []
+      },
+      "phase": "baseline",
+      "top_gap": "NAME \u2014 no deterministic semantic name (Name:); identifying this by its key alone is the anti-pattern. Author actor \u00b7 action \u00b7 object \u00b7 outcome (handle + canonical derive).",
+      "when": "2026-08-14T20:08:57.326650+00:00"
+    }
+  ]
+}
