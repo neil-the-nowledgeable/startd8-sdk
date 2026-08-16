@@ -34,6 +34,7 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 | Spec | What | Why open |
 |---|---|---|
 | **REQ-08 NL-programming pipeline provenance** | 8 FRs; `Stage`-as-Node (extend, don't fork), `Verify:`-as-oracle, extends `provenance.py` | **specced, not built** |
+| **REQ-12 Chrome-binding grammar** (`feature/…-chrome-from-f0e5970e`) | 6 FRs; architecture §7 step 3 — lift the FR-17/18 masthead derivation into declarative `{key}`/`{title}`/`{semantic_name}` chrome bindings resolved by a tiny grammar against a per-doc context at projection time; `requirements_profile_for` becomes a thin caller. §0 reflective insight: the compound page-title's 3-way degradation stays out of the single-field grammar (NR-2). Byte-identity for unbound chrome + non-req domains + app path. Authored via `/reflective-requirements`. **BUILD-READY** (stage-0 ✓, 6/6 named FRs) — next loop delivery | **specced, not built** |
 
 ---
 
