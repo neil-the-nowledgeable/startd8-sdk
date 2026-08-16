@@ -200,7 +200,8 @@ def test_inspect_cells_shows_per_node_data_and_display_mapping():
     # surfaces the value. Both switch flavours + their handlers ship.
     assert "data-ni-toggle=" in profiled and "data-ni-show=" in profiled and 'class="ni-sw"' in profiled
     assert 'el.style.display = inp.checked ? "" : "none"' in profiled   # displayed: per-card element toggle
-    assert "inp.checked ? (card._nodeData[f]||\"\") : \"\"" in profiled  # not-displayed: surface the value
+    assert "inp.checked ? card._nodeData[f] : \"\"" in profiled          # not-displayed: surface the raw value
+    assert 'typeof raw==="object"?JSON.stringify(raw)' in profiled        # coerce list/num/bool (the toggle bug fix)
     assert 'class="node-inspect"' not in profiled            # injected on toggle only, not pre-rendered
     # app path byte-identical (inspector is profiled-navigator-only)
     assert render_html(_plan()) == render_html(_plan(), profile=None)
