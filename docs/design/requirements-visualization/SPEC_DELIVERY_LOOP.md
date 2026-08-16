@@ -123,3 +123,24 @@ delivery to reuse:
   until a later step consumes it — dormancy by design, not by accident. Example: REQ-10 re-expressed
   `REQUIREMENTS_PROFILE`/`CAPABILITY_PROFILE` as projections of new `ViewDefinition`s, reproducing
   both literals exactly while giving `resolve`/`to_render_profile` real call sites.
+
+- **Additive Source Recipe** (proved by REQ-08, `e870232c`, following REQ-10's cascade). To add a whole
+  new navigator domain/source **without touching `Node` or any renderer**: (1) a new `sources_<domain>.py`
+  returning `List[Node]` with `category="<domain>"` + curated `attributes` (no `Node` field added —
+  guarded by the `node_field_names()` golden); (2) a `<DOMAIN>_DEFINITION = ViewDefinition(extends="base",
+  vocabulary=…, chrome=…)` registered in `DEFINITION_REGISTRY`, with `vocabulary.statuses` **keyed by the
+  `NodeStatus` ids** the nodes actually carry (`built`/`spec`), projected via `to_render_profile`; (3) an
+  additive `--source <domain>` arm in `cli_navigator.build`; (4) reuse the tree/graph/a11y renderers
+  unedited. Byte-identity holds by construction (the app-scaffold path is untouched); the whole domain is
+  strictly additive. Example: REQ-08's `pipeline` source (6 stage Nodes + `PIPELINE_DEFINITION`).
+  *Value-path caveat this delivery surfaced:* a new public helper consumed only by its own test
+  (REQ-08's `topo_order`) reads "reachable" to the reachability probe but is **production-dormant** — the
+  Phase-2.5 inventory must grep for a **non-test** caller.
+
+- **Self-verifying-spec oracle** (proved by REQ-08). A det-req `Verify:` corpus can be promoted to a
+  *runnable* acceptance suite: classify each clause (extract the single runnable span) → opt-in evaluate
+  under a **read-only-subcommand allow-list** (argv, no-shell), with a strict honesty boundary — `pass`
+  asserts only that the extracted command exited 0; the prose assertion stays human-checked. Proof: REQ-08's
+  `navigator verify --run-oracle` ran FR-3's *own* Verify clause and returned `pass`. Security note the
+  harvest proved: an allow-list that matches bare flag tokens must normalise the `--flag=value` form or it
+  is evadable (`--out=x` slipped a repo-write past the guard until HTH phase-1 fixed it).

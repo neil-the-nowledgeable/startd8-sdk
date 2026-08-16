@@ -218,6 +218,19 @@ def test_run_oracle_runs_readonly_command_and_reports_pass(tmp_path):
     assert v["reason"] == "exit 0"
 
 
+def test_verify_html_projects_verdicts_to_nodes(tmp_path):
+    """FR-7 (D-D) / harvest EB-1: verify --format html renders verdicts as oracle-verdict Nodes
+    through the existing tree renderer (no new shell). Previously the html arm had no test."""
+    doc = _fixture_doc(tmp_path, ["`startd8 navigator view-definition` exits 0."])
+    out = tmp_path / "verdicts.html"
+    res = RUNNER.invoke(
+        app, ["navigator", "verify", "--requirements", str(doc), "--format", "html", "--out", str(out)]
+    )
+    assert res.exit_code == 0, res.output
+    html = out.read_text(encoding="utf-8")
+    assert "oracle-verdict" in html and "FR-1" in html
+
+
 def test_run_oracle_refuses_generate_write_and_self_exec():
     """FR-5: generate (non-nav verb), --out (write flag), and self-exec all -> skip."""
     ds = [

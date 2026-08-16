@@ -22,3 +22,22 @@ reachability probe reports no dormant lens symbols.
 
 Each row, when picked up, re-grounds at build time (a backlog item is a belief — re-verify the claim +
 the code before building).
+
+---
+
+## REQ-08 (NL-Programming pipeline) — HTH harvest 2026-08-16 (`86f5d9f3`)
+
+From the Stage-7 harvest of the 9th delivery. Two XS rows were auto-applied in the harvest; three
+remain as triaged rows (re-ground before building — a backlog item is a belief).
+
+| ID | Effort | Row | Evidence | Status |
+|----|--------|-----|----------|--------|
+| ~~**R8-EB-1**~~ ✅ | XS | Add a test for `verify --format html` (verdicts-as-Nodes arm) | `cli_navigator.py:303` html arm had no test | **DONE** (harvest) |
+| ~~**R8-EB-2**~~ ✅ | XS | Remove dead `'verify'` from `_READONLY_NAV_SUBCOMMANDS` (self-exec catches it first) | `verify_oracle.py:58` | **DONE** (harvest) |
+| **R8-EB-3** | S | Wire `topo_order()` as a fail-loud build-time acyclicity assert in `nodes_from_pipeline` (or demote to a private test helper) — it is production-dormant (test-only caller) | `sources_pipeline.py` `topo_order`; only caller `test_pipeline_source.py:95` | open |
+| **R8-EB-4** | S | Implement the D-B "FR id" query in `pipeline_provenance` (resolve an FR-id → its `Lives`/`Touches` file, then walk) — currently file-path only (soft-labelled) | `provenance.py` `_owning_stage_key` prefix-matches paths only | open |
+| **R8-EB-5** | M | Expose `pipeline_provenance` via an operator CLI surface (`navigator provenance --query <path>`) — today only the FR-7 render-fold consumes it; no standalone entry point | `cli_navigator.py:141` sole caller | open |
+
+**Value-path lesson carried forward:** the GATE-2 reachability probe scored `topo_order` "wired" on a
+**test-only** reference — Phase-2.5 must grep for a *non-test* caller to catch production-dormancy the
+probe can't see.

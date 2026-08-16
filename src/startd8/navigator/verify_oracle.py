@@ -54,8 +54,9 @@ _JOIN_RE = re.compile(r"(?<!&)&&(?!&)|(?<!\|)\|\|?(?!\|)|;")
 # Backtick-quoted spans in a clause (single backtick pairs).
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 
-# Read-only ``startd8 navigator`` subcommands that write nothing (R1-F7 / D-6).
-_READONLY_NAV_SUBCOMMANDS = frozenset({"build", "view-definition", "verify", "govern"})
+# Read-only ``startd8 navigator`` subcommands that write nothing (R1-F7 / D-6). ``verify`` is
+# intentionally NOT here — a re-entrant ``navigator verify`` is refused earlier by the self-exec guard.
+_READONLY_NAV_SUBCOMMANDS = frozenset({"build", "view-definition", "govern"})
 # Flags that make an otherwise read-only navigator invocation side-effecting (write to disk).
 _WRITE_FLAGS = frozenset({"--out", "--fix"})
 # The self-exec token prefix (R1-S7) — refuse re-entrant ``startd8 navigator verify`` execution.
