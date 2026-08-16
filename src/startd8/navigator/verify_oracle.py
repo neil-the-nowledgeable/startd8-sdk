@@ -164,6 +164,16 @@ def classify(requirements: Path) -> List[OracleDescriptor]:
     return descriptors
 
 
+def _flag_name(token: str) -> str:
+    """The flag name of a token, normalising the ``--flag=value`` form to ``--flag``.
+
+    Click/Typer accept both ``--out x`` and ``--out=x``; a guard that only matches the bare token form
+    is evadable via the ``=`` form (an authored clause could smuggle ``--out=/tmp/x`` past a write-flag
+    check). Splitting on the first ``=`` closes that gap.
+    """
+    return token.split("=", 1)[0]
+
+
 def _is_self_exec(argv: Sequence[str]) -> bool:
     """R1-S7: refuse a re-entrant ``startd8 navigator verify …`` on an argv-token prefix match."""
     return tuple(argv[:3]) == _SELF_EXEC_ARGV
@@ -186,7 +196,8 @@ def _is_readonly_allowlisted(argv: Sequence[str]) -> Tuple[bool, str]:
         return False, "non-allowlisted"
     if len(argv) < 3 or argv[2] not in _READONLY_NAV_SUBCOMMANDS:
         return False, "non-allowlisted"
-    if any(flag in _WRITE_FLAGS for flag in argv[3:]):
+    # Normalise ``--flag=value`` before matching so the ``=`` form can't smuggle a write flag past this.
+    if any(_flag_name(flag) in _WRITE_FLAGS for flag in argv[3:]):
         return False, "side-effecting"
     return True, ""
 
@@ -201,9 +212,13 @@ def _referenced_missing_path(argv: Sequence[str]) -> Optional[str]:
     input_flags = {"--requirements", "--nodes-json", "--capability-index", "--dir", "--from"}
     tokens = list(argv)
     for i, tok in enumerate(tokens):
-        if tok in input_flags and i + 1 < len(tokens):
-            candidate = Path(tokens[i + 1])
-            if not candidate.exists():
+        # Support both ``--flag value`` (value in the next token) and ``--flag=value`` (same token).
+        if "=" in tok and _flag_name(tok) in input_flags:
+            value = tok.split("=", 1)[1]
+            if value and not Path(value).exists():
+                return value
+        elif tok in input_flags and i + 1 < len(tokens):
+            if not Path(tokens[i + 1]).exists():
                 return tokens[i + 1]
     return None
 

@@ -232,6 +232,20 @@ def test_run_oracle_refuses_generate_write_and_self_exec():
     assert verdicts["FR-3"].verdict == "skip" and verdicts["FR-3"].reason == "self-exec"
 
 
+def test_run_oracle_refuses_equals_form_write_flag():
+    """Harvest H1 (security): the ``--out=x`` (equals) form must not evade the write-flag guard.
+
+    click/Typer accept both ``--out x`` and ``--out=x``; matching only the bare token let an authored
+    clause smuggle a repo-writing command past the read-only allow-list under ``--run-oracle``.
+    """
+    ds = [
+        OracleDescriptor("FR-1", KIND_COMMAND,
+                         ("startd8", "navigator", "build", "--source", "pipeline", "--out=x.html"), "x"),
+    ]
+    v = evaluate(ds, run_oracle=True)[0]
+    assert v.verdict == "skip" and v.reason == "side-effecting"
+
+
 def test_run_oracle_missing_input_is_error(tmp_path):
     """FR-5: a referenced input path that is absent → a distinct error verdict (not silent fail)."""
     ds = [OracleDescriptor(

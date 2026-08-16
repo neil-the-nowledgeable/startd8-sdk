@@ -76,7 +76,10 @@ def pipeline_provenance(
 
     A **sibling** of :func:`chrome_provenance` in the same module (Mottainai — D-4): the row schema is
     ``{element, stage, origin, value, present}`` (adds ``stage``, keeps ``value`` for parity). ``query``
-    is an FR id or a file path (D-B — explicit arg). The queried artifact is resolved to its owning stage
+    is a **file path** (D-B — explicit arg). NOTE: resolving a bare **FR id** to its ``Lives``/``Touches``
+    file first is not yet implemented — an FR-id query prefix-matches no ``sdk_artifact`` and returns the
+    not-found row, so pass the FR's file path (tracked as a CEP enhancement). The queried artifact is
+    resolved to its owning stage
     by **longest-prefix** ``sdk_artifact`` match; the walk then follows the DEPENDS-ON edges upstream to
     the requirement, emitting one ordered row per stage passed through (**including SPEC / un-built
     stages** so the trace shows the gap — R1-S10). An artifact owned by **no** stage yields a single
