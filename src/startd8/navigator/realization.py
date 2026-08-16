@@ -14,7 +14,7 @@ always stands; REQ-19 (b) fills the seam with measured construction provenance w
 from __future__ import annotations
 
 from collections import Counter
-from typing import Dict, Iterator, Optional, Protocol, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Protocol, Tuple
 
 from .models import DerivationEdge, Node, RealizationRegime
 
@@ -59,16 +59,35 @@ def resolve_edge_regime(
 
 
 def node_regime(node: Node, provenance: Optional[ProvenanceSource] = None) -> str:
-    """A single node's OWN realization regime = the regime of its incoming derivation edge(s), through
-    the seam. No edge or all-undeclared → ``unknown``; edges of one regime → that regime; edges of
-    differing regimes → ``mixed`` (a node produced by more than one transform)."""
+    """A single node's OWN realization regime, through the seam. From its incoming derivation edge(s):
+    edges of one regime → that; differing → ``mixed``. When the node has NO edge-derived regime, REQ-19
+    (b) grounds it directly from a **measured** provenance match on its ``lives`` file (threshold-gated) —
+    so a generated requirement node (lives, no edge) still gets a measured regime; else ``unknown``."""
     regimes = {resolve_edge_regime(node, e, provenance) for e in node.derivation}
     regimes.discard(RealizationRegime.UNKNOWN)
-    if not regimes:
-        return RealizationRegime.UNKNOWN
     if len(regimes) == 1:
         return next(iter(regimes))
-    return RealizationRegime.MIXED
+    if len(regimes) > 1:
+        return RealizationRegime.MIXED
+    # No edge-derived regime → REQ-19 FR-4/5: a measured per-node match via lives (edge-less generated
+    # nodes). Threshold-gated exactly like the edge seam, so a weak join degrades to unknown, never asserts.
+    measured = _measured_node_regime(node, provenance)
+    return measured if measured is not None else RealizationRegime.UNKNOWN
+
+
+def _measured_node_regime(node: Node, provenance: Optional[ProvenanceSource]) -> Optional[str]:
+    """REQ-19 FR-4: the measured regime for a node from a provenance match on its ``lives`` file, gated by
+    :data:`CONFIDENCE_THRESHOLD` (the seam's honesty firewall). ``None`` when no source, no match, a
+    below-threshold match, or a non-declarable value — never asserts what it cannot ground."""
+    if provenance is None:
+        return None
+    match = provenance.regime_for(node, None)  # a measured source joins on the node's lives, not an edge
+    if match is None:
+        return None
+    regime, confidence = match
+    if confidence < CONFIDENCE_THRESHOLD or regime not in RealizationRegime.DECLARABLE:
+        return None
+    return regime
 
 
 def _walk(node: Node) -> Iterator[Node]:
@@ -128,3 +147,51 @@ def format_determinism_line(distribution: Dict[str, int], *, grounded: bool = Fa
     )
     label = "measured" if grounded else "declared"
     return f"{counts} — {round(pct * 100)}% $0 ({label})"
+
+
+# ── REQ-19 (b) — measured realization: the join + the labeled corpus rollup ─────────────────────────
+# The navigator imports only the CONTRACT (a construction-free coupling surface, FR-7) — never a
+# construction subsystem. The per-file regime map is produced by ``realization_provenance.normalize``.
+
+def _path_of_ref(ref: str) -> str:
+    """Strip a ``git:<sha>:<path>`` evidence ref down to its bare path (the join key); others pass through."""
+    if ref.startswith("git:"):
+        parts = ref.split(":", 2)
+        return parts[2] if len(parts) == 3 else ref
+    return ref
+
+
+class MeasuredProvenanceSource:
+    """REQ-19 FR-4 — a :class:`ProvenanceSource` that joins a normalized per-file regime map to a Node's
+    ``lives`` refs by file path, yielding the node's measured ``(regime, source_confidence)`` for REQ-18's
+    seam. A node whose lives match no file yields ``None`` (no measured regime — the seam degrades to
+    declared; no crash). ``edge`` is ignored: the measurement is per-node/file, not per-transform."""
+
+    def __init__(self, per_file_map: Mapping[str, Any]):
+        self._map = per_file_map
+
+    def regime_for(self, node: Node, edge: Optional[DerivationEdge] = None) -> Optional[Tuple[str, float]]:
+        for ev in getattr(node, "lives", ()) or ():
+            rec = self._map.get(_path_of_ref(ev.ref))
+            if rec is not None:
+                return (rec.regime, rec.source_confidence)
+        return None
+
+
+def corpus_realization(
+    nodes, provenance: Optional[ProvenanceSource] = None
+) -> Tuple[Dict[str, int], bool]:
+    """REQ-19 FR-5 — the corpus regime distribution over all ``nodes`` PLUS a ``grounded`` flag: ``True``
+    when the provenance source contributed at least one **above-threshold measured** regime, so the
+    summary relabels ``measured``; else ``declared`` (the honest fallback — a corpus of only low-confidence
+    matches stays declared). Returns ``({} , False)`` for an empty/regimeless corpus."""
+    dist: Counter = Counter()
+    grounded = False
+    for root in nodes:
+        for n in _walk(root):
+            regime = node_regime(n, provenance)
+            if regime != RealizationRegime.UNKNOWN:
+                dist[regime] += 1
+            if provenance is not None and _measured_node_regime(n, provenance) is not None:
+                grounded = True
+    return dict(dist), grounded

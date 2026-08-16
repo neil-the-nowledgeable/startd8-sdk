@@ -142,3 +142,48 @@ def test_fr6_realization_facet_exposed_in_tree_facet_engine():
 
     assert "realization:deterministic" in _facets_html(_leaf("a", "deterministic"))
     assert _facets_html(Node(key="bare", does="")) == ""      # no regime, no status facets → no chip
+
+
+# ── REQ-19 FR-4/FR-5 — measured join + honest relabel ──────────────────────────────────────────────
+
+def _map(*pairs):
+    from startd8.navigator.realization_contract import parse_record
+    return {f: parse_record({"file": f, "regime": r, "source_confidence": c}) for f, r, c in pairs}
+
+
+def _node_lives(key, ref):
+    from startd8.navigator.models import NodeEvidence
+    return Node(key=key, does="", lives=(NodeEvidence(type="code", ref=ref),))
+
+
+def test_fr4_join_lives_ref_to_measured_regime():
+    """FR-4: a Node whose lives ref matches a deterministic file → measured deterministic, high confidence;
+    a node whose lives match no file → no measured regime (no crash)."""
+    from startd8.navigator.realization import MeasuredProvenanceSource
+    src = MeasuredProvenanceSource(_map(("src/x.py", "deterministic", 0.95)))
+    assert src.regime_for(_node_lives("FR-1", "src/x.py")) == ("deterministic", 0.95)
+    assert src.regime_for(_node_lives("FR-1", "git:" + "a" * 40 + ":src/x.py")) == ("deterministic", 0.95)
+    assert src.regime_for(_node_lives("FR-2", "src/unmatched.py")) is None    # no match, no crash
+
+
+def test_fr4_edgeless_node_gets_measured_regime_via_lives():
+    """FR-4: a generated requirement node (lives, NO derivation edge) still gets a measured regime."""
+    from startd8.navigator.realization import MeasuredProvenanceSource, node_regime
+    src = MeasuredProvenanceSource(_map(("src/x.py", "llm", 0.9)))
+    assert node_regime(_node_lives("FR-1", "src/x.py"), src) == "llm"
+
+
+def test_fr5_high_confidence_relabels_measured_low_degrades_declared():
+    """FR-5: above threshold the measured regime wins and grounded=True (→ measured); below it degrades to
+    the declared/unknown and grounded stays False (→ declared)."""
+    from startd8.navigator.realization import corpus_realization, format_determinism_line
+    hi = MeasuredHi = _map(("src/x.py", "deterministic", 0.95), ("src/y.py", "llm", 0.9))
+    from startd8.navigator.realization import MeasuredProvenanceSource
+    nodes = [_node_lives("FR-1", "src/x.py"), _node_lives("FR-2", "src/y.py")]
+    dist, grounded = corpus_realization(nodes, MeasuredProvenanceSource(hi))
+    assert dist == {"deterministic": 1, "llm": 1} and grounded is True
+    assert "(measured)" in format_determinism_line(dist, grounded=grounded)
+    # low-confidence corpus → no measured regime wins → grounded False → stays declared
+    lo = _map(("src/x.py", "deterministic", 0.2))
+    dist2, grounded2 = corpus_realization([_node_lives("FR-1", "src/x.py")], MeasuredProvenanceSource(lo))
+    assert grounded2 is False and dist2 == {}          # degraded → unknown → excluded

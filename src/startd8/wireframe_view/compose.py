@@ -320,7 +320,8 @@ def compose(
 
     summary_meta = (list(profile.summary_meta) if profile is not None
                     else summary_narr.get("meta") or (list(WIREFRAME_META) if role == "architect" else []))
-    _det_line = format_determinism_line(dict(plan.realization)) if plan.realization else None
+    _det_line = (format_determinism_line(dict(plan.realization), grounded=plan.realization_grounded)
+                 if plan.realization else None)
     if _det_line is not None:
         summary_meta = list(summary_meta) + [_det_line]
 

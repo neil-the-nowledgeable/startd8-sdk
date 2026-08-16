@@ -139,8 +139,14 @@ def nodes_to_wireframe_plan(
     *,
     project_root: str = ".",
     group_by: str = "category",
+    realization_provenance=None,
 ) -> WireframePlan:
-    """Build a WireframePlan from nodes (grouped into sections)."""
+    """Build a WireframePlan from nodes (grouped into sections).
+
+    ``realization_provenance`` (REQ-19, optional): a measured :class:`ProvenanceSource`; when supplied and
+    it grounds regimes above the seam threshold, the determinism-% relabels ``measured``. Absent (the
+    default) → the declared distribution (REQ-18), byte-identical.
+    """
     groups: Dict[str, List[Node]] = {}
     for node in nodes:
         key = getattr(node, group_by, None)
@@ -206,13 +212,12 @@ def nodes_to_wireframe_plan(
     # REQ-18 FR-4: the realization-regime distribution over the whole node corpus (each top-level node's
     # subtree), for the summary determinism-% line. Empty when no node declares a regime (requirement /
     # capability graphs) → the line does not render → byte-identical (FR-7).
-    from collections import Counter
+    from .realization import corpus_realization
 
-    from .realization import derive_realization
-
-    realization: Counter = Counter()
-    for n in nodes:
-        realization.update(derive_realization(n))
+    # REQ-18 declared / REQ-19 measured: one path — corpus_realization returns the distribution and a
+    # `grounded` flag (True only when a provenance source contributed above-threshold measured regimes →
+    # the label becomes `measured`; else `declared`). No provenance → empty/declared → byte-identical.
+    realization, realization_grounded = corpus_realization(nodes, realization_provenance)
 
     return WireframePlan(
         project_root=project_root,
@@ -223,7 +228,8 @@ def nodes_to_wireframe_plan(
         readiness=_sv_readiness(nodes),
         status_counts=status_counts,
         content_coverage=ContentCoverageStats(),
-        realization=dict(realization),
+        realization=realization,
+        realization_grounded=realization_grounded,
     )
 
 

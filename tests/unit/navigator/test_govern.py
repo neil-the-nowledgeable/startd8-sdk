@@ -309,3 +309,28 @@ def test_invariant_9_fires_only_for_realized_llm_target_with_empty_verify():
     det = Node(key="FR-1", does="", lives=lives, verify="",
                derivation=(DerivationEdge(from_key="up", regime="deterministic"),))
     assert check_realization_invariant([det]) == []
+
+
+# ── REQ-19 FR-6 — planned-vs-realized determinism-regression govern finding ────────────────────────
+
+def test_fr6_determinism_regression_finding():
+    from startd8.navigator.govern import check_determinism_regression
+    from startd8.navigator.models import DerivationEdge, Node, NodeEvidence
+    from startd8.navigator.realization import MeasuredProvenanceSource
+    from startd8.navigator.realization_contract import parse_record
+
+    # a node PLANNED deterministic (declared edge) whose file MEASURES llm → regression
+    node = Node(key="FR-1", does="",
+                lives=(NodeEvidence(type="code", ref="src/x.py"),),
+                derivation=(DerivationEdge(from_key="up", regime="deterministic"),))
+    measured_llm = MeasuredProvenanceSource(
+        {"src/x.py": parse_record({"file": "src/x.py", "regime": "llm", "source_confidence": 0.95})})
+    f = check_determinism_regression([node], measured_llm, "REQ-x.md")
+    assert len(f) == 1 and f[0].check == "FR-6" and "regression" in f[0].message and f[0].fr == "FR-1"
+
+    # plan agrees with measurement (both deterministic) → no finding
+    measured_det = MeasuredProvenanceSource(
+        {"src/x.py": parse_record({"file": "src/x.py", "regime": "deterministic", "source_confidence": 0.95})})
+    assert check_determinism_regression([node], measured_det) == []
+    # no provenance → planned==measured (both declared) → no finding
+    assert check_determinism_regression([node], None) == []

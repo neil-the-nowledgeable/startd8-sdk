@@ -454,6 +454,31 @@ def _check_orphans(spec_dir: Path, docs: List[Path]) -> List[Finding]:
 # the governor
 # --------------------------------------------------------------------------- #
 
+def check_determinism_regression(nodes, provenance, doc: str = "") -> List[Finding]:
+    """REQ-19 FR-6 — planned-vs-realized self-monitoring: a node whose *planned* regime (the declared
+    regime — the router's encoded intent, ``node_regime`` with no provenance) is ``deterministic`` but
+    whose *measured* regime (``node_regime`` through the provenance source) is ``llm`` is a **determinism
+    regression** — a named finding. Bounded to SURFACING (NR-1) — never remediates. Firewall-clean: reads
+    only the realization module + the provenance contract, never a construction subsystem.
+    """
+    from .models import RealizationRegime
+    from .realization import node_regime
+
+    findings: List[Finding] = []
+    for n in nodes:
+        planned = node_regime(n, None)              # declared = the plan
+        measured = node_regime(n, provenance)       # what construction actually did
+        if planned == RealizationRegime.DETERMINISTIC and measured == RealizationRegime.LLM:
+            findings.append(Finding(
+                "FR-6", _SEVERITY_FAIL, doc or n.key,
+                f"{doc or n.key}: node {n.key!r} was PLANNED deterministic (`$0`) but MEASURED llm — a "
+                f"determinism regression (its realization drifted from its plan). Investigate the "
+                f"generation path or re-route.",
+                fr=n.key,
+            ))
+    return findings
+
+
 def check_realization_invariant(nodes, doc: str = "") -> List[Finding]:
     """REQ-18 FR-5 — invariant 9: an ``llm``-regime derivation edge obligates its target node's
     ``verify`` (the acceptance oracle) to be non-empty, firing **only once the node's ``lives`` evidence
@@ -482,11 +507,15 @@ def check_realization_invariant(nodes, doc: str = "") -> List[Finding]:
     return findings
 
 
-def govern_corpus(spec_dir: Path) -> GovernReport:
-    """Run the full 5-check governance battery over a directory of ``REQ-*.md`` docs (FR-6, read-only).
+def govern_corpus(spec_dir: Path, *, realization_provenance=None) -> GovernReport:
+    """Run the full governance battery over a directory of ``REQ-*.md`` docs (read-only).
 
     Returns a :class:`GovernReport`; ``report.exit_code`` is 0 (clean) / 1 (any fail-severity drift).
     Operational errors (missing dir) are the CLI's concern (exit 2), not this function's.
+
+    ``realization_provenance`` (REQ-19 FR-6, optional): a measured :class:`ProvenanceSource`; when supplied,
+    each doc's nodes are checked for planned-vs-realized determinism regressions. Absent → skipped (no
+    measured signal to compare against), so the default battery is unchanged.
     """
     spec_dir = Path(spec_dir)
     docs = sorted(spec_dir.glob("REQ-*.md"))
@@ -519,7 +548,12 @@ def govern_corpus(spec_dir: Path) -> GovernReport:
         # requirement edge declares an `llm` regime, so this never fires yet — it is wired + proven on
         # fixtures (test_govern) and ready for REQ-19 (b), when measured llm regimes appear.
         try:
-            report.findings.extend(check_realization_invariant(nodes_from_requirements(p), p.name))
+            _req_nodes = nodes_from_requirements(p)
+            report.findings.extend(check_realization_invariant(_req_nodes, p.name))
+            # REQ-19 FR-6: planned-vs-realized regression, only when a measured provenance source is given.
+            if realization_provenance is not None:
+                report.findings.extend(
+                    check_determinism_regression(_req_nodes, realization_provenance, p.name))
         except Exception:  # pragma: no cover - projection is itself defensive; never abort the sweep
             pass
 

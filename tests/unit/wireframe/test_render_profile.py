@@ -265,3 +265,17 @@ def test_fr7_realization_module_imports_no_construction_subsystem():
             imported.append(node.module or "")
     assert not [m for m in imported if any(f in m for f in forbidden)], \
         f"realization.py must not import construction subsystems; imports: {imported}"
+
+
+def test_req19_no_provenance_render_byte_identical_to_declared():
+    """REQ-19 FR-7: with no provenance the render is byte-identical to REQ-18's declared path — the
+    measured layer is purely additive; the declared fallback is permanent."""
+    from startd8.navigator.project import nodes_to_wireframe_plan
+    from startd8.navigator.sources_pipeline import nodes_from_pipeline
+    from startd8.wireframe_view.view import render_html
+
+    nodes = nodes_from_pipeline()
+    declared = render_html(nodes_to_wireframe_plan(nodes))                          # REQ-18 path
+    also_declared = render_html(nodes_to_wireframe_plan(nodes, realization_provenance=None))
+    assert declared == also_declared
+    assert "(declared)" in declared and "(measured)" not in declared               # pipeline is declared
