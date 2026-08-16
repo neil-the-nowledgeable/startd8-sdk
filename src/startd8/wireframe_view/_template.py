@@ -334,6 +334,17 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .rawdata .raw-cap:first-child{margin-top:0}
   .rawdata .raw-json{font-family:var(--mono);font-size:11.5px;line-height:1.5;color:#e8e2d4;
     white-space:pre-wrap;word-break:break-word;margin:0;max-height:440px;overflow:auto}
+  /* FR-9: paging — hide the cards/sections not on the current page, and a prev/next bar below the outline. */
+  .pg-hidden{display:none !important}
+  .pg-empty{display:none !important}
+  .pagebar{display:flex;align-items:center;gap:12px;margin:14px 0 0;padding:9px 14px;background:var(--card);
+    border:1px solid var(--line);border-radius:20px;font-size:12.5px;color:var(--ink2)}
+  .pagebar[hidden]{display:none}
+  .pagebar .pg-count{flex:1;text-align:center;font-family:var(--mono);font-size:12px}
+  .pagebar .pg-btn{font:inherit;font-size:12.5px;color:#fff;background:var(--accent);border:1px solid var(--accent);
+    border-radius:16px;padding:5px 13px;cursor:pointer}
+  .pagebar .pg-btn:hover:not([disabled]){background:var(--accent2)}
+  .pagebar .pg-btn[disabled]{opacity:.4;cursor:default}
 
   /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
   .status-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
@@ -374,6 +385,8 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   <hr class="rule">
   <p class="section-lead" id="seclead" data-layer="descriptive" data-scaffold="section lead — profile.section_lead">What your app includes</p>
   <main id="outline" data-layer="node" data-scaffold="outline — node sections + cards (the node-driven layer)"></main>
+  <!-- FR-9: paging bar — prev/next through the requirement nodes N at a time (shown when a finite size is picked). -->
+  <nav class="pagebar" id="pagebar" aria-label="Paging" hidden></nav>
   <div class="signbar" id="signbar"></div>
   <footer class="closing" id="closing" hidden></footer>
   <!-- FR-8: raw-data debug panel — populated + shown by the Debug group's Raw data / Node data toggles. -->
@@ -396,6 +409,7 @@ __PLAN_DATA__
   var VARS = payload.variants || {}, cur = payload.default;   // QW-1: embedded audience variants
   var KITS = payload.kits || {};                              // EC-4: delivery-role kits (overlay metadata)
   var data, EU, s;   // (re)set by renderAll() for the currently-selected variant
+  var _pagingHook=null;   // FR-9: re-applied after each renderAll so paging survives a lens/depth re-render
 
   // EC-4: which base voice a role renders as (a kit → its declared base; a base voice → itself).
   function voiceOf(role){ return (KITS[role] && KITS[role].base) || role; }
@@ -744,6 +758,7 @@ __PLAN_DATA__
     })();
     renderSignbar();   // EC-2: sign-off progress + export
     applyDefinitionOverride();   // REQ-14: apply the resolved control/region deltas over the defaults
+    if(_pagingHook) _pagingHook();   // FR-9: re-page the freshly-rendered cards
   }
 
   // REQ-14 (FR-3/FR-5/FR-7): apply a resolved ViewDefinition's control + regions as an ADDITIVE runtime
@@ -869,6 +884,12 @@ __PLAN_DATA__
       '<div class="dbg-group" data-group="debug">Debug <span class="dbg-hint">· raw</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="rawData"><span>Raw data</span></label>'+
       '<label class="dbg-opt"><input type="checkbox" id="nodeData"><span>Node data</span></label>'+
+      // ── PAGING: show N requirement nodes at a time + page through the rest (FR-9, pick-one) ──────
+      '<div class="dbg-group" data-group="paging">Paging <span class="dbg-hint">· show N at a time</span></div>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="pageAll" checked><span>All</span></label>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="page10"><span>10</span></label>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="page5"><span>5</span></label>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="page1"><span>1 at a time</span></label>'+
       // ── PROVENANCE: the live readout stays at the bottom ──────────────────────────────────────
       prov;
     var viewReq=document.getElementById("viewRequirement"), viewDef=document.getElementById("viewDefinition");
@@ -934,6 +955,43 @@ __PLAN_DATA__
       el.innerHTML=blocks; el.hidden=!(rawData.checked||nodeData.checked);
     }
     rawData.onchange=renderRawData; nodeData.onchange=renderRawData;
+    // FR-9: paging over the requirement nodes — pick-one page size shows N cards at a time; the #pagebar
+    // pages through the rest, down to one at a time. Runs after each renderAll (via _pagingHook) so it
+    // survives a lens/depth re-render. Operates on the real node cards (not the frame display template).
+    var pageAll=document.getElementById("pageAll"), page10=document.getElementById("page10"),
+        page5=document.getElementById("page5"), page1=document.getElementById("page1"), _page=0;
+    function pageSize(){ return page1.checked?1 : page5.checked?5 : page10.checked?10 : Infinity; }
+    function pagedCards(){
+      return Array.prototype.filter.call(document.querySelectorAll("#outline .item"),
+        function(el){ return !el.closest(".vd-template"); });   // real cards only, not the display template
+    }
+    function applyPaging(){
+      var bar=document.getElementById("pagebar"), cards=pagedCards(), sz=pageSize();
+      var secs=document.querySelectorAll("#outline details.sec");
+      if(sz===Infinity){
+        cards.forEach(function(c){ c.classList.remove("pg-hidden"); });
+        secs.forEach(function(sc){ sc.classList.remove("pg-empty"); });
+        bar.hidden=true; bar.innerHTML=""; return;
+      }
+      var total=cards.length, pages=Math.max(1, Math.ceil(total/sz));
+      if(_page>=pages) _page=pages-1; if(_page<0) _page=0;
+      var start=_page*sz, end=Math.min(start+sz, total);
+      cards.forEach(function(c,i){ c.classList.toggle("pg-hidden", i<start||i>=end); });
+      secs.forEach(function(sc){
+        var vis=Array.prototype.some.call(sc.querySelectorAll(".item"), function(c){
+          return !c.classList.contains("pg-hidden") && !c.closest(".vd-template"); });
+        sc.classList.toggle("pg-empty", !vis);
+      });
+      bar.innerHTML='<button class="pg-btn" id="pg-prev"'+(_page===0?' disabled':'')+'>‹ prev</button>'+
+        '<span class="pg-count">showing '+(total?start+1:0)+'–'+end+' of '+total+'  ·  page '+(_page+1)+' / '+pages+'</span>'+
+        '<button class="pg-btn" id="pg-next"'+(_page>=pages-1?' disabled':'')+'>next ›</button>';
+      bar.hidden=false;
+      var pv=document.getElementById("pg-prev"), nx=document.getElementById("pg-next");
+      if(pv) pv.onclick=function(){ _page--; applyPaging(); };
+      if(nx) nx.onclick=function(){ _page++; applyPaging(); };
+    }
+    pageAll.onchange=page10.onchange=page5.onchange=page1.onchange=function(){ _page=0; applyPaging(); };
+    _pagingHook=applyPaging;   // renderAll re-applies paging after rebuilding the cards
     // `--source frame`: reflect the requirement-free frame in the picker so toggling back works.
     if(payload.frame){ viewDef.checked=true; viewReq.checked=false; }
     syncView();
