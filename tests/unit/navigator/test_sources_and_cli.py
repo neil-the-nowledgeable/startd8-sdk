@@ -25,6 +25,27 @@ _REQ01 = Path("docs/design/requirements-visualization/REQ-01-sdk-node-home.md")
 RUNNER = CliRunner()
 
 
+# ---- EC-1: `navigator view-definition` JSON export (the cross-repo VIEW-SCHEMA seam) ----
+def test_view_definition_cli_dumps_one_resolved_definition():
+    res = RUNNER.invoke(app, ["navigator", "view-definition", "--name", "capability"])
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.stdout)
+    # resolved: theme is flattened from the base ⊕ capability's accent override
+    assert payload["theme"]["accent"] == "#3a6a94"
+    assert payload["theme"]["ink"] == "#241f17"          # inherited from base
+    assert payload["vocabulary"]["gap_noun"] == "capability"
+
+
+def test_view_definition_cli_dumps_whole_registry_and_rejects_unknown():
+    res = RUNNER.invoke(app, ["navigator", "view-definition"])
+    assert res.exit_code == 0, res.output
+    reg = json.loads(res.stdout)
+    assert {"base", "requirements", "capability", "node-schema"} <= set(reg)
+    bad = RUNNER.invoke(app, ["navigator", "view-definition", "--name", "nope"])
+    assert bad.exit_code == 1
+    assert "unknown definition" in bad.output
+
+
 # ---- FR-17: deterministic masthead identity (derived, not static profile copy) ----
 def test_requirement_identity_extracts_key_title_semantic():
     idy = requirement_identity(_REQ01)

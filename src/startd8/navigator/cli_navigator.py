@@ -34,6 +34,7 @@ from .sources_capability import (
 )
 from .sources_node_schema import NODE_SCHEMA_PROFILE, nodes_from_node_schema
 from .sources_requirements import nodes_from_requirements, requirements_profile_for
+from .view_definition import DEFINITION_REGISTRY, resolve
 
 navigator_app = typer.Typer(
     help="NODE-SCHEMA navigator — render requirements / capability-index as Nodes.",
@@ -422,3 +423,45 @@ def govern(
             )
 
     raise typer.Exit(_EXIT_DRIFT if not report.clean else _EXIT_OK)
+
+
+@navigator_app.command("view-definition")
+def view_definition(
+    name: Optional[str] = typer.Option(
+        None, "--name",
+        help="Definition to resolve + dump (e.g. requirements | capability | node-schema | base). "
+        "Omit to dump the whole registry.",
+    ),
+    resolved: bool = typer.Option(
+        True, "--resolved/--raw",
+        help="Dump the RESOLVED definition (extends chain flattened, default) or the raw authored delta.",
+    ),
+) -> None:
+    """Dump a View Definition (REQ-10) as JSON — the cross-repo ``VIEW-SCHEMA`` export seam (EC-1).
+
+    Serializes via the definition's own ``to_dict`` so an off-repo adopter (legal · benchmark · dev-os)
+    can author its presentation as a base + a thin delta and consume it without importing Python.
+    ``--name`` selects one definition; omitted, it dumps every definition in the registry.
+    """
+    try:
+        if name is not None:
+            key = name.strip().lower()
+            if key not in DEFINITION_REGISTRY:
+                console.print(
+                    f"[red]error:[/red] unknown definition {name!r} "
+                    f"(known: {', '.join(sorted(DEFINITION_REGISTRY))})"
+                )
+                raise typer.Exit(_EXIT_ERR)
+            defn = DEFINITION_REGISTRY[key]
+            payload = resolve(defn, DEFINITION_REGISTRY).to_dict() if resolved else defn.to_dict()
+        else:
+            payload = {
+                k: (resolve(d, DEFINITION_REGISTRY).to_dict() if resolved else d.to_dict())
+                for k, d in DEFINITION_REGISTRY.items()
+            }
+    except (KeyError, ValueError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+
+    sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
+    raise typer.Exit(_EXIT_OK)
