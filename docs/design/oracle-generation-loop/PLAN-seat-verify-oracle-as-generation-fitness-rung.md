@@ -12,7 +12,7 @@
 
 | Seam | file:line | What it means |
 |------|-----------|---------------|
-| Oracle classify (reuse) | `verify_oracle.py:144` `classify()` → `OracleDescriptor{fr_id,kind,command_argv,assertion_text}` | Reuse for span extraction. |
+| Oracle classify (**do NOT reuse for generated-app clauses — R1-F2**) | `verify_oracle.py:144` `classify()` — `_classify_clause` promotes only `startd8`-verb spans (`_ALLOWED_VERBS`, `:38`) | A `pytest`/`curl` clause → `assertion`; FR-1 needs **FR-2's OWN parser**, not `classify()`. |
 | Oracle evaluate (**do NOT reuse**) | `verify_oracle.py:227` `evaluate` + `:183` `_is_readonly_allowlisted` (hard `argv[1]=="navigator"`) | Structurally navigator-locked, no injectable policy → FR-1 needs a fresh runner. |
 | One-shot sandbox | `sandbox.py:123` `run_sandboxed(cmd, workspace, cfg, *, file_path)` → `SandboxResult` | For `pytest`/CLI Verify clauses (egress-deny, rlimits, pgroup kill, secret-scrub, timeout). |
 | Service sandbox | `sandbox.py:276` `run_service_sandboxed(server_cmd, workspace, port, client, *, readiness_mode, health_path)` → `ServiceResult` | For app+HTTP Verify clauses; loopback-allowed/egress-denied; guaranteed teardown. `violation` = env-failure → **degrade, not fail** (`sandbox.py:188`). |
@@ -53,6 +53,7 @@ A thin end-to-end demo is possible after FR-4 on a small hand-authored generated
 | D-5 | oracle-pass ≈ satisfied | D-3 honesty boundary; residue preserved, uncompared | FR-6/FR-7 coverage + Goodhart gate |
 
 *v1.0 — every FR mapped to a real seam; the loop's novel core is FR-1 (sandboxed runner) + FR-2 (greenfield grammar) + FR-3 (spec-derived rung), wiring FR-4 into Prime's existing regen. Reuses sandbox/ladder/Prime/classify; forks nothing.*
+*v1.1 — Post-CRP R1 (see REQ Appendix A). Seam-map corrected: `classify()` is verb-gated → FR-1 uses FR-2's own parser (R1-F2). FR-2 service clauses are a data-only probe schema (the `client(port)` runs host-side — R1-F3). FR-3 appends ORACLE last + adds `oracle_verdicts` (R1-S3/S4). FR-4 honors Prime regen preconditions + structured feedback (R1-S5/F7). FR-5 cumulative budget + monotone stall (R1-S6/F4). Build order adds a passing + a failing-then-fixable fixture app (R1-S7) and the FR-10 telemetry line (R1-S8). Novel-core unchanged; the reuse claims are now accurate.*
 
 ---
 
