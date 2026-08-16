@@ -1,6 +1,6 @@
 # ADR — Promote the acceptance oracle, human-approval gate, and change-history into the Node IR
 
-**Status:** Proposed · **Date:** 2026-08-16 · **Deciders:** navigator / Node-schema owner (human)
+**Status:** Accepted (2026-08-16 — schema owner go) · **Date:** 2026-08-16 · **Deciders:** navigator / Node-schema owner (human)
 **Affects:** `startd8-sdk/src/startd8/navigator/models.py` (canonical Node) ·
 `dev-os/NODE-SCHEMA.md` §1 (schema doc) · ContextCore Node mirror
 **Relates:** the Natural-Language Programming System thesis
