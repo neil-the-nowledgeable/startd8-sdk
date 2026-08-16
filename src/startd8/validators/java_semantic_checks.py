@@ -20,6 +20,7 @@ import re
 from typing import List, Optional
 
 from ..languages._validation_utils import get_contamination_fingerprints
+from .rule_catalog import rule_severity
 from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _SQL_KW = r'(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|TRUNCATE)\b'
@@ -42,7 +43,7 @@ def _check_system_out(source: str) -> List[SemanticIssue]:
         if re.search(r'\bSystem\s*\.\s*(?:out|err)\s*\.\s*print(?:ln)?\s*\(', line):
             issues.append(SemanticIssue(
                 check="system_out_in_service",
-                severity="warning",
+                severity=rule_severity("system_out_in_service"),
                 message=(
                     "System.out/err.println detected — "
                     "use SLF4J (LoggerFactory.getLogger()) instead"
@@ -69,7 +70,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
         if _SQL_CONCAT_RE.search(stripped):
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
-                severity="error",
+                severity=rule_severity("sql_injection_risk"),
                 message=(
                     "SQL injection risk: string concatenation in SQL query — "
                     "use PreparedStatement instead"
@@ -80,7 +81,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
         elif _SQL_FORMAT_RE.search(stripped):
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
-                severity="error",
+                severity=rule_severity("sql_injection_risk"),
                 message=(
                     "SQL injection risk: String.format() in SQL query — "
                     "use PreparedStatement instead"
@@ -123,7 +124,7 @@ def _check_interface_file_contains_class(
         ):
             issues.append(SemanticIssue(
                 check="interface_file_contains_class",
-                severity="warning",
+                severity=rule_severity("interface_file_contains_class"),
                 message=(
                     f"Interface file `{name}` contains a class declaration — "
                     f"interface files should contain ONLY the interface definition"
@@ -181,7 +182,7 @@ def _check_empty_catch_blocks(source: str) -> List[SemanticIssue]:
         if not any(iss.line == line_num for iss in issues):
             issues.append(SemanticIssue(
                 check="empty_catch_block",
-                severity="warning",
+                severity=rule_severity("empty_catch_block"),
                 message=(
                     "Empty catch block — exceptions should be logged or re-thrown"
                 ),
@@ -206,7 +207,7 @@ def _check_raw_type_usage(source: str) -> List[SemanticIssue]:
             if '<' not in rest.split('=')[0].split(';')[0]:
                 issues.append(SemanticIssue(
                     check="raw_type_usage",
-                    severity="warning",
+                    severity=rule_severity("raw_type_usage"),
                     message=(
                         f"Raw type `{type_name}` — use parameterized type "
                         f"(e.g. `{type_name}<String>`)"
@@ -240,7 +241,7 @@ def _check_missing_override(source: str) -> List[SemanticIssue]:
             if not has_override:
                 issues.append(SemanticIssue(
                     check="missing_override",
-                    severity="warning",
+                    severity=rule_severity("missing_override"),
                     message=(
                         f"Method `{m.group('name')}()` should have @Override annotation"
                     ),
@@ -261,7 +262,7 @@ def _check_missing_access_modifiers(source: str) -> List[SemanticIssue]:
             if not _ACCESS_MODIFIER_RE.search(stripped):
                 issues.append(SemanticIssue(
                     check="missing_access_modifier",
-                    severity="warning",
+                    severity=rule_severity("missing_access_modifier"),
                     message="Class declaration missing explicit access modifier",
                     line=i,
                 ))
@@ -270,7 +271,7 @@ def _check_missing_access_modifiers(source: str) -> List[SemanticIssue]:
             if not _ACCESS_MODIFIER_RE.search(stripped):
                 issues.append(SemanticIssue(
                     check="missing_access_modifier",
-                    severity="warning",
+                    severity=rule_severity("missing_access_modifier"),
                     message="Method declaration missing explicit access modifier",
                     line=i,
                 ))
@@ -287,7 +288,7 @@ def _check_wildcard_imports(source: str) -> List[SemanticIssue]:
         if _WILDCARD_IMPORT_RE.search(stripped):
             issues.append(SemanticIssue(
                 check="wildcard_import",
-                severity="warning",
+                severity=rule_severity("wildcard_import"),
                 message="Wildcard import — use explicit imports instead",
                 line=i,
             ))
@@ -347,7 +348,7 @@ def _check_package_filepath_alignment(
     if actual_pkg.lower() == expected_pkg.lower():
         return [SemanticIssue(
             check="package_case_mismatch",
-            severity="warning",
+            severity=rule_severity("package_case_mismatch"),
             message=(
                 f"Package case mismatch: declared `{actual_pkg}` "
                 f"but directory structure implies `{expected_pkg}`"
@@ -356,7 +357,7 @@ def _check_package_filepath_alignment(
 
     return [SemanticIssue(
         check="package_filepath_mismatch",
-        severity="warning",
+        severity=rule_severity("package_filepath_mismatch"),
         message=(
             f"Package `{actual_pkg}` does not match expected "
             f"`{expected_pkg}` derived from file path `{file_path}`"
@@ -417,7 +418,7 @@ def _check_python_contamination(source: str) -> List[SemanticIssue]:
             if fp in stripped:
                 issues.append(SemanticIssue(
                     check="python_contamination",
-                    severity="error",
+                    severity=rule_severity("python_contamination"),
                     message=f"Python fingerprint `{fp.strip()}` in Java file",
                     line=i,
                 ))
@@ -462,7 +463,7 @@ def _check_duplicate_methods(source: str) -> List[SemanticIssue]:
             if key in seen:
                 issues.append(SemanticIssue(
                     check="duplicate_method",
-                    severity="warning",
+                    severity=rule_severity("duplicate_method"),
                     message=(
                         f"Duplicate method `{name}({param_types})` "
                         f"(first at line {seen[key]}, again at line {i})"
@@ -528,7 +529,7 @@ def _check_gradle_version(source: str) -> List[SemanticIssue]:
             if not (min_v <= version <= max_v):
                 issues.append(SemanticIssue(
                     check="invalid_java_version",
-                    severity="error",
+                    severity=rule_severity("invalid_java_version"),
                     message=(
                         f"Java version `{version}` is outside known valid "
                         f"range ({min_v}–{max_v})"

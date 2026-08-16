@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set
 
+from .rule_catalog import rule_severity
+
 
 @dataclass(frozen=True)
 class SemanticIssue:
@@ -77,7 +79,7 @@ def check_duplicate_main_guards(tree: ast.AST) -> List[SemanticIssue]:
     if count > 1:
         issues.append(SemanticIssue(
             check="duplicate_main_guard",
-            severity="warning",
+            severity=rule_severity("duplicate_main_guard"),
             message=f"Multiple if __name__ == '__main__' guards found (lines {lines})",
             line=lines[1] if len(lines) > 1 else None,
         ))
@@ -97,7 +99,7 @@ def check_duplicate_definitions(tree: ast.AST) -> List[SemanticIssue]:
             if name in seen:
                 issues.append(SemanticIssue(
                     check="duplicate_definition",
-                    severity="warning",
+                    severity=rule_severity("duplicate_definition"),
                     message=(
                         f"Duplicate module-level definition '{name}' "
                         f"(first at line {seen[name]}, again at line {node.lineno})"
@@ -128,7 +130,7 @@ def check_bare_except_pass(tree: ast.AST) -> List[SemanticIssue]:
             ):
                 issues.append(SemanticIssue(
                     check="bare_except_pass",
-                    severity="warning",
+                    severity=rule_severity("bare_except_pass"),
                     message="Bare 'except: pass' silently swallows all exceptions",
                     line=node.lineno,
                 ))
@@ -223,7 +225,7 @@ def check_fake_work_stub(tree: ast.AST) -> List[SemanticIssue]:
         if has_sleep and not has_real_call and returns_fabricated:
             issues.append(SemanticIssue(
                 check="fake_work_stub",
-                severity="error",
+                severity=rule_severity("fake_work_stub"),
                 message=(
                     f"Function '{node.name}' simulates work with sleep() and "
                     f"returns canned data without calling any real module — "
@@ -253,7 +255,7 @@ def check_block_scoped_namespace(
         return [
             SemanticIssue(
                 check="block_scoped_namespace",
-                severity="info",
+                severity=rule_severity("block_scoped_namespace"),
                 message=(
                     "Block-scoped namespace detected — prefer file-scoped "
                     "syntax (`namespace Foo.Bar;`) for net8.0+ targets"
@@ -304,7 +306,7 @@ def check_phantom_dependencies(
                 if top not in known_packages and not _is_stdlib(top):
                     issues.append(SemanticIssue(
                         check="phantom_dependency",
-                        severity="warning",
+                        severity=rule_severity("phantom_dependency"),
                         message=f"Import '{alias.name}' — package '{top}' not in known dependencies",
                         line=node.lineno,
                     ))
@@ -314,7 +316,7 @@ def check_phantom_dependencies(
                 if top not in known_packages and not _is_stdlib(top):
                     issues.append(SemanticIssue(
                         check="phantom_dependency",
-                        severity="warning",
+                        severity=rule_severity("phantom_dependency"),
                         message=f"Import from '{node.module}' — package '{top}' not in known dependencies",
                         line=node.lineno,
                     ))
