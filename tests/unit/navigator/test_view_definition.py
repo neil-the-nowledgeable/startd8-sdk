@@ -33,6 +33,9 @@ from startd8.navigator.view_definition import (
 )
 from startd8.wireframe.profile import RenderProfile, StatusStyle
 
+_BASE_RESOLVED_FOR_EXPECTED = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+_BASE_CONTROL = _BASE_RESOLVED_FOR_EXPECTED.control
+_BASE_REGIONS = _BASE_RESOLVED_FOR_EXPECTED.regions
 _LEGAL_FIXTURE = Path(__file__).parent / "fixtures" / "legal-view-definition.json"
 
 
@@ -157,6 +160,7 @@ _EXPECTED_REQUIREMENTS_PROFILE = RenderProfile(
     ),
     # REQ-11: requirements overrides no theme → inherits the base tokens (the real _template.py :root).
     theme_tokens={"ink": "#241f17", "paper": "#f4efe4", "accent": "#1b545f"},
+    control=_BASE_CONTROL, regions=_BASE_REGIONS,
 )
 
 
@@ -203,6 +207,7 @@ _EXPECTED_CAPABILITY_PROFILE = RenderProfile(
     ),
     # REQ-11: capability overrides theme.accent → inherits base ink/paper, keeps its own accent.
     theme_tokens={"ink": "#241f17", "paper": "#f4efe4", "accent": "#3a6a94"},
+    control=_BASE_CONTROL, regions=_BASE_REGIONS,
 )
 
 

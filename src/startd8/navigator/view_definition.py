@@ -217,9 +217,9 @@ def to_render_profile(
     """Project a resolved definition to the existing :class:`RenderProfile` (renderers unchanged).
 
     Reads ``vocabulary`` (ordered ``statuses`` keyed map + ``gap_noun``), ``chrome`` (masthead + apex
-    strings), and — REQ-11 — ``theme`` (design tokens → ``theme_tokens``). ``lenses``/``control``/
-    ``glance``/``regions`` are still NOT projected (later steps). Any omitted chrome key falls back to
-    the RenderProfile default.
+    strings), ``theme`` (REQ-11 → ``theme_tokens``), and ``control`` + ``regions`` (REQ-14 → the
+    debug-panel schema + region/layer taxonomy, applied as an additive runtime override). ``lenses``/
+    ``glance`` are still NOT projected. Any omitted chrome key falls back to the RenderProfile default.
 
     REQ-12: when a ``context`` is supplied, a chrome field named in ``chrome.bindings`` is derived by
     substituting its ``{field}`` template against the context — but ONLY when every referenced field
@@ -264,6 +264,8 @@ def to_render_profile(
         why=_chrome("why", chrome.get("why", _PROFILE_DEFAULTS.why)),
         do=_chrome("do", chrome.get("do", _PROFILE_DEFAULTS.do)),
         theme_tokens=dict(resolved.theme or {}),
+        control=dict(resolved.control or {}),      # REQ-14 FR-2: the debug-panel schema
+        regions=dict(resolved.regions or {}),      # REQ-14 FR-5a: the region/layer taxonomy
     )
 
 
