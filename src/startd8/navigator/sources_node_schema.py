@@ -48,7 +48,11 @@ _FIELD_META = {
     "orientation":  ("axis",        "authored", "NODE-SCHEMA orientation axis (e.g. bridge)"),
     "route_state":  ("axis",        "derived",  "routing / honest-skip (sdk_emitted, owned_elsewhere, …)"),
     "status_facets":("derived",     "computed", "orthogonal health facets (NODE-SCHEMA inv. 5)"),
-    "attributes":   ("meta",        "meta",     "open extension bag (name/handle/verify/approve/…)"),
+    "attributes":   ("meta",        "meta",     "open extension bag (name/handle/serves/…)"),
+    "verify":       ("descriptive", "authored", "REQ-17 — the acceptance oracle (the FR's raw Verify clause)"),
+    "approve":      ("descriptive", "authored", "REQ-17 — the human-approval gate (the FR's Approve? prompt(s))"),
+    "was":          ("descriptive", "authored", "REQ-17 — the change-history alias (the FR's Was value(s))"),
+    "derivation":   ("hierarchy",   "computed", "REQ-16 — the typed derivation edge (distinct from containment; regime reserved/unset)"),
 }
 
 

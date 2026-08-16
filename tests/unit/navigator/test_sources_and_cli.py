@@ -302,3 +302,43 @@ def test_req15_frame_source_renders_bare_scaffolding(tmp_path):
     assert 'data-scaffold="masthead' in html          # the region meta-descriptions are present
     # zero requirement/FR node cards were rendered (free of any requirement)
     assert '<div class="item"' not in html and "wrote 0 nodes" not in html
+
+
+# ── REQ-17 FR-2 — the requirements projection carries verify/approve/was onto the Node ─────────────
+
+def test_projection_carries_verify_approve_was_onto_node_fields(tmp_path):
+    """REQ-17 FR-2 (O-2): projecting an FR with Verify/Approve?/Was yields a Node whose first-class
+    verify/approve/was fields hold those parsed values (instead of being dropped at the boundary)."""
+    doc = tmp_path / "REQ-fx.md"
+    doc.write_text(
+        "# Fixture — Requirements\n\n"
+        "**Format:** det-req/0.1\n\n"
+        "- **FR-1 — Sign in.** The user signs in. Name: the user signs into the app. "
+        "Approve?: is the login flow safe? · does it lock out. Was: log-in · signin. "
+        "Verify: `pytest tests/test_login.py` passes. Serves: O-1\n"
+        "- **FR-2 — Plain.** A bare requirement with no reliability clauses. Name: a bare requirement. "
+        "Serves: O-1\n",
+        encoding="utf-8",
+    )
+    nodes = {n.key: n for n in nodes_from_requirements(doc, repo=tmp_path)}
+    fr1, fr2 = nodes["FR-1"], nodes["FR-2"]
+    # FR-1 carries all three onto the promoted fields
+    assert fr1.verify == "`pytest tests/test_login.py` passes"
+    assert fr1.approve == ("is the login flow safe?", "does it lock out")
+    assert fr1.was == ("log-in", "signin")
+    # FR-2 lacks them → empty defaults (byte-identity: an absent clause projects nothing)
+    assert fr2.verify == "" and fr2.approve == () and fr2.was == ()
+
+
+def test_projection_reliability_fields_mirror_the_render_attrs(tmp_path):
+    """The promoted fields agree with the legacy attrs render channel (attrs kept for byte-identity)."""
+    doc = tmp_path / "REQ-fx2.md"
+    doc.write_text(
+        "# Fixture — Requirements\n\n**Format:** det-req/0.1\n\n"
+        "- **FR-1 — Do a thing.** Behaviour. Name: an actor does a thing. "
+        "Approve?: is it right?. Verify: it works. Serves: O-1\n",
+        encoding="utf-8",
+    )
+    n = nodes_from_requirements(doc, repo=tmp_path)[0]
+    assert n.verify == n.attributes["verify"]                      # same raw clause on both channels
+    assert " · ".join(n.approve) == n.attributes["approve_prompts"]

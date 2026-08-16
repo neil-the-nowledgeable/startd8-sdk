@@ -113,9 +113,10 @@ def pipeline_provenance(
     on the origin (``stage:intent``) row. An FR-id with no ``requirement_nodes`` given, an unknown FR,
     or an FR that grounds to no file yields the not-found row (honest, never an invented path).
 
-    The (resolved) artifact is resolved to its owning stage by **longest-prefix** ``sdk_artifact`` match;
-    the walk then follows the DEPENDS-ON edges upstream to the requirement, emitting one ordered row per
-    stage passed through (**including SPEC / un-built stages** so the trace shows the gap — R1-S10). An
+    The (resolved) artifact is located at its owning stage by **longest-prefix** ``sdk_artifact`` match
+    (entry resolution); the chain walk then follows the typed **derivation** edge (REQ-16 FR-1) upstream
+    to the requirement — read from the Node, not reconstructed — emitting one ordered row per stage
+    passed through (**including SPEC / un-built stages** so the trace shows the gap — R1-S10). An
     artifact owned by **no** stage yields a single ``present=False`` row (R1-S8). The stage ordinals of
     the returned chain are a subsequence of the FR-1 ordinals, ending at ``stage:intent``.
     """
@@ -154,17 +155,24 @@ def pipeline_provenance(
             "present": False,
         }]
 
-    # Walk upstream along DEPENDS-ON (child_keys) from the owning stage to the requirement (intent).
+    # REQ-16 FR-1: walk upstream along the typed **derivation** edge (``derived-from``) read from the
+    # Node, not the generic ``child_keys`` reference — the compilation chain is now traceable by
+    # construction rather than reconstructed. Fall back to ``child_keys`` only if a node carries no typed
+    # derivation edge (defensive; pipeline stage nodes always do).
     ordered: List[str] = []
     seen: set = set()
     cursor: Optional[str] = owner_key
     while cursor is not None and cursor not in seen:
         seen.add(cursor)
         ordered.append(cursor)
-        st = stage_by_key.get(cursor)
-        # Follow the single upstream dependency edge (the pipeline is a linear spine to intent).
-        deps = list(st.child_keys) if st else []
-        cursor = deps[0] if deps else None
+        node = node_by_key.get(cursor)
+        # Follow the single upstream derivation edge (the pipeline is a linear spine to intent).
+        if node is not None and node.derivation:
+            cursor = node.derivation[0].from_key
+        else:
+            st = stage_by_key.get(cursor)
+            deps = list(st.child_keys) if st else []
+            cursor = deps[0] if deps else None
 
     # The chain reads requirement → … → artifact; reverse so it walks upstream-to-downstream (intent→owner).
     rows: List[Dict[str, Any]] = []

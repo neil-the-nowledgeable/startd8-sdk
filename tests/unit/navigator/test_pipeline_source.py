@@ -56,11 +56,16 @@ def test_six_stage_nodes_with_ordinals_and_category():
 
 
 def test_no_node_field_added_by_pipeline_source():
-    """FR-1 / NR-3: the Stage projection adds NO field to Node (category + attributes only)."""
+    """FR-1 / NR-3: the Stage projection adds NO field to Node (category + attributes only).
+
+    The Node field set is the co-churned 0.4.0 golden: REQ-16 (``derivation``) + REQ-17
+    (``verify``/``approve``/``was``) are the only additions beyond the original 15.
+    """
     assert set(node_field_names()) == {
         "key", "does", "status", "wont", "lives", "ships_when", "confidence", "triggers",
         "children", "child_keys", "category", "orientation", "route_state", "status_facets",
         "attributes",
+        "verify", "approve", "was", "derivation",
     }
 
 
@@ -470,3 +475,55 @@ def test_no_new_module_imports_wireframe_view_for_pipeline_path():
     for mod in ("sources_pipeline", "verify_oracle"):
         src = (Path(__file__).parents[3] / "src" / "startd8" / "navigator" / f"{mod}.py").read_text()
         assert "wireframe_view" not in src
+
+
+# ── REQ-16 FR-1 — the typed derivation edge (distinct from containment; regime reserved/unset) ─────
+
+def test_stage_exposes_derivation_edge_distinct_from_children():
+    """REQ-16 FR-1: a stage with an upstream input exposes it as a typed DerivationEdge object,
+    distinct from containment `children`, carrying an OPTIONAL `regime` slot that is UNSET here."""
+    from startd8.navigator.models import DerivationEdge
+
+    nodes = {n.key: n for n in nodes_from_pipeline()}
+    contract = nodes["stage:contract"]
+    assert contract.children == ()                       # containment is untouched (NR-5)
+    assert contract.derivation and all(isinstance(e, DerivationEdge) for e in contract.derivation)
+    edge = contract.derivation[0]
+    assert edge.from_key == "stage:functional"           # the typed derivation input
+    assert edge.relation == "derived-from"
+    assert edge.regime is None                            # NR-6: the regime slot is reserved, unset here
+    # intent is the root — no upstream derivation
+    assert nodes["stage:intent"].derivation == ()
+
+
+def test_derivation_edges_mirror_the_depends_on_keys():
+    """REQ-16 FR-1: the typed derivation edges cover the same upstream set as child_keys (both retained;
+    child_keys still drives topo_order, the typed edge drives provenance)."""
+    for n in nodes_from_pipeline():
+        assert tuple(e.from_key for e in n.derivation) == tuple(n.child_keys)
+
+
+def test_pipeline_provenance_chain_is_sourced_from_the_typed_edge():
+    """REQ-16 FR-1: pipeline_provenance returns a chain sourced from the derivation edge (not the
+    longest-prefix heuristic) — proven by mutating a node's typed edge and seeing the chain follow it."""
+    import dataclasses
+
+    from startd8.navigator.models import DerivationEdge
+
+    nodes = nodes_from_pipeline()
+    # Baseline: impl derives from contract → chain is intent→functional→contract→impl.
+    rows = pipeline_provenance(nodes, stages(), query="src/startd8/backend_codegen/foo.py")
+    assert [r["stage"] for r in rows][-1] == "stage:impl"
+    assert "stage:contract" in [r["stage"] for r in rows]
+    # Re-point impl's DERIVATION edge straight at intent (bypassing contract/functional). If the walk
+    # read child_keys (unchanged) the chain would still include contract; sourcing from the typed edge,
+    # the chain collapses to intent→impl — the discriminating proof the edge drives the walk.
+    rewired = tuple(
+        dataclasses.replace(n, derivation=(DerivationEdge(from_key="stage:intent"),))
+        if n.key == "stage:impl" else n
+        for n in nodes
+    )
+    rows2 = pipeline_provenance(rewired, stages(), query="src/startd8/backend_codegen/foo.py")
+    chain2 = [r["stage"] for r in rows2]
+    assert chain2 == ["stage:intent", "stage:impl"]      # followed the typed edge, not child_keys
+    assert "stage:contract" not in chain2

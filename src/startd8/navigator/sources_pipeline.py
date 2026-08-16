@@ -19,7 +19,7 @@ import graphlib
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from .models import Node, NodeEvidence, derive_status
+from .models import DerivationEdge, Node, NodeEvidence, derive_status
 from .naming import name_forms
 from .view_definition import (
     DEFINITION_REGISTRY,
@@ -165,6 +165,11 @@ def nodes_from_pipeline(repo: Optional[Path] = None) -> List[Node]:
             orientation="pipeline",
             route_state="sdk_emitted",
             child_keys=st.child_keys,
+            # REQ-16 FR-1: the stage's upstream dependency is a *typed* derivation edge (``derived-from``),
+            # distinct from containment ``children`` — so ``pipeline_provenance`` reads the compilation
+            # chain from the typed edge rather than reconstructing it. ``child_keys`` is retained for
+            # topo_order + backward compat; the ``regime`` slot stays unset here (NR-6).
+            derivation=tuple(DerivationEdge(from_key=ck) for ck in st.child_keys),
             attributes=attrs,
         ))
     # Fail-loud build-time acyclicity guard (R8-EB-3): validate the stage DAG is acyclic at construction,

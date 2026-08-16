@@ -231,6 +231,13 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
                 orientation="bridge",
                 route_state=route,
                 attributes=attrs,
+                # REQ-17 FR-2: carry the reliability semantics onto first-class Node fields instead of
+                # dropping them at the det_req→Node boundary. The ``attrs`` entries above remain the
+                # render channel (byte-identity); these fields are the structured carriers REQ-08 reads.
+                # An FR lacking a clause projects the empty default (str "" / empty tuple).
+                verify=str(fr.get("verify") or ""),
+                approve=prompts,
+                was=was,
             )
         )
     return nodes

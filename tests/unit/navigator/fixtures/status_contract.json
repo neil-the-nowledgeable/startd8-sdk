@@ -1,0 +1,36 @@
+{
+  "contract": "node-status-gap-class-agreement",
+  "version": "0.4.0",
+  "cite": "startd8-sdk REQ-16 FR-3 — dev-os/NODE-SCHEMA.md",
+  "description": "The shared gap-class taxonomy the SDK status classifiers agree on. `derive_status` (NodeStatus: built/thin/spec/deprecated) and det-req's `fr_health` (n/a/skipped/unknown/on_track) measure different axes but both project onto one gap-class taxonomy. Each fixture pins that both classifiers map onto the SAME gap_class. This file is self-contained (no SDK import required): a second implementation (dev-os det-req-kit `extract.py`, Studio `req-health.mjs`) runs these inputs through its own `derive_status`/`fr_health` and asserts the recorded native output and the same gap_class via the maps below.",
+  "gap_classes": ["grounded", "gap", "excluded"],
+  "status_to_gap": {"built": "grounded", "thin": "grounded", "spec": "gap", "deprecated": "excluded"},
+  "health_to_gap": {"on_track": "grounded", "n/a": "gap", "skipped": "excluded", "unknown": "unknown"},
+  "note_on_unknown": "fr_health's `unknown` (a done-claim without strong evidence) has no derive_status counterpart, so it is not an agreement class — the contract covers grounded/gap/excluded where the two classifiers DO agree.",
+  "fixtures": [
+    {
+      "id": "grounded-built-ontrack",
+      "gap_class": "grounded",
+      "derive_status": {"input": {"has_code_evidence": true, "maturity": "stable"}, "expect": "built"},
+      "fr_health": {"input": {"_verify_ann": "done", "lives": [{"type": "code", "ref": "git:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:src/x.py"}]}, "expect": "on_track"}
+    },
+    {
+      "id": "grounded-thin-ontrack",
+      "gap_class": "grounded",
+      "derive_status": {"input": {"has_code_evidence": true, "maturity": "alpha"}, "expect": "thin"},
+      "fr_health": {"input": {"_verify_ann": "delivered", "lives": [{"type": "test", "ref": "git:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:tests/test_x.py"}]}, "expect": "on_track"}
+    },
+    {
+      "id": "gap-spec-noclaim",
+      "gap_class": "gap",
+      "derive_status": {"input": {"has_code_evidence": false, "maturity": "stable"}, "expect": "spec"},
+      "fr_health": {"input": {"_verify_ann": null, "lives": []}, "expect": "n/a"}
+    },
+    {
+      "id": "excluded-deprecated-skipped",
+      "gap_class": "excluded",
+      "derive_status": {"input": {"has_code_evidence": true, "maturity": "deprecated"}, "expect": "deprecated"},
+      "fr_health": {"input": {"_verify_ann": "done", "lives": [{"type": "owned_elsewhere", "ref": "-"}]}, "expect": "skipped"}
+    }
+  ]
+}

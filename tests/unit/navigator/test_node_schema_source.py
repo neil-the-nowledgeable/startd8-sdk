@@ -49,7 +49,7 @@ def test_chrome_provenance_traces_every_element_no_orphans():
     assert "Kagami mirror" in by["summary_meta"]["value"]
     assert by["status_band"]["origin"].startswith("computed")
     assert "authored" in by["status_band"]["value"]              # 8 authored / 3 computed / …
-    assert by["shape_band"]["value"].startswith("Nodes: 15")
+    assert by["shape_band"]["value"].startswith("Nodes: 19")   # 15 + REQ-16/17: verify/approve/was/derivation
     assert all(r["present"] for r in rows), "no chrome element should be an orphan"
 
 
