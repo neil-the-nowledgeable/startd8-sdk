@@ -37,7 +37,7 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 
 | Spec | What | Why open |
 |---|---|---|
-| *(none currently — REQ-08 and REQ-14 both built; see Implemented above)* | | |
+| **REQ-15 Frame / scaffolding view** (`feature/…-frame-cdae08e5`) | 5 FRs; a domain-neutral `navigator build --source frame` (scaffold-mode-on + content-hidden → region meta-descriptions + control surface only, free of any requirement) + reconcile the layer taxonomy into a keyed definition schema (id→label/color/order — fixes the 3-way legend inconsistency) + progressive per-layer disclosure. Extends REQ-14. Authored via `/reflective-requirements`. **BUILD-READY** (stage-0 ✓, 5/5 named FRs) | **specced, building now** |
 
 > **REQ-14 numbering resolution (2026-08-16):** `REQ-14` = **control-region unification** (`REQ-14-control-region-unification.md`, BUILT `a84bf12c`). Two specs briefly collided under REQ-14 — a narrow `control-schema-formalization` (data-only, renderer-consumption deferred) and this broader *control + region* unification (steps 4+5, renderer consumption). The **unification was built** (it closes the wired-vs-inert mirror the integration review flagged), so it is the canonical REQ-14; the narrow `control-schema-formalization.md` is **superseded + removed**. The earlier "renumber the unification to REQ-15" note is retired.
 
