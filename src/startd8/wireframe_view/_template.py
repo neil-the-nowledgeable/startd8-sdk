@@ -325,6 +325,15 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .signbar button{margin-left:auto;font:inherit;font-size:12.5px;color:#fff;background:var(--accent);
     border:1px solid var(--accent);border-radius:20px;padding:6px 15px;cursor:pointer}
   .signbar button:hover{background:var(--accent2)}
+  /* FR-8: raw-data debug panel below the sign-off — a dark code block dumping the payload / node items
+     being visualized. Hidden until a Debug toggle is on; profiled-navigator-only (app path never emits it). */
+  .rawdata{margin:14px 0 0;background:var(--ink);border-radius:12px;padding:14px 16px}
+  .rawdata[hidden]{display:none}
+  .rawdata .raw-cap{font-family:var(--mono);font-size:11px;color:var(--accent);text-transform:uppercase;
+    letter-spacing:.08em;margin:12px 0 6px}
+  .rawdata .raw-cap:first-child{margin-top:0}
+  .rawdata .raw-json{font-family:var(--mono);font-size:11.5px;line-height:1.5;color:#e8e2d4;
+    white-space:pre-wrap;word-break:break-word;margin:0;max-height:440px;overflow:auto}
 
   /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
   .status-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
@@ -367,6 +376,8 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   <main id="outline" data-layer="node" data-scaffold="outline — node sections + cards (the node-driven layer)"></main>
   <div class="signbar" id="signbar"></div>
   <footer class="closing" id="closing" hidden></footer>
+  <!-- FR-8: raw-data debug panel — populated + shown by the Debug group's Raw data / Node data toggles. -->
+  <section class="rawdata" id="rawdata" aria-label="Raw data" hidden></section>
 </div>
 
 <!-- Embedded view-model (application/json is never executed; view.render_html escapes "<" on embed). -->
@@ -820,8 +831,14 @@ __PLAN_DATA__
   if(payload.profile){
     // Live provenance readout — "all content is cruft until proven otherwise": chrome that traces to
     // a source is proven; an orphan (no source) is cruft. Green when clean, ochre when cruft remains.
+    // FR-7: the bare frame has NO requirement content, so its empty chrome slots are not "cruft" —
+    // they are definition slots. In frame mode read as a definition summary instead of false cruft.
     var ch=payload.chrome, prov="";
-    if(ch){
+    if(payload.frame){
+      var nreg=document.querySelectorAll("[data-scaffold]").length;
+      var nlay=(payload.profile.regions&&payload.profile.regions.layers)?Object.keys(payload.profile.regions.layers).length:0;
+      prov='<div class="dbg-prov dbg-clean">View Definition · '+nreg+' regions · '+nlay+' layers defined</div>';
+    } else if(ch){
       var cruft=(ch.orphans||[]).length, cls=cruft?"dbg-cruft":"dbg-clean";
       prov='<div class="dbg-prov '+cls+'">provenance '+ch.score+' · '+ch.present+'/'+ch.total+' proven'+
         (cruft?' · <b>'+cruft+' cruft</b>: '+esc((ch.orphans||[]).join(", ")):' · no cruft ✓')+'</div>';
@@ -848,6 +865,10 @@ __PLAN_DATA__
       '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
         '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
         '<span class="ll node">node-driven</span></div>'+
+      // ── DEBUG: raw view of the data + nodes being visualized (FR-8) — renders into #rawdata below sign-off
+      '<div class="dbg-group" data-group="debug">Debug <span class="dbg-hint">· raw</span></div>'+
+      '<label class="dbg-opt"><input type="checkbox" id="rawData"><span>Raw data</span></label>'+
+      '<label class="dbg-opt"><input type="checkbox" id="nodeData"><span>Node data</span></label>'+
       // ── PROVENANCE: the live readout stays at the bottom ──────────────────────────────────────
       prov;
     var viewReq=document.getElementById("viewRequirement"), viewDef=document.getElementById("viewDefinition");
@@ -896,6 +917,23 @@ __PLAN_DATA__
     viewReq.onchange=syncView; viewDef.onchange=syncView; outline.onchange=syncView;
     nodeMeta.onchange=function(){ document.body.classList.toggle("show-node-meta", nodeMeta.checked); };
     hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
+    // FR-8: raw-data debug panel below the sign-off — Raw data = the current variant being visualized;
+    // Node data = just the node items (flattened from the variant's sections). Rebuilt on each toggle.
+    var rawData=document.getElementById("rawData"), nodeData=document.getElementById("nodeData");
+    function nodeItems(){
+      var out=[]; (data.sections||[]).forEach(function(sec){ (sec.items||[]).forEach(function(it){ out.push(it); }); });
+      return out;
+    }
+    function renderRawData(){
+      var el=document.getElementById("rawdata"); if(!el) return;
+      var blocks="";
+      if(rawData.checked){ blocks+='<div class="raw-cap">raw data being visualized — payload.variants["'+esc(cur)+'"]</div>'+
+        '<pre class="raw-json">'+esc(JSON.stringify(data,null,2))+'</pre>'; }
+      if(nodeData.checked){ var n=nodeItems(); blocks+='<div class="raw-cap">node data — '+n.length+' node(s) being visualized</div>'+
+        '<pre class="raw-json">'+esc(JSON.stringify(n,null,2))+'</pre>'; }
+      el.innerHTML=blocks; el.hidden=!(rawData.checked||nodeData.checked);
+    }
+    rawData.onchange=renderRawData; nodeData.onchange=renderRawData;
     // `--source frame`: reflect the requirement-free frame in the picker so toggling back works.
     if(payload.frame){ viewDef.checked=true; viewReq.checked=false; }
     syncView();

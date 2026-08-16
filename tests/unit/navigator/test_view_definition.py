@@ -514,16 +514,20 @@ def test_resolve_external_does_not_mutate_the_shipped_registry():
 # ── REQ-14 — control + region model in the definition (data layer; consumption deferred) ─────────
 
 def test_base_models_the_debug_control_panel_as_groups_of_toggles():
-    # REQ-view-definition-mode FR-2: collapsed to one pick-one VIEW picker + one additive OVERLAYS stack.
+    # REQ-view-definition-mode FR-2 (+ FR-8): one pick-one VIEW picker + one additive OVERLAYS stack +
+    # the FR-8 DEBUG group (raw data / node data).
     control = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).control
     assert control["panel"] == "top-right"
-    assert set(control["groups"]) == {"view", "overlays"}
+    assert set(control["groups"]) == {"view", "overlays", "debug"}
     assert control["groups"]["view"]["label"] == "View"
     assert control["groups"]["view"]["first"] is True
     # VIEW is the Requirement/View-Definition pick; the density modes + scaffoldOnly are retired.
     assert set(control["groups"]["view"]["toggles"]) == {"viewRequirement", "viewDefinition"}
+    # FR-8: the Debug group exposes the raw data + node data views.
+    assert set(control["groups"]["debug"]["toggles"]) == {"rawData", "nodeData"}
     toggle_ids = {tid for g in control["groups"].values() for tid in g["toggles"]}
-    assert toggle_ids == {"viewRequirement", "viewDefinition", "nodeMeta", "outlineRegions", "hideScaffold"}
+    assert toggle_ids == {"viewRequirement", "viewDefinition", "nodeMeta", "outlineRegions",
+                          "hideScaffold", "rawData", "nodeData"}
     assert "structOnly" not in toggle_ids and "combined" not in toggle_ids and "scaffoldOnly" not in toggle_ids
     assert "nodeMeta" in control["groups"]["overlays"]["toggles"]  # the item.meta reveal survives as an overlay
 
