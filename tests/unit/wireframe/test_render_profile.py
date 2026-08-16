@@ -188,3 +188,23 @@ def test_profiled_render_carries_filter_machinery_and_data_status():
     assert 'status-chips' in no_profile
     assert 'data-chip-key' in no_profile
     assert 'data-status' in no_profile
+
+
+def test_req14_control_and_region_override_embed_and_render_byte_safe():
+    # FR-3/FR-5/FR-7: a profile carrying a control-group + region override embeds them in the payload,
+    # and the additive-override machinery + its DOM hooks are present so the browser applies them over
+    # the hardcoded panel / static region attrs (the scaffold then reveals the definition, not template
+    # strings). The default (no-delta) render + app path stay byte-identical.
+    prof = RenderProfile(
+        statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),),
+        control={"groups": {"template-anatomy": {"label": "Structure", "toggles": {}}}},
+        regions={"bindings": {"outline": {"layer": "node", "scaffold": "the requirements list"}}},
+    )
+    html = render_html(_plan(), profile=prof)
+    assert '"Structure"' in html                     # control-group override embedded in the payload
+    assert '"the requirements list"' in html         # region-anatomy override embedded in the payload
+    assert "applyDefinitionOverride" in html         # the additive-override machinery is present
+    assert 'data-group="template-anatomy"' in html   # the control DOM hook exists
+    assert 'id="outline"' in html                    # the region DOM hook exists
+    # a profile WITHOUT control/regions injects an inert (empty) override — app path byte-identical.
+    assert render_html(_plan()) == render_html(_plan(), profile=None)

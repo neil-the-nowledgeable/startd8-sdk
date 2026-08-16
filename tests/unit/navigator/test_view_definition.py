@@ -514,3 +514,20 @@ def test_control_and_regions_ride_the_cascade_by_id():
     assert resolved.control["groups"]["view"]["label"] == "View"                        # sibling kept
     assert resolved.regions["bindings"]["outline"]["scaffold"] == "the requirements list"  # overridden
     assert resolved.regions["bindings"]["mast"]["layer"] == "descriptive"               # sibling kept
+
+
+def test_req14_region_override_flows_to_the_projected_profile_for_the_scaffold_mirror():
+    # FR-7: a domain that overrides a region's scaffold anatomy label projects that override onto its
+    # RenderProfile.regions — so scaffold mode (which reads data-scaffold set from profile.regions)
+    # reveals the DEFINITION, not a hardcoded template string.
+    child = ViewDefinition(
+        name="mirrorchild", extends="base",
+        regions={"bindings": {"outline": {"scaffold": "the statute's provisions"}}},
+    )
+    reg = {**DEFINITION_REGISTRY, "mirrorchild": child}
+    prof = to_render_profile(resolve(child, reg))
+    assert prof.regions["bindings"]["outline"]["scaffold"] == "the statute's provisions"  # overridden
+    assert prof.regions["bindings"]["mast"]["layer"] == "descriptive"                     # sibling kept
+    # a non-overriding domain projects the base anatomy verbatim (byte-identity anchor).
+    base_prof = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
+    assert base_prof.regions["bindings"]["outline"]["scaffold"] == "outline — node sections + cards (the node-driven layer)"
