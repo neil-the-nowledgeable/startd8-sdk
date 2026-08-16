@@ -28,8 +28,11 @@ _TEST_PATH = re.compile(r"(?:^|/)tests?(?:/|_)|(?:^|/)test_|_test\.")
 
 
 def _initiative_slug(path: Path) -> str:
-    """Initiative id for the canonical ref, from the REQ filename (REQ-01-sdk-node-home → sdk-node-home)."""
-    return re.sub(r"^REQ-\d+-", "", Path(path).stem, flags=re.IGNORECASE) or "requirements"
+    """Initiative id for the canonical ref, from the REQ filename — the semantic slug with the ``REQ-``/
+    ``PLAN-`` content-type brand stripped (integer-led ``REQ-01-sdk-node-home`` → ``sdk-node-home`` AND
+    DIDL semantic ``REQ-seat-authoring`` → ``seat-authoring``; a bare brand must not leak into the
+    canonical initiative — the filename-as-identity anti-pattern)."""
+    return re.sub(r"^(?:REQ|PLAN)-(?:\d+-)?", "", Path(path).stem, flags=re.IGNORECASE) or "requirements"
 
 
 def _lives_from_touches(
