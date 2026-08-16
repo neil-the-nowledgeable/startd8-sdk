@@ -370,6 +370,28 @@ def test_cli_provenance_unowned_path_exits_nonzero():
     assert json.loads(res.stdout)["chain"][0]["present"] is False
 
 
+def test_cli_provenance_html_renders_chain_as_nodes(tmp_path):
+    """FR-9 / R8-EB-6: --format html projects chain rows to pipeline-provenance Nodes via the tree renderer."""
+    out = tmp_path / "prov.html"
+    res = RUNNER.invoke(
+        app, ["navigator", "provenance", "--query", "src/startd8/backend_codegen/x.py",
+              "--format", "html", "--out", str(out)]
+    )
+    assert res.exit_code == 0, res.output
+    html = out.read_text(encoding="utf-8")
+    assert "pipeline-provenance" in html and "stage:impl" in html
+
+
+def test_cli_provenance_html_requires_out():
+    res = RUNNER.invoke(app, ["navigator", "provenance", "--query", "a/b.py", "--format", "html"])
+    assert res.exit_code != 0 and "--out is required" in res.output
+
+
+def test_cli_provenance_rejects_unknown_format():
+    res = RUNNER.invoke(app, ["navigator", "provenance", "--query", "a/b.py", "--format", "yaml"])
+    assert res.exit_code != 0 and "unknown --format" in res.output
+
+
 def test_provenance_spec_stage_still_emits_row(tmp_path):
     """R1-S10: a chain through a SPEC (un-built) stage still emits that stage's row."""
     (tmp_path / "src" / "startd8" / "seeds").mkdir(parents=True)
