@@ -188,7 +188,14 @@ def test_inspect_cells_shows_per_node_data_and_display_mapping():
     assert "function buildInspect" in profiled and "function syncInspect" in profiled   # the inspector
     assert "w._nodeData=item" in profiled                    # exact per-cell data stashed at render
     assert "INSPECT_MAP" in profiled                         # the field→element display mapping
-    assert "node data · value · how" in profiled             # the inspector caption
+    # FR-10: rendered as a TABLE with the three headings
+    assert 'class="ni-table"' in profiled
+    for th in ("<th>node data</th>", "<th>value</th>", "how it’s displayed</th>"):
+        assert th in profiled, th
+    # FR-11: not-displayed value cells are editable (contenteditable) and edit NON-PERSISTENTLY
+    assert 'class="ni-v ni-edit" contenteditable="true"' in profiled
+    assert "function updateAddedLine" in profiled            # surfaces the edited field in the card
+    assert "card._nodeData[f]=cell.textContent" in profiled  # in-memory only (no disk write path)
     assert 'class="node-inspect"' not in profiled            # injected on toggle only, not pre-rendered
     # app path byte-identical (inspector is profiled-navigator-only)
     assert render_html(_plan()) == render_html(_plan(), profile=None)
