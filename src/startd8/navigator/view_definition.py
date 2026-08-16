@@ -162,9 +162,10 @@ def _resolve(
 def to_render_profile(resolved: ResolvedDefinition) -> RenderProfile:
     """Project a resolved definition to the existing :class:`RenderProfile` (renderers unchanged).
 
-    Reads ``vocabulary`` (ordered ``statuses`` keyed map + ``gap_noun``) and ``chrome`` (masthead + apex
-    strings). ``theme``/``lenses``/``control``/``glance``/``regions`` are intentionally NOT projected yet
-    (NR-3 — later architecture steps). Any omitted chrome key falls back to the RenderProfile default.
+    Reads ``vocabulary`` (ordered ``statuses`` keyed map + ``gap_noun``), ``chrome`` (masthead + apex
+    strings), and — REQ-11 — ``theme`` (design tokens → ``theme_tokens``, emitted by the renderer as an
+    additive CSS custom-property override). ``lenses``/``control``/``glance``/``regions`` are still NOT
+    projected (later architecture steps). Any omitted chrome key falls back to the RenderProfile default.
     """
     vocab = resolved.vocabulary or {}
     chrome = resolved.chrome or {}
@@ -189,6 +190,7 @@ def to_render_profile(resolved: ResolvedDefinition) -> RenderProfile:
         summary_meta=tuple(chrome.get("summary_meta", _PROFILE_DEFAULTS.summary_meta)),
         why=chrome.get("why", _PROFILE_DEFAULTS.why),
         do=chrome.get("do", _PROFILE_DEFAULTS.do),
+        theme_tokens=dict(resolved.theme or {}),
     )
 
 
@@ -202,7 +204,10 @@ def to_render_profile(resolved: ResolvedDefinition) -> RenderProfile:
 BASE_NAVIG8R_DEFINITION = ViewDefinition(
     name="base",
     extends=None,
-    theme={"ink": "#2a2620", "paper": "#faf8f3", "accent": "#3d7a57"},
+    # REQ-11 FR-1: the theme tokens are the renderer's ACTUAL ``:root`` values (``_template.py``), so
+    # projecting them (FR-3) reproduces today's rendered colours for a non-overriding domain — the
+    # byte-identity anchor. (REQ-10 shipped placeholder values here; those recoloured every domain.)
+    theme={"ink": "#241f17", "paper": "#f4efe4", "accent": "#1b545f"},
     lenses={"axes": ["role", "fluency"]},
     control={"panel": "top-right", "groups": ["view", "overlays", "template-anatomy"]},
     glance={"summary": "status-counts"},

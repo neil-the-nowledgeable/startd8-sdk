@@ -14,8 +14,8 @@ built-in app strings.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import Mapping, Tuple
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,11 @@ class RenderProfile:
     summary_meta: Tuple[str, ...] = ()   # sub-headline lines (replaces WIREFRAME_META)
     why: str = ""                        # the "Why" clause of the apex whybox
     do: str = ""                         # the "Do" clause of the apex whybox
+    # REQ-11: theme design tokens (e.g. {"accent": "#3a6a94"}) projected from a resolved
+    # ViewDefinition's theme section. **Empty by default = the byte-identity guard** (SOTTO): an
+    # absent/empty map means the renderer emits no CSS override, so the app path — and any profile
+    # without a theme — is byte-identical. A non-empty map is emitted as an additive :root override.
+    theme_tokens: Mapping[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """JSON-safe payload the template's client renderer reads (``data.profile``)."""
@@ -70,6 +75,7 @@ class RenderProfile:
             "summary_meta": list(self.summary_meta),
             "why": self.why,
             "do": self.do,
+            "theme_tokens": dict(self.theme_tokens),
         }
 
 

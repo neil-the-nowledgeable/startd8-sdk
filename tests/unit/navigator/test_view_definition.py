@@ -145,6 +145,8 @@ _EXPECTED_REQUIREMENTS_PROFILE = RenderProfile(
         "Read top-down — grounded (green) reuses existing code; spec/awaiting needs a "
         "decision. Approve or flag each requirement below."
     ),
+    # REQ-11: requirements overrides no theme → inherits the base tokens (the real _template.py :root).
+    theme_tokens={"ink": "#241f17", "paper": "#f4efe4", "accent": "#1b545f"},
 )
 
 
@@ -189,6 +191,8 @@ _EXPECTED_CAPABILITY_PROFILE = RenderProfile(
         "Read top-down — built (green) has a code leaf; thin/spec needs evidence or is "
         "declared-only. Approve or flag each capability below."
     ),
+    # REQ-11: capability overrides theme.accent → inherits base ink/paper, keeps its own accent.
+    theme_tokens={"ink": "#241f17", "paper": "#f4efe4", "accent": "#3a6a94"},
 )
 
 
@@ -291,3 +295,35 @@ def test_domain_profile_equals_its_projected_definition(name):
     assert projected == _PROFILE_BY_DOMAIN[name], (
         f"{name!r} RenderProfile drifted from its ViewDefinition projection"
     )
+
+
+# ── REQ-11 — theme-token activation ──────────────────────────────────────────────────────────────
+
+def test_base_theme_equals_the_renderers_actual_root_values():
+    # FR-1: the base theme tokens ARE the template's real `:root` values, so projecting them is a
+    # no-op for a non-overriding domain (the byte-identity anchor — not REQ-10's placeholder values).
+    assert BASE_NAVIG8R_DEFINITION.theme == {
+        "ink": "#241f17", "paper": "#f4efe4", "accent": "#1b545f",
+    }
+
+
+def test_to_render_profile_projects_theme_into_theme_tokens():
+    # FR-3: the resolved theme section (previously unprojected) now rides on the profile.
+    req = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
+    cap = to_render_profile(resolve(CAPABILITY_DEFINITION, DEFINITION_REGISTRY))
+    assert req.theme_tokens == BASE_NAVIG8R_DEFINITION.theme          # requirements: no override
+    assert cap.theme_tokens["accent"] == "#3a6a94"                    # capability: its own accent
+    assert cap.theme_tokens["ink"] == BASE_NAVIG8R_DEFINITION.theme["ink"]  # …but inherits base ink
+
+
+def test_base_theme_change_propagates_to_projected_tokens():
+    # FR-5: a base theme change reaches both domains' projected tokens; an overrider keeps its own.
+    mutated_base = replace(
+        BASE_NAVIG8R_DEFINITION, theme={**BASE_NAVIG8R_DEFINITION.theme, "ink": "#010101"},
+    )
+    reg = {**DEFINITION_REGISTRY, "base": mutated_base}
+    req = to_render_profile(resolve(REQUIREMENTS_DEFINITION, reg))
+    cap = to_render_profile(resolve(CAPABILITY_DEFINITION, reg))
+    assert req.theme_tokens["ink"] == "#010101"      # non-overriding domain follows the base
+    assert cap.theme_tokens["ink"] == "#010101"      # capability didn't override ink → follows too
+    assert cap.theme_tokens["accent"] == "#3a6a94"   # …but keeps its own accent override

@@ -36,6 +36,45 @@ def test_no_profile_is_byte_identical():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+# ── REQ-11 — theme-token activation ──────────────────────────────────────────────────────────────
+
+def test_theme_tokens_empty_by_default_and_render_byte_identical():
+    # FR-2: theme_tokens defaults empty (the byte-identity guard); an empty map emits no override.
+    assert RenderProfile(statuses=()).theme_tokens == {}
+    # a profile WITHOUT a theme injects no :root override — render matches the no-theme render.
+    prof_no_theme = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888", "written, not built"),))
+    html = render_html(_plan(), profile=prof_no_theme)
+    assert "<style>:root{--" not in html          # the injected override marker is absent
+    # and the app path (no profile) is byte-identical (FR-2 re-assertion, unedited guard below too)
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_theme_tokens_emit_additive_root_override():
+    # FR-4: a non-empty theme_tokens map emits an additive :root override (spliced before </head>,
+    # after the template's own :root → CSS cascade last-wins applies the domain's tokens).
+    prof = RenderProfile(
+        statuses=(StatusStyle("spec", "Spec", "#888", "written, not built"),),
+        theme_tokens={"accent": "#3a6a94"},
+    )
+    html = render_html(_plan(), profile=prof)
+    assert "<style>:root{--accent:#3a6a94;}</style></head>" in html   # additive override, before </head>
+    # the app path emits no such override and stays byte-identical
+    assert "<style>:root{--accent" not in render_html(_plan())
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_domain_accent_override_renders_visibly():
+    # FR-6: a domain that overrides accent (capability → #3a6a94) renders a different accent than a
+    # non-overriding domain (requirements → the reconciled base #1b545f) — the cascade's visible teeth.
+    req = RenderProfile(statuses=(StatusStyle("spec", "S", "#888", "m"),), theme_tokens={"accent": "#1b545f"})
+    cap = RenderProfile(statuses=(StatusStyle("spec", "S", "#888", "m"),), theme_tokens={"accent": "#3a6a94"})
+    req_html = render_html(_plan(), profile=req)
+    cap_html = render_html(_plan(), profile=cap)
+    assert "--accent:#1b545f;" in req_html
+    assert "--accent:#3a6a94;" in cap_html
+    assert req_html != cap_html                    # the override is visibly different
+
+
 def test_profile_relabels_status_vocabulary_and_chrome():
     base = render_html(_plan())
     prof = RenderProfile(

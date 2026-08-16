@@ -109,6 +109,14 @@ def render_html(
         .replace("__EXPECTED_SCHEMA__", str(EXPECTED_SCHEMA_VERSION))
         .replace("__PLAN_DATA__", _embed_json(payload))
     )
+    # REQ-11 FR-4: a resolved definition's theme tokens are emitted as an ADDITIVE ``:root`` override,
+    # spliced after the template's own ``:root`` (before ``</head>``) so the CSS cascade's last-wins
+    # applies the domain's tokens. Emitted ONLY when a profile carries a non-empty ``theme_tokens`` —
+    # so the app path (no profile) and any profile without a theme inject nothing and stay
+    # byte-identical (the hardcoded ``:root`` remains the base/fallback layer; NR-4).
+    if profile is not None and profile.theme_tokens:
+        override = "".join(f"--{k}:{v};" for k, v in profile.theme_tokens.items())
+        html = html.replace("</head>", f"<style>:root{{{override}}}</style></head>", 1)
     if live_reload_secs and live_reload_secs > 0:
         html = _inject_live(html, live_reload_secs)
     return html
