@@ -12,6 +12,7 @@
 
 > **Readable handle:** `feature/navigator-renders-node-trees-to-arbitrary-depth-63555859`
 > **Semantic name:** *Navigator renders Node trees to arbitrary depth via a dedicated tree renderer, reusing the existing wireframe path for 2-level projections and serving the three adopting consumers.*
+> **Canonical ref:** `cc:intent:requirements-visualization:feature:req-02`
 
 ---
 

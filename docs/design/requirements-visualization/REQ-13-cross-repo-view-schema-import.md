@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem (a JSON file); no network/remote fetch; no LLM
 **Data classification:** internal
 
-> **Readable handle:** `feature/sdk-navigator-consumes-an-externally-authored-ebafa805`
+> **Readable handle:** `feature/sdk-navigator-consumes-an-externally-authored-d055cadd`
 > **Semantic name:** *SDK navigator consumes an externally-authored View Definition by loading its VIEW-SCHEMA JSON, resolving it against the shipped base, and projecting it to a RenderProfile so a second repo can author its presentation as a base+delta and render through the navigator without importing Python.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-13`
 

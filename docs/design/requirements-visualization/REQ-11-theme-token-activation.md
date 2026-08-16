@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + authored definitions; no LLM; no network
 **Data classification:** internal
 
-> **Readable handle:** `feature/sdk-navigator-activates-view-definition-theme-ece95538`
+> **Readable handle:** `feature/sdk-navigator-activates-view-definition-theme-ee3af56c`
 > **Semantic name:** *SDK navigator activates View Definition theme tokens by projecting resolved theme into the RenderProfile so renderers emit CSS custom properties and a base or domain theme change becomes visible while the app-scaffold path and non-overriding domains stay byte-identical.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-11`
 

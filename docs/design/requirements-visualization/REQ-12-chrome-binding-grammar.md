@@ -10,7 +10,7 @@
 **Trust boundary:** local filesystem + authored definitions; no LLM; no network
 **Data classification:** internal
 
-> **Readable handle:** `feature/sdk-navigator-derives-domain-chrome-from-f0e5970e`
+> **Readable handle:** `feature/sdk-navigator-derives-domain-chrome-from-22c6a41b`
 > **Semantic name:** *SDK navigator derives domain chrome from content via a tiny binding-expression grammar so a definition's chrome fields carry {key}/{title}/{semantic_name} placeholders resolved against a per-doc context at projection time, generalizing the FR-17/18 masthead derivation while unbound chrome and the app path stay byte-identical.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-12`
 
