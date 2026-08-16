@@ -10,15 +10,16 @@ model *before* serialization; a raise here degrades the artifact to ``status="er
 body, never a half-written collector config.
 
 A "row" is one resolved OTTL statement, modeled as a ``(service_name, attr, value)`` tuple:
-``attr`` ∈ ``{criticality, owner}``; for criticality ``value`` is constrained to the ContextCore
-``Criticality`` enum (a non-normative snapshot — ContextCore owns the vocabulary).
+``attr`` ∈ ``{criticality, owner}``; for criticality ``value`` is constrained to the shared
+``Criticality`` vocabulary authority (``taxonomy_enums.CRITICALITY_VALUES``).
 """
 
 from typing import Iterable, List, Set, Tuple
 
-# Non-normative snapshot of ContextCore's Criticality enum (models/core.py). ContextCore owns this
-# vocabulary; we treat it as the closed set the emitter is allowed to stamp for `business.criticality`.
-CRITICALITY_VALUES = frozenset({"critical", "high", "medium", "low"})
+# The criticality vocabulary is single-sourced from the package authority (gap #4 — no more
+# hand-maintained snapshot here). Re-exported under the historical name so existing importers
+# (validators/observability_artifact_checks.py, the generator, tests) keep working unchanged.
+from .taxonomy_enums import CRITICALITY_VALUES  # noqa: F401  (re-exported)
 
 # The attribute vocabulary this generator emits (min set per the handoff). owner is free text.
 BUSINESS_ATTRS = ("criticality", "owner")

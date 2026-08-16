@@ -156,7 +156,9 @@ mirror.
   `ServiceHints` fields in v1 is `generate_collector_enrichment`.
 - **NR-2 — SDK-side project→service fallback.** The producer already applied it (§0).
 - **NR-3 — FR-7 `business.criticality` as a spanmetrics dimension** (`calls_total{business_criticality=…}`).
-  Deferred.
+  ~~Deferred.~~ **SHIPPED as EC-2 (PR #324)** — the generator emits an append-only
+  `connectors: spanmetrics.dimensions: [business.criticality]` fragment (`artifact_generator_generators.py:~3415`),
+  proven end-to-end by `test_collector_enrichment_live.py`. `owner` remains off metric labels (cardinality).
 - **NR-4 — `business.context_version` OTTL statement.** Provenance lives in the header comment; keeps the
   emitted statement set equal to the reference for clean semantic parity.
 - **NR-5 — value-grouping (OR-chaining services that share a value).** The generator emits one statement

@@ -32,6 +32,18 @@ def _alert_name(metric: str) -> str:
     return "".join(p[:1].upper() + p[1:] for p in parts) or "Alert"
 
 
+def _collisions(pairs: List[tuple[str, str]]) -> List[tuple[str, set[str]]]:
+    """Alert names minted by more than one distinct source signal.
+
+    ``pairs`` is ``(alert_name, signal_name)``. Returns ``[(alert_name, {sources})]``
+    for every name a lossy ``_alert_name`` mapped >1 distinct signal onto — the
+    source of a duplicate rule."""
+    sources: Dict[str, set] = {}
+    for alert_name, signal_name in pairs:
+        sources.setdefault(alert_name, set()).add(signal_name)
+    return [(n, s) for n, s in sorted(sources.items()) if len(s) > 1]
+
+
 def _expr_for(sig: Signal) -> Optional[str]:
     """The PromQL the rule fires on: a raw ``expr`` escape hatch wins; else ``<name> <op> <value>``
     from the declarative threshold; ``None`` when the signal carries neither (panel-only)."""
@@ -51,15 +63,18 @@ def render_domain_alert_rules(spec: ObservabilitySpec, project_id: str = "domain
     (never an empty active file).
     """
     rules: List[Dict[str, Any]] = []
+    name_pairs: List[tuple[str, str]] = []
     for sig in spec.signals:
         expr = _expr_for(sig)
         if expr is None:
             continue
         severity = sig.threshold.severity if sig.threshold else "warning"
         for_duration = sig.threshold.for_ if sig.threshold else "0m"
+        alert_name = _alert_name(sig.name)
+        name_pairs.append((alert_name, sig.name))
         rules.append(
             {
-                "alert": _alert_name(sig.name),
+                "alert": alert_name,
                 "expr": expr,
                 "for": for_duration,
                 "labels": {"severity": severity},
@@ -75,6 +90,25 @@ def render_domain_alert_rules(spec: ObservabilitySpec, project_id: str = "domain
             output_path=output_path,
             status="skipped",
             error_message="no alertable signals (no thresholds or exprs declared)",
+        )
+
+    # `_alert_name` is a lossy PascalCase transform (``a.b``, ``a_b``, ``a-b`` all
+    # collapse to ``Ab``), so distinct signals can mint the same alert name. The
+    # name is a rule's identity — a collision emits two rules Prometheus can't tell
+    # apart and a run diff can only half-pair. Refuse to emit the corrupt mirror;
+    # surface the collision at the source (fail-honest, like the empty-rules skip).
+    collisions = _collisions(name_pairs)
+    if collisions:
+        return ArtifactResult(
+            artifact_type="alert_rule",
+            service_id=project_id,
+            output_path=output_path,
+            status="error",
+            error_message=(
+                "duplicate alert name(s) from distinct signals — rename the "
+                "colliding signals so `_alert_name` stays unique: "
+                + "; ".join(f"{name} ← {sorted(srcs)}" for name, srcs in collisions)
+            ),
         )
 
     content_dict = {"groups": [{"name": f"{project_id}.domain", "rules": rules}]}

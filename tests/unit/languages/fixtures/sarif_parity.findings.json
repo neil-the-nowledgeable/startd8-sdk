@@ -1,0 +1,34 @@
+[
+  {
+    "check": "dangling_touches",
+    "severity": "error",
+    "message": "Touches names a non-existent module: game-engine",
+    "file": "reqs/REQ-01.det-req.md",
+    "line": 14
+  },
+  {
+    "check": "risk_hygiene",
+    "severity": "warning",
+    "message": "FR has no Risk annotation",
+    "file": "reqs/REQ-02.det-req.md"
+  },
+  {
+    "check": "dangling_touches",
+    "severity": "error",
+    "message": "Touches names a non-existent module: renderer",
+    "file": "reqs/REQ-03.det-req.md",
+    "line": 7
+  },
+  {
+    "check": "",
+    "severity": "error",
+    "message": "finding with empty check id \u2014 must be skipped",
+    "file": "reqs/REQ-04.det-req.md",
+    "line": 3
+  },
+  {
+    "check": "orphan_finding",
+    "severity": "warning",
+    "message": "finding with no file \u2014 must be skipped"
+  }
+]

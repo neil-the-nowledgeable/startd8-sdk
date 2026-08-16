@@ -17,6 +17,7 @@ import re
 from typing import List, Optional
 
 from ..languages._validation_utils import get_contamination_fingerprints
+from .rule_catalog import rule_severity
 from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _CONSOLE_LOG_RE = re.compile(
@@ -71,7 +72,7 @@ def _check_console_log_in_service(
         if _CONSOLE_LOG_RE.search(stripped):
             issues.append(SemanticIssue(
                 check="console_log_in_service",
-                severity="warning",
+                severity=rule_severity("console_log_in_service"),
                 message=(
                     "console.log/warn/error detected — "
                     "use a structured logger (winston, pino) instead"
@@ -91,7 +92,7 @@ def _check_var_usage(source: str) -> List[SemanticIssue]:
         if _VAR_DECL_RE.match(stripped):
             issues.append(SemanticIssue(
                 check="var_usage",
-                severity="warning",
+                severity=rule_severity("var_usage"),
                 message="Use `const` or `let` instead of `var`",
                 line=i,
             ))
@@ -112,7 +113,7 @@ def _check_duplicate_requires(source: str) -> List[SemanticIssue]:
             if module in seen:
                 issues.append(SemanticIssue(
                     check="duplicate_require",
-                    severity="warning",
+                    severity=rule_severity("duplicate_require"),
                     message=(
                         f"Duplicate import of `{module}` "
                         f"(first at line {seen[module]})"
@@ -144,7 +145,7 @@ def _check_unhandled_promises(source: str) -> List[SemanticIssue]:
             if stripped.rstrip().endswith(';') or stripped.rstrip().endswith(')'):
                 issues.append(SemanticIssue(
                     check="unhandled_promise",
-                    severity="warning",
+                    severity=rule_severity("unhandled_promise"),
                     message=(
                         "Potentially unhandled promise — "
                         "add `await` or `.catch()` for error handling"
@@ -176,7 +177,7 @@ def _check_python_contamination(source: str) -> List[SemanticIssue]:
         if stripped.startswith("#!/usr/bin/env python") or stripped.startswith("#!/usr/bin/python"):
             issues.append(SemanticIssue(
                 check="python_contamination",
-                severity="error",
+                severity=rule_severity("python_contamination"),
                 message="Python fingerprint `#!/usr/bin/env python` in JS/TS file — file is non-functional",
                 line=i,
             ))
@@ -187,7 +188,7 @@ def _check_python_contamination(source: str) -> List[SemanticIssue]:
         if _SELF_DOT_RE.match(line):
             issues.append(SemanticIssue(
                 check="python_contamination",
-                severity="error",
+                severity=rule_severity("python_contamination"),
                 message="Python fingerprint `self.` in JS/TS file — file is non-functional",
                 line=i,
             ))
@@ -197,7 +198,7 @@ def _check_python_contamination(source: str) -> List[SemanticIssue]:
             if stripped.startswith(fp) or (fp == "def " and re.match(r'^\s*def\s+\w+\s*\(', line)):
                 issues.append(SemanticIssue(
                     check="python_contamination",
-                    severity="error",
+                    severity=rule_severity("python_contamination"),
                     message=f"Python fingerprint `{fp.strip()}` in JS/TS file — file is non-functional",
                     line=i,
                 ))
@@ -223,7 +224,7 @@ def _check_module_system_consistency(source: str) -> List[SemanticIssue]:
     if has_cjs_any and has_esm_any:
         return [SemanticIssue(
             check="module_system_mixing",
-            severity="error",
+            severity=rule_severity("module_system_mixing"),
             message=(
                 "CommonJS (require/module.exports) and ESM (import/export) "
                 "mixed in same file — pick one module system"
@@ -251,7 +252,7 @@ def _check_duplicate_definitions(source: str) -> List[SemanticIssue]:
         if name in seen:
             issues.append(SemanticIssue(
                 check="duplicate_definition",
-                severity="warning",
+                severity=rule_severity("duplicate_definition"),
                 message=f"Duplicate definition of `{name}` (first at line {seen[name]})",
                 line=i,
             ))
@@ -271,7 +272,7 @@ def _check_empty_catch_blocks(source: str) -> List[SemanticIssue]:
         if not any(iss.line == line_num for iss in issues):
             issues.append(SemanticIssue(
                 check="empty_catch_block",
-                severity="warning",
+                severity=rule_severity("empty_catch_block"),
                 message="Empty catch block — errors should be logged or re-thrown",
                 line=line_num,
             ))
@@ -289,7 +290,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
         if _SQL_CONCAT_RE.search(stripped) or _SQL_TEMPLATE_RE.search(stripped):
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
-                severity="error",
+                severity=rule_severity("sql_injection_risk"),
                 message=(
                     "SQL injection risk: query built via string concatenation/interpolation "
                     "— use parameterized queries"
@@ -350,7 +351,7 @@ def _check_package_json_version(source: str) -> List[SemanticIssue]:
     except (json.JSONDecodeError, ValueError):
         issues.append(SemanticIssue(
             check="invalid_package_json",
-            severity="error",
+            severity=rule_severity("invalid_package_json"),
             message="package.json is not valid JSON",
         ))
         return issues
@@ -368,7 +369,7 @@ def _check_package_json_version(source: str) -> List[SemanticIssue]:
                 if not (min_v <= major <= max_v):
                     issues.append(SemanticIssue(
                         check="invalid_node_version",
-                        severity="error",
+                        severity=rule_severity("invalid_node_version"),
                         message=(
                             f"Node.js engine version `{major}` is outside "
                             f"known valid range ({min_v}–{max_v})"
@@ -379,7 +380,7 @@ def _check_package_json_version(source: str) -> List[SemanticIssue]:
     if "type" not in data:
         issues.append(SemanticIssue(
             check="missing_module_type",
-            severity="warning",
+            severity=rule_severity("missing_module_type"),
             message=(
                 'package.json missing "type" field — add '
                 '"type": "module" (ESM) or "type": "commonjs" (CJS) '

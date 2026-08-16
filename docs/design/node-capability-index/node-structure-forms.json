@@ -1,0 +1,42 @@
+{
+  "forms": [
+    {
+      "form": "function",
+      "id": "NODE-STRUCT-001",
+      "note": "function name() {}",
+      "parser_kind": "function"
+    },
+    {
+      "form": "class",
+      "id": "NODE-STRUCT-002",
+      "note": "class Name {}",
+      "parser_kind": "class"
+    },
+    {
+      "form": "method",
+      "id": "NODE-STRUCT-003",
+      "note": "method in a class body",
+      "parser_kind": "method"
+    },
+    {
+      "form": "const_function",
+      "id": "NODE-STRUCT-004",
+      "note": "const name = () => {} / const name = function(){}",
+      "parser_kind": "const_function"
+    },
+    {
+      "form": "interface",
+      "id": "NODE-STRUCT-005",
+      "note": "TS interface Name {}",
+      "parser_kind": "interface"
+    },
+    {
+      "form": "type_alias",
+      "id": "NODE-STRUCT-006",
+      "note": "TS type Name = ...",
+      "parser_kind": "type_alias"
+    }
+  ],
+  "schema_version": "1.0",
+  "substrate": "nodejs_parser.py (regex, advisory-tier; imports-only φ; decorators not extracted)"
+}

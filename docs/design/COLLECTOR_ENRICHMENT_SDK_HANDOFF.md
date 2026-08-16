@@ -16,6 +16,20 @@ per-service `{owner, criticality}` map has **one source** instead of the demo's 
 **Spec / plan (pilots repo):** `docs/design/requirements/REQ_COLLECTOR_ENRICHMENT.md` ·
 `docs/plans/COLLECTOR_ENRICHMENT_NEXT_STEPS.md`
 
+> **SDK SIDE BUILT — 2026-08-15 (ledger below was stale).** FR-1b (`ServiceHints` per-service) and
+> the generator FR-2–11 are **built, tested, and on `main`** (commit `5896a15e` #321; follow-ups
+> #324). Verified this session: `tests/unit/observability/test_collector_enrichment*.py` = 67 passed,
+> 1 skipped; full obs suite 1285 passed. **Residuals closed this session:** FR-7 doc drift (above);
+> criticality-vocabulary single-sourced to `taxonomy_enums.CRITICALITY_VALUES` with a drift guard
+> (`test_criticality_authority.py`). **Acceptance #5 PROVEN — 2026-08-16:** the live test
+> `test_live_enrichment_promotes_business_label` booted `otelcol-contrib` 0.158.0, emitted a real span
+> for `service.name=frontend`, and observed `calls_total{business_criticality="critical"}` at the sink
+> `/metrics` (survives transform → spanmetrics connector). The test stays **binary-gated in CI** (skips
+> without `otelcol-contrib` on PATH/`$OTELCOL_CONTRIB_BIN`) — it is not stale, just infra-gated.
+> **The one remaining open loop is consumer-side, not SDK:** the InsightFinder demo
+> never consumed the generator (bare `spec.targets`) — tracked on ContextCore `docs/collector-enrichment-extraction-plan`.
+> _(Canonical copy in ContextCore needs the same FR-7 + ledger re-sync.)_
+
 ---
 
 ## BLUF
@@ -89,8 +103,13 @@ genuinely per-service.
   (generalize `bpi-astronomy/tools/check_context.py`).
 - Idempotent regen; retain the prior artifact for rollback/diff.
 
-**Deferred (NOT v1):** FR-7 spanmetrics dimension, `cost_weight`/`owner`-dimension extensions, FR-10b
-post-cutover drift detection, the episodic `business.event` layer.
+**Shipped after v1 (was listed deferred):** FR-7 `business.criticality` spanmetrics dimension —
+delivered as **EC-2 in PR #324** (`artifact_generator_generators.py:~3415`; the generator emits an
+append-only `connectors: spanmetrics.dimensions: [business.criticality]` fragment, proven by
+`test_collector_enrichment_live.py`). Owner is deliberately NOT a dimension (unbounded cardinality).
+
+**Still deferred (NOT v1):** `cost_weight`/`owner`-dimension extensions, FR-10b post-cutover drift
+detection, the episodic `business.event` layer.
 
 ## Acceptance (SDK side)
 
@@ -115,5 +134,9 @@ post-cutover drift detection, the episodic `business.event` layer.
 |----|-------|--------|
 | FR-1a field (`TargetSpec.criticality/owner`) | ContextCore | ✅ merged (#59) |
 | FR-1a export (`instrumentation_hints[svc].business`) | ContextCore | ✅ **this handoff's companion PR** |
-| FR-1b (`ServiceHints` per-service) | startd8-sdk | ⏳ **you** |
-| FR-2–11 (generator) | startd8-sdk | ⏳ **you** |
+| FR-1b (`ServiceHints` per-service) | startd8-sdk | ✅ merged (`5896a15e` #321) |
+| FR-2–11 (generator) | startd8-sdk | ✅ merged (`5896a15e` #321; follow-ups #324) |
+| FR-7 spanmetrics dimension | startd8-sdk | ✅ shipped as EC-2 (#324) |
+| Criticality vocab single-source (gap #4) | startd8-sdk | ✅ `taxonomy_enums.CRITICALITY_VALUES` + drift guard |
+| Acceptance #5 live wiring (survives-to-sink) | startd8-sdk | ✅ proven vs otelcol-contrib 0.158.0 (2026-08-16); CI test stays binary-gated |
+| Demo cutover (consume the generator) | ContextCore / demo | ⏳ `docs/collector-enrichment-extraction-plan` |

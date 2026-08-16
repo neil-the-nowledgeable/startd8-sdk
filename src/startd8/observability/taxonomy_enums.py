@@ -48,6 +48,32 @@ class Orientation(str, Enum):
     BRIDGE = "bridge"
 
 
+class Criticality(str, Enum):
+    """The 4-value business-criticality vocabulary (how important a service/target is).
+
+    This is the SINGLE authority for the ``business.criticality`` enum across the
+    observability package — the collector-enrichment OTTL emitter, its fail-fast
+    validator, the criticality→alert-severity map, and the coverage-report rank all
+    draw the *closed set* from here rather than restating the literals (which drift).
+    Per the collector-enrichment gap analysis (gap #4, "criticality vocabulary drift"),
+    ``collector_enrichment_validation.CRITICALITY_VALUES`` was a hand-maintained
+    snapshot; it now re-exports ``CRITICALITY_VALUES`` defined below.
+
+    **Cross-repo contract:** ContextCore supplies criticality per service via the
+    manifest ``spec.business.criticality`` / ``spec.targets[].criticality`` field
+    (`.contextcore.yaml`), forwarded as ``instrumentation_hints[svc].business.criticality``
+    (FR-1a/1b). That manifest field IS the interface; these four values are its agreed
+    vocabulary. A drift guard (``test_criticality_authority.py``) pins the set so a
+    change here or in a consuming map fails loudly instead of silently diverging.
+    Ordered ``str``-valued so a field typed ``str`` can hold a member transparently.
+    """
+
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
 class RouteState(str, Enum):
     """The 4-value emit-vs-cede provenance axis (who emits / why skipped).
 
@@ -82,6 +108,20 @@ ORIENTATION_VALUES: FrozenSet[str] = frozenset(o.value for o in Orientation)
 #: Frozenset of valid ``route_state`` values, for cheap membership validation.
 ROUTE_STATE_VALUES: FrozenSet[str] = frozenset(r.value for r in RouteState)
 
+#: Frozenset of valid ``criticality`` values — the closed set the collector-enrichment
+#: emitter is allowed to stamp for ``business.criticality`` (and the coverage/severity maps
+#: draw their key vocabulary from). The single authority; do not restate the literals.
+CRITICALITY_VALUES: FrozenSet[str] = frozenset(c.value for c in Criticality)
+
+#: Criticality in descending severity (most → least important). Consumers that rank or sort
+#: (coverage report, dashboard placement) index into this instead of a private rank dict.
+CRITICALITY_ORDER: tuple = (
+    Criticality.CRITICAL.value,
+    Criticality.HIGH.value,
+    Criticality.MEDIUM.value,
+    Criticality.LOW.value,
+)
+
 
 def is_valid_category(value: str) -> bool:
     """True if ``value`` is a member of the category enum (``""`` is unset, not valid)."""
@@ -91,3 +131,8 @@ def is_valid_category(value: str) -> bool:
 def is_valid_orientation(value: str) -> bool:
     """True if ``value`` is a member of the orientation enum (``""`` is unset, not valid)."""
     return value in ORIENTATION_VALUES
+
+
+def is_valid_criticality(value: str) -> bool:
+    """True if ``value`` is a member of the criticality enum (``""`` is unset, not valid)."""
+    return value in CRITICALITY_VALUES

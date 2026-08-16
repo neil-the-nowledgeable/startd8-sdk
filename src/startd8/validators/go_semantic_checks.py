@@ -15,6 +15,7 @@ import re
 from typing import List, Optional
 
 from ..languages._validation_utils import GO_CONTAMINATION_FINGERPRINTS
+from .rule_catalog import rule_severity
 from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 # Pattern: function call with err return that's not checked
@@ -72,7 +73,7 @@ def _check_unchecked_errors(source: str) -> List[SemanticIssue]:
             if not found_check:
                 issues.append(SemanticIssue(
                     check="unchecked_error",
-                    severity="warning",
+                    severity=rule_severity("unchecked_error"),
                     message=(
                         "Error value `err` assigned but not checked — "
                         "add `if err != nil` handling"
@@ -109,7 +110,7 @@ def _check_duplicate_function_names(source: str) -> List[SemanticIssue]:
                     label = name
                 issues.append(SemanticIssue(
                     check="duplicate_function",
-                    severity="warning",
+                    severity=rule_severity("duplicate_function"),
                     message=(
                         f"Duplicate function `{label}` "
                         f"(first at line {seen[key]}, again at line {i})"
@@ -136,7 +137,7 @@ def _check_fmt_println_in_service(source: str) -> List[SemanticIssue]:
         if _FMT_PRINT_RE.search(stripped):
             issues.append(SemanticIssue(
                 check="fmt_println_in_service",
-                severity="warning",
+                severity=rule_severity("fmt_println_in_service"),
                 message=(
                     "fmt.Print*/Println in non-main package — "
                     "use structured logging (logrus, zap, slog) instead"
@@ -163,14 +164,14 @@ def _check_dot_imports(source: str) -> List[SemanticIssue]:
         if in_import_block and _DOT_IMPORT_RE.match(stripped):
             issues.append(SemanticIssue(
                 check="dot_import",
-                severity="warning",
+                severity=rule_severity("dot_import"),
                 message="Dot-import pollutes namespace — use explicit import",
                 line=i,
             ))
         elif not in_import_block and re.match(r'^\s*import\s+\.\s+"', stripped):
             issues.append(SemanticIssue(
                 check="dot_import",
-                severity="warning",
+                severity=rule_severity("dot_import"),
                 message="Dot-import pollutes namespace — use explicit import",
                 line=i,
             ))
@@ -236,7 +237,7 @@ def _check_python_contamination(source: str) -> List[SemanticIssue]:
                 seen.add(fp)
                 issues.append(SemanticIssue(
                     check="python_contamination",
-                    severity="error",
+                    severity=rule_severity("python_contamination"),
                     message=f"Python fingerprint `{fp.strip()}` in Go file — file is non-functional",
                     line=i,
                 ))
@@ -279,7 +280,7 @@ def _check_package_filepath_alignment(
 
     return [SemanticIssue(
         check="package_dir_mismatch",
-        severity="warning",
+        severity=rule_severity("package_dir_mismatch"),
         message=(
             f"Package `{actual_pkg}` does not match directory name "
             f"`{parent_dir}` — Go convention requires package name to match directory"
@@ -314,7 +315,7 @@ def _go_version_issue(
         reason = "is implausibly high — verify it is a released Go version"
     return SemanticIssue(
         check="invalid_go_version",
-        severity="warning",
+        severity=rule_severity("invalid_go_version"),
         message=f"{what} `{major}.{minor}` {reason}",
         line=line,
     )
@@ -366,7 +367,7 @@ def _check_go_mod_validity(source: str) -> List[SemanticIssue]:
     if not has_module:
         issues.append(SemanticIssue(
             check="invalid_go_mod",
-            severity="error",
+            severity=rule_severity("invalid_go_mod"),
             message="go.mod missing `module` directive",
             line=1,
         ))
@@ -374,7 +375,7 @@ def _check_go_mod_validity(source: str) -> List[SemanticIssue]:
     if not has_go_directive:
         issues.append(SemanticIssue(
             check="invalid_go_mod",
-            severity="error",
+            severity=rule_severity("invalid_go_mod"),
             message="go.mod missing `go <version>` directive",
             line=1,
         ))
@@ -384,7 +385,7 @@ def _check_go_mod_validity(source: str) -> List[SemanticIssue]:
         if fp in source:
             issues.append(SemanticIssue(
                 check="python_contamination",
-                severity="error",
+                severity=rule_severity("python_contamination"),
                 message=f"Python fingerprint `{fp.strip()}` in go.mod — file is non-functional",
             ))
             break  # One contamination finding is sufficient for go.mod
@@ -500,7 +501,7 @@ def check_go_version_consistency(
     if mod_version and docker_version and mod_version != docker_version:
         issues.append(SemanticIssue(
             check="go_version_mismatch",
-            severity="warning",
+            severity=rule_severity("go_version_mismatch"),
             message=(
                 f"Go version mismatch: go.mod has `go {mod_version}` but "
                 f"Dockerfile uses `golang:{docker_version}` — these should match"
