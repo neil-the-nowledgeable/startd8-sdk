@@ -1,5 +1,22 @@
 # Review: navig8r ↔ View Definition integration — wired vs inert
 
+> **Currency update (2026-08-16) — the mechanism now exists; the path is DORMANT, not absent.**
+> Re-grounded against `main` after **REQ-14 was BUILT** (`a84bf12c`, additive runtime override) and
+> **REQ-08 was BUILT** (`sources_pipeline.py` / `verify_oracle.py` / `pipeline_provenance`). The
+> wired-vs-inert finding below is superseded in ONE respect:
+> - **`control`/`regions` are no longer *absent* from the pipeline — they are *dormant*.** REQ-14 added
+>   `RenderProfile.control`/`.regions` + `applyDefinitionOverride()` (re-labels the panel/regions from the
+>   profile at runtime). But it is an ADDITIVE override: the base render keeps the hardcoded labels, and
+>   the override only fires when a domain *supplies a `control`/`regions` delta*. The shipped domains
+>   (requirements/capability) supply none → `applyDefinitionOverride` is a **no-op** → the 2-domain
+>   scaffold-label diff is **still byte-identical** (re-verified 2026-08-16). Honest status:
+>   **wired-but-unfueled (dormant value path)**, not *not-wired*. The mirror is *closeable* (mechanism in
+>   place) but not yet *closed* (no domain fuels it). Closing it = give a domain a `control`/`regions`
+>   delta and prove it re-labels — the atomic-override half of REQ-14's own FR-3/FR-5.
+> - **REQ-08 built** means the ADR/REQ-16/REQ-17 premise ("REQ-08 reconstructs `verify` via longest-prefix
+>   ownership") is now grounded in *shipped code*, not a spec — the field-promotion case is stronger.
+
+
 **Date:** 2026-08-15 · **Type:** live-integration review (read-only; nothing built)
 **Scope:** how much of the "new presentation logic" (REQ-10 View Definition + cascade) the navigator
 actually renders *through* today, vs what is still hardcoded in the template.
