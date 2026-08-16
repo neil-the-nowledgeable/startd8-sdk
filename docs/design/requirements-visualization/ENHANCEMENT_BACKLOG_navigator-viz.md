@@ -35,8 +35,8 @@ remain as triaged rows (re-ground before building — a backlog item is a belief
 | ~~**R8-EB-1**~~ ✅ | XS | Add a test for `verify --format html` (verdicts-as-Nodes arm) | `cli_navigator.py:303` html arm had no test | **DONE** (harvest) |
 | ~~**R8-EB-2**~~ ✅ | XS | Remove dead `'verify'` from `_READONLY_NAV_SUBCOMMANDS` (self-exec catches it first) | `verify_oracle.py:58` | **DONE** (harvest) |
 | **R8-EB-3** | S | Wire `topo_order()` as a fail-loud build-time acyclicity assert in `nodes_from_pipeline` (or demote to a private test helper) — it is production-dormant (test-only caller) | `sources_pipeline.py` `topo_order`; only caller `test_pipeline_source.py:95` | open |
-| **R8-EB-4** | S | Implement the D-B "FR id" query in `pipeline_provenance` (resolve an FR-id → its `Lives`/`Touches` file, then walk) — currently file-path only (soft-labelled) | `provenance.py` `_owning_stage_key` prefix-matches paths only | open |
-| **R8-EB-5** | M | Expose `pipeline_provenance` via an operator CLI surface (`navigator provenance --query <path>`) — today only the FR-7 render-fold consumes it; no standalone entry point | `cli_navigator.py:141` sole caller | open |
+| ~~**R8-EB-4**~~ ✅ | S | Implement the D-B "FR id" query in `pipeline_provenance` (resolve an FR-id → its `Lives`/`Touches` file, then walk) | `provenance.py` `_fr_file_path` + `requirement_nodes` param; FR named on the intent-origin row | **DONE** (`5b5cee9e`+) — resolves an FR-id → its first `code` `Lives:`/`Touches:` file; unknown/unresolvable FR → honest not-found. +6 tests |
+| ~~**R8-EB-5**~~ ✅ | M | Expose `pipeline_provenance` via an operator CLI surface | delivered alongside EB-4 (a wired consumer is what keeps the FR-id path non-dormant) | **DONE** — `navigator provenance --query <fr-id\|path> [--requirements <doc>]`; JSON chain, exit 1 on not-found so CI can distinguish traced from unowned |
 
 **Value-path lesson carried forward:** the GATE-2 reachability probe scored `topo_order` "wired" on a
 **test-only** reference — Phase-2.5 must grep for a *non-test* caller to catch production-dormancy the

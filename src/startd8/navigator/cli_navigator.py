@@ -333,6 +333,47 @@ def verify(
     raise typer.Exit(rc)
 
 
+@navigator_app.command("provenance")
+def provenance(
+    query: str = typer.Option(
+        ..., "--query",
+        help="What to trace: an FR id (e.g. FR-3) or a file path. An FR id resolves to the FR's "
+        "code Lives:/Touches: file via --requirements (R8-EB-4).",
+    ),
+    requirements: Optional[Path] = typer.Option(
+        None, "--requirements",
+        help="det-req markdown — required to resolve an FR-id query to its file (ignored for a path query).",
+    ),
+) -> None:
+    """Trace an artifact (or an FR) back through the prose→product pipeline stages to its origin (FR-6).
+
+    Emits the ordered ``pipeline_provenance`` chain as JSON: one row per stage passed through (SPEC/un-built
+    stages included so the trace shows the gap), or a single not-found row when nothing owns the artifact.
+    An FR-id ``--query`` resolves against ``--requirements`` to the FR's representative code file. Note the
+    stages model the SDK's *compiler* pipeline (seeds → det_req → forward_manifest → backend_codegen →
+    test_emitter → docs), so an FR-id traces only when its file falls under one of those; an FR implemented
+    elsewhere honestly reports not-found (exit 1).
+    """
+    _stages = pipeline_stages()
+    stage_nodes = nodes_from_pipeline()
+    req_nodes = None
+    if requirements is not None:
+        try:
+            req_nodes = nodes_from_requirements(requirements)
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_ERR)
+    chain = pipeline_provenance(stage_nodes, _stages, query=query, requirement_nodes=req_nodes)
+    text = json.dumps(
+        {"query": query, "chain": chain}, indent=2, sort_keys=True, ensure_ascii=True
+    ) + "\n"
+    sys.stdout.write(text)
+    # A trace that reaches a real stage exits 0; a not-found (unowned / unresolvable FR) exits 1 so a
+    # caller/CI can tell "traced" from "nothing owns this".
+    traced = any(row.get("stage") is not None for row in chain)
+    raise typer.Exit(_EXIT_OK if traced else _EXIT_ERR)
+
+
 def _validate_node_json(node_list, path: Path, where: str) -> None:
     """Structurally validate a decoded nodes-json payload BEFORE handing it to ``nodes_from_json``.
 

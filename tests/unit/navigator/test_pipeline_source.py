@@ -13,7 +13,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from startd8.cli import app
-from startd8.navigator.models import node_field_names
+from startd8.navigator.models import Node, NodeEvidence, node_field_names
 from startd8.navigator.provenance import pipeline_provenance
 from startd8.navigator.sources_pipeline import (
     PIPELINE_PROFILE,
@@ -300,6 +300,67 @@ def test_provenance_not_found_row():
     assert len(rows) == 1
     assert rows[0]["present"] is False
     assert rows[0]["stage"] is None
+
+
+# ── R8-EB-4: FR-id query resolution ──────────────────────────────────────────────────────────────
+
+def _fr_node(key, ref, etype="code"):
+    return Node(key=key, does="", lives=(NodeEvidence(type=etype, ref=ref, note=""),),
+                category="functional-requirements")
+
+
+def test_provenance_fr_id_resolves_to_chain():
+    """R8-EB-4: an FR-id query resolves via requirement_nodes to the FR's code file, then traces."""
+    nodes = nodes_from_pipeline()
+    reqs = [_fr_node("FR-9", "src/startd8/backend_codegen/thing.py")]
+    rows = pipeline_provenance(nodes, stages(), query="FR-9", requirement_nodes=reqs)
+    assert [r["stage"] for r in rows][-1] == "stage:impl"       # backend_codegen/ → impl
+    intent = rows[0]
+    assert intent["stage"] == "stage:intent" and "FR-9" in intent["origin"]   # requirement named at origin
+
+
+def test_provenance_fr_id_without_corpus_is_not_found():
+    """R8-EB-4: an FR-id with no requirement_nodes → an honest not-found row (never an invented path)."""
+    rows = pipeline_provenance(nodes_from_pipeline(), stages(), query="FR-3")
+    assert len(rows) == 1 and rows[0]["present"] is False
+    assert "requirement_nodes" in rows[0]["origin"]
+
+
+def test_provenance_unknown_fr_id_is_not_found():
+    rows = pipeline_provenance(nodes_from_pipeline(), stages(), query="FR-404",
+                               requirement_nodes=[_fr_node("FR-9", "src/x.py")])
+    assert rows[0]["present"] is False and "not in the provided requirement corpus" in rows[0]["origin"]
+
+
+def test_provenance_fr_id_with_no_code_ref_is_not_found():
+    rows = pipeline_provenance(nodes_from_pipeline(), stages(), query="FR-9",
+                               requirement_nodes=[_fr_node("FR-9", "docs/x.md", etype="doc")])
+    # a doc-only Lives still yields a path (fallback), but a bare FR with no lives → not-found:
+    bare = Node(key="FR-9", does="", category="functional-requirements")
+    rows2 = pipeline_provenance(nodes_from_pipeline(), stages(), query="FR-9", requirement_nodes=[bare])
+    assert rows2[0]["present"] is False and "no code" in rows2[0]["origin"]
+    assert isinstance(rows, list)
+
+
+def test_cli_provenance_fr_id(tmp_path):
+    """R8-EB-4 wired: navigator provenance --query FR-1 --requirements <doc> traces via the FR's Lives."""
+    doc = tmp_path / "reqs.md"
+    doc.write_text(
+        "# Demo — Requirements\n\n"
+        "- **FR-1 — Demo.** Does a thing. Name: demo thing. "
+        "Lives: code src/startd8/backend_codegen/thing.py. Verify: it works. Serves: O-1\n",
+        encoding="utf-8",
+    )
+    res = RUNNER.invoke(app, ["navigator", "provenance", "--query", "FR-1", "--requirements", str(doc)])
+    assert res.exit_code == 0, res.output
+    chain = json.loads(res.stdout)["chain"]
+    assert chain[-1]["stage"] == "stage:impl"
+
+
+def test_cli_provenance_unowned_path_exits_nonzero():
+    res = RUNNER.invoke(app, ["navigator", "provenance", "--query", "totally/unowned.py"])
+    assert res.exit_code != 0
+    assert json.loads(res.stdout)["chain"][0]["present"] is False
 
 
 def test_provenance_spec_stage_still_emits_row(tmp_path):

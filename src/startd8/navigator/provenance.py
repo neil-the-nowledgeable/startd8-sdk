@@ -7,12 +7,16 @@ value so the origin audit can flag any chrome that has no source (an orphan the 
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..wireframe.plan import WireframePlan
 from ..wireframe.profile import RenderProfile
 from ..wireframe.shape_dialect import format_shape_line, format_status_counts_line
 from .models import Node, NodeStatus
+
+# An FR local key (``FR-3``, ``FR-IMP-4``) — distinguishes an FR-id query from a file-path query (R8-EB-4).
+_FR_ID_RE = re.compile(r"^FR-[0-9A-Za-z-]+$")
 
 
 def _distinct(seq):
@@ -66,36 +70,86 @@ def _owning_stage_key(query: str, stages: Sequence[Any]) -> Optional[str]:
     return best_key
 
 
+def _path_of_ref(ref: str) -> str:
+    """Strip a ``git:<sha>:<path>`` evidence ref down to its bare path; other refs pass through."""
+    if ref.startswith("git:"):
+        parts = ref.split(":", 2)
+        return parts[2] if len(parts) == 3 else ref
+    return ref
+
+
+def _fr_file_path(fr_node: Node) -> Optional[str]:
+    """A representative code file path for a requirement Node (R8-EB-4): its first ``code`` ``Lives:``
+    ref, else its first ``Touches:`` path, else any ``Lives:`` ref. ``None`` when the FR grounds to no
+    traceable file — an honest not-found rather than an invented path."""
+    for ev in getattr(fr_node, "lives", ()) or ():
+        if ev.type == "code":
+            return _path_of_ref(ev.ref)
+    for tok in (fr_node.attributes.get("touches") or "").split(","):
+        tok = tok.strip().strip("`")
+        if tok:
+            return tok
+    for ev in getattr(fr_node, "lives", ()) or ():
+        return _path_of_ref(ev.ref)
+    return None
+
+
 def pipeline_provenance(
     nodes: Sequence[Node],
     stages: Sequence[Any],
     *,
     query: str,
+    requirement_nodes: Optional[Sequence[Node]] = None,
 ) -> List[Dict[str, Any]]:
     """Trace a delivered artifact back through the pipeline stages to its originating requirement (FR-6).
 
     A **sibling** of :func:`chrome_provenance` in the same module (Mottainai — D-4): the row schema is
-    ``{element, stage, origin, value, present}`` (adds ``stage``, keeps ``value`` for parity). ``query``
-    is a **file path** (D-B — explicit arg). NOTE: resolving a bare **FR id** to its ``Lives``/``Touches``
-    file first is not yet implemented — an FR-id query prefix-matches no ``sdk_artifact`` and returns the
-    not-found row, so pass the FR's file path (tracked as a CEP enhancement). The queried artifact is
-    resolved to its owning stage
-    by **longest-prefix** ``sdk_artifact`` match; the walk then follows the DEPENDS-ON edges upstream to
-    the requirement, emitting one ordered row per stage passed through (**including SPEC / un-built
-    stages** so the trace shows the gap — R1-S10). An artifact owned by **no** stage yields a single
-    ``present=False`` row (R1-S8). The stage ordinals of the returned chain are a subsequence of the
-    FR-1 ordinals, ending at ``stage:intent`` (the requirement origin).
+    ``{element, stage, origin, value, present}`` (adds ``stage``, keeps ``value`` for parity).
+
+    ``query`` is either a **file path** or a bare **FR id** (``FR-3``) — the D-B "FR id or file path"
+    contract (R8-EB-4). An FR-id query is resolved against ``requirement_nodes`` (from
+    ``nodes_from_requirements``) to the FR's representative code file — its first ``code`` ``Lives:``
+    ref, else its first ``Touches:`` path — and the trace runs from there; when known, the FR is named
+    on the origin (``stage:intent``) row. An FR-id with no ``requirement_nodes`` given, an unknown FR,
+    or an FR that grounds to no file yields the not-found row (honest, never an invented path).
+
+    The (resolved) artifact is resolved to its owning stage by **longest-prefix** ``sdk_artifact`` match;
+    the walk then follows the DEPENDS-ON edges upstream to the requirement, emitting one ordered row per
+    stage passed through (**including SPEC / un-built stages** so the trace shows the gap — R1-S10). An
+    artifact owned by **no** stage yields a single ``present=False`` row (R1-S8). The stage ordinals of
+    the returned chain are a subsequence of the FR-1 ordinals, ending at ``stage:intent``.
     """
     stage_by_key = {st.key: st for st in stages}
     node_by_key = {n.key: n for n in nodes}
 
-    owner_key = _owning_stage_key(query, stages)
+    # R8-EB-4: an FR-id query resolves to the FR's representative code file before the artifact walk.
+    fr_id: Optional[str] = None
+    resolved_query = query
+    if _FR_ID_RE.match(query.strip()):
+        fr_id = query.strip()
+        fr_by_key = {n.key: n for n in (requirement_nodes or ())}
+        fr_node = fr_by_key.get(fr_id)
+        path = _fr_file_path(fr_node) if fr_node is not None else None
+        if path is None:
+            if requirement_nodes is None:
+                reason = f"FR {fr_id}: pass requirement_nodes to resolve an FR-id query"
+            elif fr_node is None:
+                reason = f"FR {fr_id}: not in the provided requirement corpus"
+            else:
+                reason = f"FR {fr_id}: grounds to no code Lives:/Touches: path to trace"
+            return [{"element": query, "stage": None, "origin": reason, "value": query, "present": False}]
+        resolved_query = path
+
+    owner_key = _owning_stage_key(resolved_query, stages)
     if owner_key is None:
         # Unowned artifact → a single not-found row, never an empty chain (R1-S8).
+        origin = "no stage owns this artifact (longest-prefix match found none)"
+        if fr_id is not None:
+            origin = f"FR {fr_id} → {resolved_query}: {origin}"
         return [{
-            "element": query,
+            "element": resolved_query,
             "stage": None,
-            "origin": "no stage owns this artifact (longest-prefix match found none)",
+            "origin": origin,
             "value": query,
             "present": False,
         }]
@@ -118,10 +172,14 @@ def pipeline_provenance(
         st = stage_by_key[key]
         node = node_by_key.get(key)
         status = node.status if node is not None else NodeStatus.SPEC
+        origin = f"stage {st.ordinal} ({st.compiler_analogue}) — status {status}"
+        # Name the originating FR on the requirement-origin (intent) row when resolved from an FR-id.
+        if fr_id is not None and key == "stage:intent":
+            origin = f"{origin} ← requirement {fr_id} ({resolved_query})"
         rows.append({
             "element": st.sdk_artifact,
             "stage": key,
-            "origin": f"stage {st.ordinal} ({st.compiler_analogue}) — status {status}",
+            "origin": origin,
             "value": st.human_form,
             "present": status != NodeStatus.SPEC,
         })
