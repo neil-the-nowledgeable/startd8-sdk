@@ -125,18 +125,22 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   /* Scaffold mode — the template's anatomy: outline every region carrying a data-scaffold role and
      float its label + data source, so an adopter (legal · benchmark · dev-os) can read the template
      itself from a debugging standpoint. Overlay only; no layout shift beyond the outline. */
-  /* scaffold mode needs a top gap so the floated label of the FIRST region isn't clipped off the page,
-     and each region's label sits in clear space above its own box instead of overlapping the region
-     above it. Applied only in scaffold mode (app path unaffected). */
-  body.scaffold{padding-top:18px}
-  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative;margin-top:15px}
-  /* blueprint-annotation label: a solid dark chip (white on --ink ≈ 13:1 contrast — legible over ANY
-     underlying content, unlike the old 9.5px semi-transparent colour-on-colour chip) with a
-     layer-coloured left stripe. 11px, full opacity, high z-index + shadow so it lifts off the content. */
-  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:-11px;left:8px;
+  /* Each region's label is a blueprint corner-annotation tucked INSIDE its own top-left (like a room
+     label on a floor plan), not floating in the margin ABOVE the box — the old top:-11px collided on
+     tightly-stacked + NESTED regions (a glance cell's label landed on the glance band's label). Every
+     region reserves a top label-band via padding-top, so a nested region's content — and its own label —
+     always start BELOW the parent's band. Scaffold-only: no body.scaffold on the app path → byte-identical. */
+  body.scaffold{padding-top:6px}
+  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative;
+    margin-top:10px;padding-top:26px}
+  /* the label chip: solid dark (white on --ink ≈ 13:1 contrast — legible over any content) with a
+     layer-coloured left stripe, seated in the corner and ellipsised so a long label never overflows a
+     narrow/nested region (the status-roll-up / shape cells were the worst case). */
+  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:4px;left:4px;
     z-index:10;background:var(--ink);color:#f7f3ea;font-family:var(--mono);font-size:11px;font-weight:600;
-    letter-spacing:.02em;padding:2px 8px;border-radius:4px;white-space:nowrap;pointer-events:none;
-    border-left:4px solid var(--accent);box-shadow:0 1px 4px rgba(0,0,0,.35)}
+    letter-spacing:.02em;padding:2px 8px;border-radius:4px;max-width:calc(100% - 8px);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;
+    border-left:4px solid var(--accent);box-shadow:0 1px 3px rgba(0,0,0,.28)}
   /* layer-aware colouring — the dark chip is constant (legibility); the left stripe + dashed outline
      carry the LAYER (control · descriptive · computed · node-driven), so scaffold mode still teaches
      the taxonomy without the failed white-on-ochre / white-on-green contrast. */
@@ -159,6 +163,24 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.frame-bare.show-layer-descriptive [data-layer="descriptive"] *,
   body.frame-bare.show-layer-computed [data-layer="computed"] *,
   body.frame-bare.show-layer-node [data-layer="node"] *{visibility:visible}
+  /* FR-6: display-logic templates — injected into EVERY region when the View Definition is on, so the
+     frame shows HOW and FROM WHAT each region renders (its field slots) via the REAL render classes. Must
+     stay visible through frame-bare's content-hiding, and force-reveal the normally-hidden key + meta
+     slots. Absent from every normal render (JS-injected only in frame mode) → served HTML / app path
+     byte-identical. */
+  body.frame-bare .vd-template, body.frame-bare .vd-template *{visibility:visible}
+  .vd-template{display:block;margin-top:2px;font-style:italic;color:var(--ink2)}
+  .vd-template .vd-t{font-size:13px;line-height:1.7}
+  .vd-template .vd-h{font-family:var(--serif);font-size:21px;color:var(--ink2);margin:3px 0}
+  .vd-template .vd-sub{font-size:12px;opacity:.85;margin-top:3px}
+  .vd-template .eyebrow{font-style:normal}
+  .vd-template .ndt-cap{font-family:var(--mono);font-size:10.5px;color:var(--ink2);
+    text-transform:uppercase;letter-spacing:.09em;margin:0 0 8px;font-style:normal}
+  .vd-template .lbl-key{display:inline !important;font-family:var(--mono);color:var(--ink2);font-weight:600}
+  .vd-template .node-meta{display:block !important}
+  .vd-template .lbl,.vd-template .det,.vd-template .lives,.vd-template .node-meta,
+  .vd-template .lbl-key{font-style:italic}
+  .vd-template .badge.ndt-badge{background:var(--ink2)}
   #debug #layerToggles{display:none} body.scaffold #debug #layerToggles{display:block}
   /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
   #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
@@ -835,10 +857,41 @@ __PLAN_DATA__
     // scaffold + frame-bare. `scaffold` (region outlines + ::before meta + legend) is on when EITHER
     // the View Definition pick OR the Outline-regions overlay is active; `frame-bare` (hide all region
     // CONTENT, leaving only the meta-descriptions) is on only for the View Definition pick.
+    // FR-6: display-logic templates — when the View Definition is shown, EVERY region renders a
+    // slot-annotated skeleton of WHAT it displays and FROM WHAT it derives (built from the real render
+    // classes), so no region is blank. Injected client-side in frame mode only; removed on leaving it.
+    var FRAME_TEMPLATES={
+      mast:'<span class="eyebrow">‹eyebrow›</span><div class="vd-h">‹headline›</div>'+
+           '<div class="vd-sub">‹why› · ‹do›  — reading guidance (profile.why / profile.do)</div>',
+      glance:'<div class="vd-t">‹status roll-up ← status_counts›  ·  ‹shape ← plan.shape›  ·  ‹content›  ·  ‹cascade›</div>',
+      toolbar:'<div class="vd-t">‹View ← audience / delivery-role›  ·  ‹Depth ← fluency lens›</div>',
+      legend:'<div class="vd-t">‹● dot› ‹meaning›  — one per profile.statuses[]</div>',
+      seclead:'‹section lead ← profile.section_lead›',
+      outline:'<div class="ndt-cap">node card — how a requirement value renders</div>'+
+        '<div class="item"><div class="row">'+
+          '<span class="lbl">‹label / name›</span>'+
+          '<span class="lbl-key">‹key›</span>'+
+          '<span class="badge ndt-badge">‹status›</span></div>'+
+        '<div class="det">‹detail — the node body text›</div>'+
+        '<div class="lives"><span class="lk">Lives</span>‹type›: ‹ref›</div>'+
+        '<div class="node-meta">‹meta — structural metadata (Show node metadata)›</div></div>'
+    };
+    function syncFrameTemplates(on){
+      Object.keys(FRAME_TEMPLATES).forEach(function(id){
+        var el=document.getElementById(id); if(!el) return;
+        var existing=el.querySelector(".vd-template");
+        if(on && !existing){
+          // a <span> (inline element) can live inside #seclead's <p>; a <div> everywhere else.
+          var wrap=document.createElement(el.tagName==="P"?"span":"div");
+          wrap.className="vd-template"; wrap.innerHTML=FRAME_TEMPLATES[id]; el.appendChild(wrap);
+        } else if(!on && existing){ existing.parentNode.removeChild(existing); }
+      });
+    }
     function syncView(){
       var vd=viewDef.checked;
       document.body.classList.toggle("scaffold", vd || outline.checked);
       document.body.classList.toggle("frame-bare", vd);
+      syncFrameTemplates(vd);   // FR-6: show/hide every region's display-logic template with the View Definition
     }
     viewReq.onchange=syncView; viewDef.onchange=syncView; outline.onchange=syncView;
     nodeMeta.onchange=function(){ document.body.classList.toggle("show-node-meta", nodeMeta.checked); };

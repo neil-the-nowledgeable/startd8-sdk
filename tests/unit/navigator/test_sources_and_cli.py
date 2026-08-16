@@ -300,8 +300,12 @@ def test_req15_frame_source_renders_bare_scaffolding(tmp_path):
     assert "body.frame-bare" in html                  # the bare-frame CSS (hide region content)
     assert 'id="layerToggles"' in html                # FR-4: the per-layer disclosure host
     assert 'data-scaffold="masthead' in html          # the region meta-descriptions are present
-    # zero requirement/FR node cards were rendered (free of any requirement)
-    assert '<div class="item"' not in html and "wrote 0 nodes" not in html
+    # zero requirement/FR node cards were rendered (free of any requirement) — assert the node COUNT.
+    # (REQ-view-definition-mode FR-6: the frame now DOES carry a node display-logic TEMPLATE — a
+    # slot-annotated skeleton reusing the card classes, injected client-side — so we check 0 real nodes
+    # via the reliable count, not the `.item` class the template legitimately reuses.)
+    assert "0 nodes" in res.output                     # the frame rendered zero requirement nodes
+    assert "FRAME_TEMPLATES" in html                   # FR-6: the per-region display-logic templates ship
 
 
 # ── REQ-17 FR-2 — the requirements projection carries verify/approve/was onto the Node ─────────────

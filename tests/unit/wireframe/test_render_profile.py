@@ -135,6 +135,34 @@ def test_debug_view_mode_panel_is_profiled_and_byte_safe():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+def test_view_definition_shows_every_region_display_logic_template():
+    # REQ-view-definition-mode FR-6 (v0.5): when the View Definition is shown, EVERY region renders a
+    # slot-annotated DISPLAY-LOGIC template (built from the real render classes) showing what it displays
+    # and FROM WHAT it derives — not just the node region. JS-injected only in frame mode, so ABSENT from
+    # a normal render's served HTML → byte-identity holds.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    # the template map + its frame-mode wiring ship in the (client-side) render
+    assert "FRAME_TEMPLATES" in profiled                    # the per-region display-logic template map
+    assert "function syncFrameTemplates" in profiled        # injected/removed with the View Definition (syncView)
+    # the map keys cover EVERY region (mast/glance/toolbar/legend/seclead/outline)
+    for region in ("mast:", "glance:", "toolbar:", "legend:", "seclead:", "outline:"):
+        assert region in profiled, region
+    # per-region derivation sources are annotated (what each region derives from)
+    for src in ("‹eyebrow›", "status_counts", "plan.shape", "audience", "profile.statuses",
+                "profile.section_lead", "node card — how a requirement value renders"):
+        assert src in profiled, src
+    # the node-card template still uses the REAL card classes + slots
+    assert 'class="item"' in profiled and "‹label / name›" in profiled and "‹type›: ‹ref›" in profiled
+    # templates stay visible through frame-bare, and force-reveal the normally-hidden key+meta slots
+    assert "body.frame-bare .vd-template" in profiled
+    assert ".vd-template .lbl-key{display:inline" in profiled
+    # JS-injected only — NOT pre-rendered into the served HTML (a normal render is unchanged)
+    assert 'class="vd-template"' not in profiled
+    # Byte-safe: the app path is byte-identical (templates never land in a normal render).
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
 def test_chrome_provenance_readout_embeds_and_is_byte_safe():
     # FR-13: the debug panel's live provenance readout is fed by an embedded chrome summary; the app
     # path (no chrome) stays byte-identical.
