@@ -178,6 +178,22 @@ def test_debug_group_and_raw_data_panel_ship_and_are_byte_safe():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+def test_inspect_cells_shows_per_node_data_and_display_mapping():
+    # REQ-view-definition-mode FR-10: an Inspect cells Debug toggle shows, under each card, the node's
+    # data (fields+values) and how each field is displayed (field→element mapping). Cards stash their
+    # exact node data (_nodeData). Client-side machinery ships; the app path is byte-identical.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert 'id="inspectCells"' in profiled                   # the toggle
+    assert "function buildInspect" in profiled and "function syncInspect" in profiled   # the inspector
+    assert "w._nodeData=item" in profiled                    # exact per-cell data stashed at render
+    assert "INSPECT_MAP" in profiled                         # the field→element display mapping
+    assert "node data · value · how" in profiled             # the inspector caption
+    assert 'class="node-inspect"' not in profiled            # injected on toggle only, not pre-rendered
+    # app path byte-identical (inspector is profiled-navigator-only)
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
 def test_paging_control_ships_and_is_byte_safe():
     # REQ-view-definition-mode FR-9: a definition-owned Paging group (pick-one page size incl. 1-at-a-time)
     # + a #pagebar below the outline pages through the requirement nodes N at a time. Client-side machinery
