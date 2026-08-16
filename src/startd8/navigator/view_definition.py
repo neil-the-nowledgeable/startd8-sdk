@@ -217,9 +217,9 @@ def to_render_profile(
     """Project a resolved definition to the existing :class:`RenderProfile` (renderers unchanged).
 
     Reads ``vocabulary`` (ordered ``statuses`` keyed map + ``gap_noun``), ``chrome`` (masthead + apex
-    strings), and — REQ-11 — ``theme`` (design tokens → ``theme_tokens``). ``lenses``/``control``/
-    ``glance``/``regions`` are still NOT projected (later steps). Any omitted chrome key falls back to
-    the RenderProfile default.
+    strings), ``theme`` (REQ-11 → ``theme_tokens``), and ``control`` + ``regions`` (REQ-14 → the
+    debug-panel schema + region/layer taxonomy, applied as an additive runtime override). ``lenses``/
+    ``glance`` are still NOT projected. Any omitted chrome key falls back to the RenderProfile default.
 
     REQ-12: when a ``context`` is supplied, a chrome field named in ``chrome.bindings`` is derived by
     substituting its ``{field}`` template against the context — but ONLY when every referenced field
@@ -264,6 +264,8 @@ def to_render_profile(
         why=_chrome("why", chrome.get("why", _PROFILE_DEFAULTS.why)),
         do=_chrome("do", chrome.get("do", _PROFILE_DEFAULTS.do)),
         theme_tokens=dict(resolved.theme or {}),
+        control=dict(resolved.control or {}),      # REQ-14 FR-2: the debug-panel schema
+        regions=dict(resolved.regions or {}),      # REQ-14 FR-5a: the region/layer taxonomy
     )
 
 
@@ -282,9 +284,56 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
     # byte-identity anchor. (REQ-10 shipped placeholder values here; those recoloured every domain.)
     theme={"ink": "#241f17", "paper": "#f4efe4", "accent": "#1b545f"},
     lenses={"axes": ["role", "fluency"]},
-    control={"panel": "top-right", "groups": ["view", "overlays", "template-anatomy"]},
+    # REQ-14 FR-1: the debug control panel modelled as ordered groups of toggles — populated with the
+    # EXACT groups/toggles/labels the template hardcodes today (`_template.py` ~774-793), so projecting
+    # + consuming them (FR-2/FR-3) reproduces the current panel byte-for-byte. Keyed maps (merged by id);
+    # `order` gives the render sequence, `first` = the `dbg-group-first` class, `sub` = `dbg-sub`.
+    control={
+        "panel": "top-right",
+        "groups": {
+            "view": {"label": "View", "hint": "· pick one (Full is default)", "order": 0, "first": True,
+                     "toggles": {
+                         "structOnly": {"label": "Structure only", "order": 0},
+                         "combined": {"label": "Combined (structure + content)", "order": 1},
+                     }},
+            "overlays": {"label": "Overlays", "hint": "· additive", "order": 1,
+                         "toggles": {
+                             "hideScaffold": {"label": "Hide app-scaffold chrome", "order": 0},
+                         }},
+            "template-anatomy": {"label": "Template anatomy", "hint": "· debug", "order": 2,
+                                 "toggles": {
+                                     "scaffold": {"label": "Scaffold mode (template anatomy)", "order": 0},
+                                     "scaffoldOnly": {"label": "Scaffold only (hide node content)", "order": 1, "sub": True},
+                                 }},
+        },
+    },
     glance={"summary": "status-counts"},
-    regions={"layers": ["node", "derived", "computed", "scaffold"]},
+    # REQ-14 FR-4: the scaffold region/layer taxonomy modelled as ordered region bindings — each region
+    # (keyed by its element id) carries its `layer` + the `scaffold` anatomy label the template hardcodes
+    # today (`_template.py` data-layer/data-scaffold). Populated verbatim so consuming them (FR-5) is
+    # byte-identical; a domain delta can override one region's label atomically. `layers` = the legend.
+    regions={
+        # REQ-15 FR-2: the layer taxonomy as an ordered keyed schema owned by the definition (was a flat,
+        # 3-way-inconsistent list). Populated with the renderer's ACTUAL layer names + outline colours
+        # (`_template.py` scaffold CSS) so rendering the legend + colouring FROM it (FR-3) is byte-identical.
+        "layers": {
+            "control": {"label": "control", "color": "accent2", "order": 0},
+            "descriptive": {"label": "descriptive", "color": "accent", "order": 1},
+            "computed": {"label": "computed", "color": "ochre", "order": 2},
+            "node": {"label": "node-driven", "color": "planned", "order": 3},
+        },
+        "bindings": {
+            "mast": {"layer": "descriptive", "scaffold": "masthead — profile chrome (eyebrow · headline · why/do)", "order": 0},
+            "glance": {"layer": "computed", "scaffold": "glance band — computed summary (status_counts · plan.shape)", "order": 1},
+            "toolbar": {"layer": "control", "scaffold": "control layer — audience × fluency lenses", "order": 2},
+            "legend": {"layer": "descriptive", "scaffold": "status legend — profile.statuses[].meaning", "order": 3},
+            "seclead": {"layer": "descriptive", "scaffold": "section lead — profile.section_lead", "order": 4},
+            "outline": {"layer": "node", "scaffold": "outline — node sections + cards (the node-driven layer)", "order": 5},
+            "whybox": {"layer": "descriptive", "scaffold": "reading guidance — profile.why / profile.do", "order": 6},
+            "shape": {"layer": "computed", "scaffold": "shape — plan.shape (dialect-aware)", "order": 7},
+            "glance-status-cell": {"layer": "computed", "scaffold": "status roll-up — status_counts (+ PF-1 grounding filter)", "order": 8},
+        },
+    },
 )
 
 # FR-4: the requirements domain — ``extends: base`` + a thin delta (its vocabulary/statuses + chrome).

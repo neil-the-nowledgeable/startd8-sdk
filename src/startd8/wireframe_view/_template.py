@@ -164,6 +164,16 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.scaffold-only [data-layer="node"] *{visibility:hidden}
   body.scaffold-only [data-layer="node"]{visibility:visible}
   #debug .dbg-opt.dbg-sub{margin-left:16px}
+  /* REQ-15 FR-1/FR-4: frame-bare — hide EVERY region's content (keep the region outline + its ::before
+     meta-description), so the frame source shows only the scaffolding + control surface. A per-layer
+     toggle sets body.show-layer-<id>, which reveals that one layer's content (progressive disclosure). */
+  body.frame-bare [data-scaffold] *{visibility:hidden}
+  body.frame-bare [data-scaffold]{visibility:visible}
+  body.frame-bare.show-layer-control [data-layer="control"] *,
+  body.frame-bare.show-layer-descriptive [data-layer="descriptive"] *,
+  body.frame-bare.show-layer-computed [data-layer="computed"] *,
+  body.frame-bare.show-layer-node [data-layer="node"] *{visibility:visible}
+  #debug #layerToggles{display:none} body.scaffold #debug #layerToggles{display:block}
   /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
   #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
     font-size:10px;font-family:var(--mono);line-height:1.7}
@@ -480,7 +490,7 @@ __PLAN_DATA__
       h.innerHTML=
         '<div class="eyebrow">'+esc(eyebrow)+' <span class="dot">·</span> '+esc(data.app_name||"")+'</div>'+
         '<h1 class="headline">'+esc(headline)+'</h1>'+ meta +
-        ((why||doo)?'<div class="whybox" data-layer="descriptive" data-scaffold="reading guidance — profile.why / profile.do">'+
+        ((why||doo)?'<div class="whybox" data-region="whybox" data-layer="descriptive" data-scaffold="reading guidance — profile.why / profile.do">'+
           '<div><b>Why </b>'+esc(why)+'</div>'+
           '<div><b>Do </b>'+esc(doo)+'</div></div>':'');
     }
@@ -531,7 +541,7 @@ __PLAN_DATA__
     // plain text with interactive chips — the status roll-up becomes a live grounding filter.
     if(!EU && payload.profile && s.status_counts && Object.keys(s.status_counts).length){
       g.innerHTML=rows.map(function(r){
-        var sc=(r[0]==="Shape")?' data-layer="computed" data-scaffold="shape — plan.shape (dialect-aware)"':'';
+        var sc=(r[0]==="Shape")?' data-region="shape" data-layer="computed" data-scaffold="shape — plan.shape (dialect-aware)"':'';
         if(r[0] !== "Status") return '<div class="cell"'+sc+'><div class="k">'+esc(r[0])+'</div><div class="v">'+esc(r[1]||"")+'</div></div>';
         var chips = Object.keys(s.status_counts).map(function(key){
           var cnt=s.status_counts[key], p=profStatus(key), bg=p?p.color:"#888", lbl=p?p.label:key;
@@ -714,6 +724,50 @@ __PLAN_DATA__
         .map(function(a){ return '<span><i class="dot d-'+a[0]+'"></i>'+a[1]+'</span>'; }).join("");
     })();
     renderSignbar();   // EC-2: sign-off progress + export
+    applyDefinitionOverride();   // REQ-14: apply the resolved control/region deltas over the defaults
+  }
+
+  // REQ-14 (FR-3/FR-5/FR-7): apply a resolved ViewDefinition's control + regions as an ADDITIVE runtime
+  // override over the template's hardcoded panel + static region attributes. When the profile carries no
+  // delta (or the base values), this re-sets the same strings — a no-op — so the default render is
+  // byte-identical; a domain delta relabels a control group/toggle or a region's data-layer/data-scaffold
+  // anatomy, and because the scaffold overlay reads those attributes it now reveals the DEFINITION, not
+  // hand-authored template strings (the closed mirror). Absent profile ⇒ returns immediately.
+  function applyDefinitionOverride(){
+    var P=payload.profile; if(!P) return;
+    var ctl=P.control;
+    if(ctl&&ctl.groups){ Object.keys(ctl.groups).forEach(function(gid){
+      var g=ctl.groups[gid], gel=document.querySelector('#debug [data-group="'+gid+'"]');
+      if(gel){ if(g.label!=null&&gel.childNodes[0]) gel.childNodes[0].nodeValue=g.label+" ";
+               if(g.hint!=null){ var h=gel.querySelector(".dbg-hint"); if(h) h.textContent=g.hint; } }
+      var tg=g.toggles||{}; Object.keys(tg).forEach(function(tid){
+        var inp=document.getElementById(tid); if(inp&&tg[tid].label!=null){ var sp=inp.nextElementSibling; if(sp) sp.textContent=tg[tid].label; }
+      });
+    }); }
+    var rg=P.regions;
+    if(rg&&rg.bindings){ Object.keys(rg.bindings).forEach(function(rid){
+      var r=rg.bindings[rid], el=document.getElementById(rid)||document.querySelector('[data-region="'+rid+'"]');
+      if(el){ if(r.layer!=null) el.setAttribute("data-layer",r.layer); if(r.scaffold!=null) el.setAttribute("data-scaffold",r.scaffold); }
+    }); }
+    // REQ-15 FR-3: render the layer LEGEND from the definition's ordered layer schema (was hardcoded +
+    // 3-way inconsistent). The base schema reproduces the current legend text → byte-identical.
+    var ly=(rg&&rg.layers)||null, leg=document.querySelector("#debug .dbg-layers");
+    if(ly&&leg){
+      var ids=Object.keys(ly).sort(function(a,b){return (ly[a].order||0)-(ly[b].order||0);});
+      leg.innerHTML="layers: "+ids.map(function(id){return '<span class="ll '+id+'">'+(ly[id].label||id)+'</span>';}).join("");
+      // REQ-15 FR-4: build a per-layer show/hide toggle from the schema so the operator reveals one layer
+      // at a time / none / all. Toggling sets body.show-layer-<id>; the frame source starts all-hidden.
+      var host=document.getElementById("layerToggles");
+      if(host){
+        host.innerHTML=ids.map(function(id){return '<label class="dbg-opt dbg-sub"><input type="checkbox" data-layer-toggle="'+id+'"><span>show '+(ly[id].label||id)+'</span></label>';}).join("");
+        host.querySelectorAll("[data-layer-toggle]").forEach(function(cb){
+          cb.addEventListener("change",function(){ document.body.classList.toggle("show-layer-"+cb.getAttribute("data-layer-toggle"), cb.checked); });
+        });
+      }
+    }
+    // REQ-15 FR-1: the frame source renders scaffold-mode-on with every layer's content hidden — only the
+    // region meta-descriptions (::before) + the control surface show. Per-layer toggles reveal a layer.
+    if(payload.frame){ document.body.classList.add("scaffold","frame-bare"); }
   }
 
   // ---------- QW-1 + EC-4: the role (base voice + delivery kits) / depth toggle + open/close ----------
@@ -771,7 +825,7 @@ __PLAN_DATA__
       // ── VIEW: mutually-exclusive content-presentation modes ──────────────────────────────────
       // Full (default, no control) · Structure only · Combined. Structure-only and Combined clear
       // each other (radio-like), so they belong under one "pick one" heading.
-      '<div class="dbg-group dbg-group-first">View <span class="dbg-hint">· pick one (Full is default)</span></div>'+
+      '<div class="dbg-group dbg-group-first" data-group="view">View <span class="dbg-hint">· pick one (Full is default)</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="structOnly"><span>Structure only</span></label>'+
       '<label class="dbg-opt"><input type="checkbox" id="combined"><span>Combined (structure + content)</span></label>'+
       // ── OVERLAYS: orthogonal, additive filters (independent of the VIEW mode) ─────────────────
@@ -779,18 +833,21 @@ __PLAN_DATA__
       // chrome the fresh-eyes audit flagged (sign-off subsystem · mockups · delivery-role kits) —
       // non-destructive so a downstream consumer opts in and elements can resurface later in a
       // different light. Default off (nothing hidden until selected).
-      '<div class="dbg-group">Overlays <span class="dbg-hint">· additive</span></div>'+
+      '<div class="dbg-group" data-group="overlays">Overlays <span class="dbg-hint">· additive</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="hideScaffold"><span>Hide app-scaffold chrome</span></label>'+
       // ── TEMPLATE ANATOMY: the debug overlay of the TEMPLATE itself (+ its layer legend) ───────
       // Scaffold mode: the meta-debugging view of the TEMPLATE itself. As this renderer becomes the
       // de-facto multi-domain node visualizer (requirements first; legal · benchmark · dev-os next),
       // an adopter needs to see the template's anatomy — each region labelled with its scaffold role +
       // data source (data-scaffold). Orthogonal overlay, not a view mode.
-      '<div class="dbg-group">Template anatomy <span class="dbg-hint">· debug</span></div>'+
+      '<div class="dbg-group" data-group="template-anatomy">Template anatomy <span class="dbg-hint">· debug</span></div>'+
       '<label class="dbg-opt"><input type="checkbox" id="scaffold"><span>Scaffold mode (template anatomy)</span></label>'+
       // FR-16: scaffold-only — a sub-option of scaffold mode that empties the node-driven content so
       // the adopter sees just the labelled template skeleton. Checking it also turns scaffold mode on.
       '<label class="dbg-opt dbg-sub"><input type="checkbox" id="scaffoldOnly"><span>Scaffold only (hide node content)</span></label>'+
+      // REQ-15 FR-4: host for the per-layer disclosure toggles (built from the definition's layer schema
+      // by applyDefinitionOverride). Empty in the served HTML; populated at runtime, byte-safe.
+      '<div id="layerToggles"></div>'+
       '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
         '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
         '<span class="ll node">node-driven</span></div>'+

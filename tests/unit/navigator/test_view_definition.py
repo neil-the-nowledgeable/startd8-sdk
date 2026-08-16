@@ -33,6 +33,9 @@ from startd8.navigator.view_definition import (
 )
 from startd8.wireframe.profile import RenderProfile, StatusStyle
 
+_BASE_RESOLVED_FOR_EXPECTED = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+_BASE_CONTROL = _BASE_RESOLVED_FOR_EXPECTED.control
+_BASE_REGIONS = _BASE_RESOLVED_FOR_EXPECTED.regions
 _LEGAL_FIXTURE = Path(__file__).parent / "fixtures" / "legal-view-definition.json"
 
 
@@ -157,6 +160,7 @@ _EXPECTED_REQUIREMENTS_PROFILE = RenderProfile(
     ),
     # REQ-11: requirements overrides no theme → inherits the base tokens (the real _template.py :root).
     theme_tokens={"ink": "#241f17", "paper": "#f4efe4", "accent": "#1b545f"},
+    control=_BASE_CONTROL, regions=_BASE_REGIONS,
 )
 
 
@@ -203,6 +207,7 @@ _EXPECTED_CAPABILITY_PROFILE = RenderProfile(
     ),
     # REQ-11: capability overrides theme.accent → inherits base ink/paper, keeps its own accent.
     theme_tokens={"ink": "#241f17", "paper": "#f4efe4", "accent": "#3a6a94"},
+    control=_BASE_CONTROL, regions=_BASE_REGIONS,
 )
 
 
@@ -470,3 +475,77 @@ def test_resolve_external_does_not_mutate_the_shipped_registry():
     before = set(DEFINITION_REGISTRY)
     resolve_external(load_definition(_LEGAL_FIXTURE))
     assert set(DEFINITION_REGISTRY) == before                        # NR-2: registry untouched
+
+
+# ── REQ-14 — control + region model in the definition (data layer; consumption deferred) ─────────
+
+def test_base_models_the_debug_control_panel_as_groups_of_toggles():
+    # FR-1: the base control section carries the 3 debug groups with their current toggles.
+    control = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).control
+    assert control["panel"] == "top-right"
+    assert set(control["groups"]) == {"view", "overlays", "template-anatomy"}
+    assert control["groups"]["view"]["label"] == "View"
+    assert control["groups"]["view"]["first"] is True
+    toggle_ids = {tid for g in control["groups"].values() for tid in g["toggles"]}
+    assert toggle_ids == {"structOnly", "combined", "hideScaffold", "scaffold", "scaffoldOnly"}
+    assert control["groups"]["template-anatomy"]["toggles"]["scaffoldOnly"]["sub"] is True
+
+
+def test_base_models_the_region_layer_taxonomy():
+    # FR-4: the base regions section carries each region's layer + scaffold anatomy label.
+    regions = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).regions
+    b = regions["bindings"]
+    assert b["mast"]["layer"] == "descriptive"
+    assert b["mast"]["scaffold"] == "masthead — profile chrome (eyebrow · headline · why/do)"
+    assert b["outline"]["layer"] == "node"
+    # REQ-15 FR-2: layers is now an ordered keyed schema (id → label/color/order), matching the layers
+    # actually used by the bindings — not the old flat, inconsistent list.
+    assert set(regions["layers"]) == {"control", "descriptive", "computed", "node"}
+    assert regions["layers"]["control"] == {"label": "control", "color": "accent2", "order": 0}
+    used = {v["layer"] for v in b.values()}
+    assert used == set(regions["layers"]), "every used layer must be declared in the layer schema"
+
+
+def test_control_and_regions_ride_the_cascade_by_id():
+    # a domain can override one control group label / one region anatomy label atomically (keyed merge).
+    child = ViewDefinition(
+        name="ctlchild", extends="base",
+        control={"groups": {"template-anatomy": {"label": "Structure"}}},
+        regions={"bindings": {"outline": {"scaffold": "the requirements list"}}},
+    )
+    reg = {**DEFINITION_REGISTRY, "ctlchild": child}
+    resolved = resolve(child, reg)
+    assert resolved.control["groups"]["template-anatomy"]["label"] == "Structure"      # overridden
+    assert resolved.control["groups"]["view"]["label"] == "View"                        # sibling kept
+    assert resolved.regions["bindings"]["outline"]["scaffold"] == "the requirements list"  # overridden
+    assert resolved.regions["bindings"]["mast"]["layer"] == "descriptive"               # sibling kept
+
+
+def test_req14_region_override_flows_to_the_projected_profile_for_the_scaffold_mirror():
+    # FR-7: a domain that overrides a region's scaffold anatomy label projects that override onto its
+    # RenderProfile.regions — so scaffold mode (which reads data-scaffold set from profile.regions)
+    # reveals the DEFINITION, not a hardcoded template string.
+    child = ViewDefinition(
+        name="mirrorchild", extends="base",
+        regions={"bindings": {"outline": {"scaffold": "the statute's provisions"}}},
+    )
+    reg = {**DEFINITION_REGISTRY, "mirrorchild": child}
+    prof = to_render_profile(resolve(child, reg))
+    assert prof.regions["bindings"]["outline"]["scaffold"] == "the statute's provisions"  # overridden
+    assert prof.regions["bindings"]["mast"]["layer"] == "descriptive"                     # sibling kept
+    # a non-overriding domain projects the base anatomy verbatim (byte-identity anchor).
+    base_prof = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
+    assert base_prof.regions["bindings"]["outline"]["scaffold"] == "outline — node sections + cards (the node-driven layer)"
+
+
+def test_req15_layer_schema_projects_and_a_domain_can_relabel_a_layer():
+    # FR-3: the layer schema rides the profile; a domain overriding a layer label projects it (the legend
+    # is rebuilt from profile.regions.layers at render, so the relabel shows).
+    base = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
+    assert base.regions["layers"]["node"]["label"] == "node-driven"       # base value → byte-identical legend
+    child = ViewDefinition(name="lyrchild", extends="base",
+                           regions={"layers": {"node": {"label": "requirements"}}})
+    reg = {**DEFINITION_REGISTRY, "lyrchild": child}
+    prof = to_render_profile(resolve(child, reg))
+    assert prof.regions["layers"]["node"]["label"] == "requirements"      # relabel projected
+    assert prof.regions["layers"]["control"]["label"] == "control"        # sibling layer kept

@@ -287,3 +287,18 @@ def test_view_definition_cli_from_rejects_a_malformed_external(tmp_path):
     res = RUNNER.invoke(app, ["navigator", "view-definition", "--from", str(bad)])
     assert res.exit_code == 1
     assert "unknown definition" in res.output or "external" in res.output
+
+
+def test_req15_frame_source_renders_bare_scaffolding(tmp_path):
+    # REQ-15 FR-1: --source frame renders zero nodes, scaffold-mode-on + all content hidden, so only the
+    # region meta-descriptions + control surface show — free of any requirement.
+    out = tmp_path / "frame.html"
+    res = RUNNER.invoke(app, ["navigator", "build", "--source", "frame", "--format", "html", "--out", str(out)])
+    assert res.exit_code == 0, res.output
+    html = out.read_text()
+    assert '"frame": true' in html                    # FR-1: the frame flag activates scaffold+bare mode
+    assert "body.frame-bare" in html                  # the bare-frame CSS (hide region content)
+    assert 'id="layerToggles"' in html                # FR-4: the per-layer disclosure host
+    assert 'data-scaffold="masthead' in html          # the region meta-descriptions are present
+    # zero requirement/FR node cards were rendered (free of any requirement)
+    assert '<div class="item"' not in html and "wrote 0 nodes" not in html

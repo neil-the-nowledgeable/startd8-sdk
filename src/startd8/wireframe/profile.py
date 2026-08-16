@@ -52,6 +52,13 @@ class RenderProfile:
     # absent/empty map means the renderer emits no CSS override, so the app path — and any profile
     # without a theme — is byte-identical. A non-empty map is emitted as an additive :root override.
     theme_tokens: Mapping[str, str] = field(default_factory=dict)
+    # REQ-14: the debug control panel + the scaffold region/layer taxonomy, projected from a resolved
+    # ViewDefinition's ``control``/``regions`` sections. **Empty by default = the byte-identity guard**:
+    # an absent map means the renderer's hardcoded panel + static region attributes stand unchanged; a
+    # non-empty map is applied as an ADDITIVE runtime override (re-label a group / a region's anatomy),
+    # so the default render is byte-identical and a domain delta overrides atomically.
+    control: Mapping[str, object] = field(default_factory=dict)
+    regions: Mapping[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """JSON-safe payload the template's client renderer reads (``data.profile``)."""
@@ -76,6 +83,8 @@ class RenderProfile:
             "why": self.why,
             "do": self.do,
             "theme_tokens": dict(self.theme_tokens),
+            "control": dict(self.control),
+            "regions": dict(self.regions),
         }
 
 
