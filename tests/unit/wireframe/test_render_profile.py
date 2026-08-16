@@ -196,9 +196,11 @@ def test_inspect_cells_shows_per_node_data_and_display_mapping():
     assert 'class="ni-v ni-edit" contenteditable="true"' in profiled
     assert "function updateAddedLine" in profiled            # surfaces the edited field in the card
     assert "card._nodeData[f]=cell.textContent" in profiled  # in-memory only (no disk write path)
-    # FR-12: each displayed field's row carries an on/off switch toggling that element in the card
-    assert "data-ni-toggle=" in profiled and 'class="ni-sw"' in profiled
-    assert 'el.style.display = inp.checked ? "" : "none"' in profiled   # per-card, non-persistent
+    # FR-12: EVERY field's row carries an on/off switch — displayed toggles the element, not-displayed
+    # surfaces the value. Both switch flavours + their handlers ship.
+    assert "data-ni-toggle=" in profiled and "data-ni-show=" in profiled and 'class="ni-sw"' in profiled
+    assert 'el.style.display = inp.checked ? "" : "none"' in profiled   # displayed: per-card element toggle
+    assert "inp.checked ? (card._nodeData[f]||\"\") : \"\"" in profiled  # not-displayed: surface the value
     assert 'class="node-inspect"' not in profiled            # injected on toggle only, not pre-rendered
     # app path byte-identical (inspector is profiled-navigator-only)
     assert render_html(_plan()) == render_html(_plan(), profile=None)

@@ -1004,25 +1004,28 @@ __PLAN_DATA__
       var item=card._nodeData||{}, d=document.createElement("div"); d.className="node-inspect";
       var rows=Object.keys(item).map(function(k){
         var v=item[k], val=(v==null)?"":(typeof v==="object"?JSON.stringify(v):String(v)), m=INSPECT_MAP[k];
-        if(m){   // displayed field: read-only value + an on/off switch that toggles the element in the card
+        if(m){   // displayed field: read-only value + a switch (default ON) that toggles the element
           return '<tr><td class="ni-k">'+esc(k)+'</td><td class="ni-v">'+(esc(val)||"∅")+'</td>'+
             '<td class="ni-d"><label class="ni-sw"><input type="checkbox" checked data-ni-toggle="'+esc(m.sel)+'">'+
             '<span class="sw"></span></label>'+esc(m.how)+'</td></tr>';
-        }        // not-displayed field: editable value (FR-11)
+        }        // not-displayed field: editable value + a switch (default OFF) that SURFACES the value in the card
         return '<tr><td class="ni-k">'+esc(k)+'</td>'+
           '<td class="ni-v ni-edit" contenteditable="true" data-ni-field="'+esc(k)+'">'+esc(val)+'</td>'+
-          '<td class="ni-d">not displayed — editable</td></tr>';
+          '<td class="ni-d"><label class="ni-sw"><input type="checkbox" data-ni-show="'+esc(k)+'">'+
+          '<span class="sw"></span></label>show in card</td></tr>';
       }).join("");
       d.innerHTML='<table class="ni-table"><thead><tr><th>node data</th><th>value</th>'+
         '<th>how it’s displayed</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      // FR-11: editable not-displayed value → update in-memory data; editing auto-surfaces it (checks its switch)
       Array.prototype.forEach.call(d.querySelectorAll(".ni-edit"), function(cell){
         cell.addEventListener("input", function(){
           var f=cell.getAttribute("data-ni-field");
           card._nodeData[f]=cell.textContent;            // non-persistent, in-memory only
+          var sw=d.querySelector('[data-ni-show="'+f+'"]'); if(sw) sw.checked=true;
           updateAddedLine(card, f, cell.textContent);     // reflect the edit in the card view
         });
       });
-      // FR-12: the on/off switch toggles that element's display in THIS card (non-persistent, per-card)
+      // FR-12 (displayed): the switch toggles that element's display in THIS card (default on)
       Array.prototype.forEach.call(d.querySelectorAll("[data-ni-toggle]"), function(inp){
         inp.addEventListener("change", function(){
           var sel=inp.getAttribute("data-ni-toggle");
@@ -1030,6 +1033,13 @@ __PLAN_DATA__
             if(el.closest(".node-inspect")) return;      // never toggle the inspector's own nodes
             el.style.display = inp.checked ? "" : "none";
           });
+        });
+      });
+      // FR-12 (not-displayed): the switch SURFACES the field's value as a card line — reveal what isn't shown
+      Array.prototype.forEach.call(d.querySelectorAll("[data-ni-show]"), function(inp){
+        inp.addEventListener("change", function(){
+          var f=inp.getAttribute("data-ni-show");
+          updateAddedLine(card, f, inp.checked ? (card._nodeData[f]||"") : "");
         });
       });
       return d;
