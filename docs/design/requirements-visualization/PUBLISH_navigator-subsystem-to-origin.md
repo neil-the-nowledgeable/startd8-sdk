@@ -2,6 +2,9 @@
 
 **Status:** proposal for human/team review — **nothing pushed yet.** **Written:** 2026-08-15.
 **Author:** autonomous delivery loop (Claude). **Decision owner:** the human / navigator track owner.
+**Peer review:** ✅ approved as-is (sharpenings folded in below) by the SARIF/coverage-map session — the
+one that landed `origin`'s current `+15`, so also **first-hand confirmation the navigator publish does
+not collide** with #472/#473 (see `PUBLISH_navigator-subsystem-to-origin_REVIEW.md`).
 
 This doc records **what I found** when asked to "merge our changes to main if 100% safe", **why the
 obvious scoped PR is not viable**, and a **reviewable approach** for getting the work onto `origin` — so
@@ -50,23 +53,37 @@ SARIF), the *net* three-way merge is clean (`git merge-tree` reported **0 confli
    push. (The 73 prior commits are the team's; this is the load-bearing question.)
 2. **Worktree off `origin/main`** (never the primary tree):
    `git worktree add <wt> -b feat/navigator-subsystem origin/main`
-3. **Bring the subsystem across.** Two candidate techniques — pick per the ownership decision:
-   - **(a) Whole-subsystem merge** — merge local `main` into the branch (the tree-merge is clean), then,
-     if only the navigator subsystem should ship, keep the navigator paths and drop unrelated ones. Simple
-     but pulls the full history.
-   - **(b) Squashed subsystem snapshot** — take the current navigator subsystem *tree state* from local
-     `main` and commit it onto the branch as a coherent set (loses per-commit granularity but isolates
-     exactly the navigator paths). Best when the 73 commits shouldn't all appear on `origin`.
+3. **Pre-flight recheck (do this at build time, not just now).** Re-confirm `origin/main` hasn't moved
+   and **no navigator paths have landed on it** since this doc was written (the remote tree moves; another
+   agent could push). Cheap, and it prevents a stale-merge surprise. `git fetch origin` →
+   `git rev-parse origin/main` → re-run the `merge-tree` conflict check + the "16 files missing on origin"
+   probe. If a navigator path *has* appeared on `origin`, stop and re-diagnose.
+4. **Bring the subsystem across.** The two techniques are **NOT symmetric** — the asymmetry is
+   decision-relevant, not a style preference:
+
+   | | (a) whole-subsystem merge, then drop non-navigator files | (b) squashed subsystem snapshot |
+   |---|---|---|
+   | Navigator paths isolated on `origin`? | ❌ **no** — the full ~96-commit history is published; dropping files removes *files*, not *history* | ✅ yes — only the navigator tree ships |
+   | Per-commit authorship / bisectability | ✅ preserved | ❌ **erased** (a real loss for **multi-author** work) |
+   | Risk | **leaks every non-navigator local-only commit** (other agents' WIP/experiments) to `origin` | co-authors lose attribution |
+
+   - **(a) over-publishes; (b) under-attributes.** (a) is a **disqualifier — not a preference** — if
+     *anything* in those 73 commits isn't ready to be public. (b) scopes cleanly but drops co-author
+     history.
+   - **(c) filtered extraction** (`git rebase --onto` / `git subtree`) gets navigator-only *and*
+     authorship — but the 73 commits are **interleaved** navigator + non-navigator, so it's high-effort
+     and **likely not worth it** here. Named for completeness; default to the (a)/(b) call.
+
    The path set to move: `src/startd8/navigator/`, `src/startd8/wireframe*/` (the RenderProfile +
    view.py changes), `tests/unit/navigator/`, `tests/unit/wireframe/`, `docs/design/requirements-visualization/`,
    `docs/capability-index/` (navigator family). **Exclude** the throwaway `_spike/` and any non-navigator
    local-only work.
-4. **Verify in the branch** (pin `PYTHONPATH=<wt>/src`): full `tests/unit/navigator` + `tests/unit/wireframe`
+5. **Verify in the branch** (pin `PYTHONPATH=<wt>/src`): full `tests/unit/navigator` + `tests/unit/wireframe`
    green, `test_no_profile_is_byte_identical` passes, `ruff` clean, `navigator view-definition --validate`
    OK. Verify from a **fresh** checkout (no primary-tree gitignored artifacts).
-5. **Push the branch** (`git push origin feat/navigator-subsystem`) and **open a PR** — never merge to
+6. **Push the branch** (`git push origin feat/navigator-subsystem`) and **open a PR** — never merge to
    `origin/main` directly; a human reviews + merges.
-6. **Do not touch the primary tree's dirty files** (`prime_contractor.py`, `TOP_DOWN_…`, etc. — other
+7. **Do not touch the primary tree's dirty files** (`prime_contractor.py`, `TOP_DOWN_…`, etc. — other
    agents' in-flight work) and restore the primary to `main` when done.
 
 ### What a reviewer sees
@@ -77,8 +94,12 @@ supporting renderers/loops it sits on.
 ## 4. The decision needed from the human
 
 1. **Publish now, or keep on local `main`?** (Is the subsystem being deliberately staged?)
-2. **If publish: whole-history merge (3a) or squashed snapshot (3b)?**
-3. **Who owns the push** (the 73 prior commits are multi-author — this session only added the last 23)?
+2. **If publish: whole-history merge (§3-4a) or squashed snapshot (§3-4b)?** Pick with the asymmetry in
+   view — **(a) over-publishes** (leaks every non-navigator local-only commit; a *disqualifier* if any of
+   the 73 isn't public-ready), **(b) drops co-author history** (multi-author attribution is erased).
+3. **Who owns the push?** — **load-bearing and gating.** The 73 prior commits are multi-author; this
+   session only added the last 23. Answer this *first*: it decides whether the draft branch is even this
+   session's to build.
 
 Until those are answered, the safe resting state is **local `main` @ `0a3957d9`** (where it is now).
 I can prepare the branch as a **draft (built + tested, not pushed)** on request, so the full diff can be
