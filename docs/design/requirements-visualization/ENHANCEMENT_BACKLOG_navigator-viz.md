@@ -34,7 +34,7 @@ remain as triaged rows (re-ground before building — a backlog item is a belief
 |----|--------|-----|----------|--------|
 | ~~**R8-EB-1**~~ ✅ | XS | Add a test for `verify --format html` (verdicts-as-Nodes arm) | `cli_navigator.py:303` html arm had no test | **DONE** (harvest) |
 | ~~**R8-EB-2**~~ ✅ | XS | Remove dead `'verify'` from `_READONLY_NAV_SUBCOMMANDS` (self-exec catches it first) | `verify_oracle.py:58` | **DONE** (harvest) |
-| **R8-EB-3** | S | Wire `topo_order()` as a fail-loud build-time acyclicity assert in `nodes_from_pipeline` (or demote to a private test helper) — it is production-dormant (test-only caller) | `sources_pipeline.py` `topo_order`; only caller `test_pipeline_source.py:95` | open |
+| ~~**R8-EB-3**~~ ✅ | S | Wire `topo_order()` as a fail-loud build-time acyclicity assert in `nodes_from_pipeline` | `sources_pipeline.py:173` `nodes_from_pipeline` calls `topo_order(nodes)` | **DONE** (`516d0b93`) — poka-yoke: raises `graphlib.CycleError` on a cycle in `_STAGES`; `topo_order` now has a non-test caller (dormancy resolved). REQ-08 v0.4.1. +2 tests |
 | ~~**R8-EB-4**~~ ✅ | S | Implement the D-B "FR id" query in `pipeline_provenance` (resolve an FR-id → its `Lives`/`Touches` file, then walk) | `provenance.py` `_fr_file_path` + `requirement_nodes` param; FR named on the intent-origin row | **DONE** (`5b5cee9e`+) — resolves an FR-id → its first `code` `Lives:`/`Touches:` file; unknown/unresolvable FR → honest not-found. +6 tests |
 | ~~**R8-EB-5**~~ ✅ | M | Expose `pipeline_provenance` via an operator CLI surface | delivered alongside EB-4 (a wired consumer is what keeps the FR-id path non-dormant) | **DONE** — `navigator provenance --query <fr-id\|path> [--requirements <doc>]`; JSON chain, exit 1 on not-found so CI can distinguish traced from unowned |
 
@@ -58,3 +58,5 @@ CLI consumer by design). One new row:
 stage* — so a spec's own FRs implemented outside those stages (e.g. REQ-08's, in `navigator/`) honestly
 report not-found. A query capability's reach is bounded by the domain model it queries; the command help
 says so rather than implying every FR traces.
+
+**R8 backlog CLEARED** — R8-EB-1..6 all shipped.
