@@ -21,10 +21,12 @@ per-service `{owner, criticality}` map has **one source** instead of the demo's 
 > #324). Verified this session: `tests/unit/observability/test_collector_enrichment*.py` = 67 passed,
 > 1 skipped; full obs suite 1285 passed. **Residuals closed this session:** FR-7 doc drift (above);
 > criticality-vocabulary single-sourced to `taxonomy_enums.CRITICALITY_VALUES` with a drift guard
-> (`test_criticality_authority.py`). **Still environment-gated:** acceptance #5 (live otelcol proves
-> `calls_total{business_criticality}` at the sink) — `test_live_enrichment_promotes_business_label`
-> exists but **skips without `otelcol-contrib` on PATH/`$OTELCOL_CONTRIB_BIN`**; run it in an env that
-> has the binary to close it. **The real open loop is consumer-side, not SDK:** the InsightFinder demo
+> (`test_criticality_authority.py`). **Acceptance #5 PROVEN — 2026-08-16:** the live test
+> `test_live_enrichment_promotes_business_label` booted `otelcol-contrib` 0.158.0, emitted a real span
+> for `service.name=frontend`, and observed `calls_total{business_criticality="critical"}` at the sink
+> `/metrics` (survives transform → spanmetrics connector). The test stays **binary-gated in CI** (skips
+> without `otelcol-contrib` on PATH/`$OTELCOL_CONTRIB_BIN`) — it is not stale, just infra-gated.
+> **The one remaining open loop is consumer-side, not SDK:** the InsightFinder demo
 > never consumed the generator (bare `spec.targets`) — tracked on ContextCore `docs/collector-enrichment-extraction-plan`.
 > _(Canonical copy in ContextCore needs the same FR-7 + ledger re-sync.)_
 
@@ -136,5 +138,5 @@ detection, the episodic `business.event` layer.
 | FR-2–11 (generator) | startd8-sdk | ✅ merged (`5896a15e` #321; follow-ups #324) |
 | FR-7 spanmetrics dimension | startd8-sdk | ✅ shipped as EC-2 (#324) |
 | Criticality vocab single-source (gap #4) | startd8-sdk | ✅ `taxonomy_enums.CRITICALITY_VALUES` + drift guard |
-| Acceptance #5 live wiring (survives-to-sink) | startd8-sdk | ⏳ env-gated — needs `otelcol-contrib` to run |
+| Acceptance #5 live wiring (survives-to-sink) | startd8-sdk | ✅ proven vs otelcol-contrib 0.158.0 (2026-08-16); CI test stays binary-gated |
 | Demo cutover (consume the generator) | ContextCore / demo | ⏳ `docs/collector-enrichment-extraction-plan` |
