@@ -313,6 +313,17 @@ def compose(
     # QW-3: the consolidated "before launch" to-do — every plan-flagged gap across sections, in one list.
     todos = [{"section": sec["title"], "item": it} for sec in sections for it in sec["need_items"]]
 
+    # REQ-18 FR-4: the summary-altitude determinism-% line, appended to the apex meta ONLY when the node
+    # corpus declares realization regimes — a graph with no regime data (requirements/capability) appends
+    # nothing, so the render is byte-identical (FR-7). Labeled `declared` until REQ-19 (b) grounds it.
+    from startd8.navigator.realization import format_determinism_line
+
+    summary_meta = (list(profile.summary_meta) if profile is not None
+                    else summary_narr.get("meta") or (list(WIREFRAME_META) if role == "architect" else []))
+    _det_line = format_determinism_line(dict(plan.realization)) if plan.realization else None
+    if _det_line is not None:
+        summary_meta = list(summary_meta) + [_det_line]
+
     return {
         "project_root": plan.project_root,  # provenance in the embed only — NOT rendered to end_user (R2-F1)
         "app_name": _app_name(plan),        # the app's own name for the masthead
@@ -328,8 +339,7 @@ def compose(
             # Architect tool-meta (WIREFRAME_META = process framing) is NEVER shown to the end_user (R2-F1);
             # the end_user gets a benefit-first, actionable intro instead (headline/lead/steps, FR-AUD-C4/R2-F2).
             # Apex narration seam: a profiled (non-app) consumer supplies its own; else the app default.
-            "meta": (list(profile.summary_meta) if profile is not None
-                     else summary_narr.get("meta") or (list(WIREFRAME_META) if role == "architect" else [])),
+            "meta": summary_meta,   # REQ-18 FR-4: base apex meta (+ the determinism line when regime data present)
             "headline": summary_narr.get("headline", ""),
             "lead": summary_narr.get("lead", ""),
             "steps": summary_narr.get("steps", []),

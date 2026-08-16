@@ -211,3 +211,57 @@ def test_req14_control_and_region_override_embed_and_render_byte_safe():
     assert 'id="outline"' in html                    # the region DOM hook exists
     # a profile WITHOUT control/regions injects an inert (empty) override — app path byte-identical.
     assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+# ── REQ-18 — determinism-% summary line (FR-4) + additive/byte-identical/no-coupling (FR-7) ─────────
+
+def _plan_with_realization(dist):
+    from startd8.wireframe import (
+        ContentCoverageStats,
+        WireframeItem,
+        WireframePlan,
+        WireframeSection,
+    )
+    item = WireframeItem(label="FR-1 — x", status="spec", detail="", paths=())
+    sec = WireframeSection(key="identity", title="Identity", status="spec", items=(item,))
+    return WireframePlan(
+        project_root=".", sections=(sec,), input_provenance={}, merge_warnings=(),
+        shape={"nodes": 1, "sections": 1}, readiness={}, status_counts={"spec": 1},
+        content_coverage=ContentCoverageStats(), realization=dist,
+    )
+
+
+def test_fr4_determinism_line_renders_labeled_declared():
+    """FR-4: a plan carrying declared regimes renders the distribution + a determinism-% labeled declared."""
+    from startd8.wireframe_view.view import render_html
+    html = render_html(_plan_with_realization({"deterministic": 9, "llm": 1}))
+    assert "90% $0" in html and "(declared)" in html
+    assert "9 deterministic / 1 llm / 0 human" in html
+    assert "(measured)" not in html
+
+
+def test_fr4_no_line_when_no_regime_data():
+    """FR-4/FR-7: a plan with no regime data renders no determinism-% line (byte-identical path)."""
+    from startd8.wireframe_view.view import render_html
+    assert "$0 (declared)" not in render_html(_plan_with_realization({}))
+
+
+def test_fr7_realization_module_imports_no_construction_subsystem():
+    """FR-7 (NR-2): realization.py IMPORTS nothing from backend_codegen / contractors / micro_prime.
+
+    Inspects actual import statements via AST — the module docstring legitimately *names* the forbidden
+    subsystems (to state the rule), so a raw text grep would false-positive.
+    """
+    import ast
+    from pathlib import Path
+
+    forbidden = ("backend_codegen", "contractors", "micro_prime")
+    src = (Path(__file__).parents[3] / "src" / "startd8" / "navigator" / "realization.py").read_text()
+    imported: list = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            imported += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+    assert not [m for m in imported if any(f in m for f in forbidden)], \
+        f"realization.py must not import construction subsystems; imports: {imported}"

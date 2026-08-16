@@ -454,6 +454,34 @@ def _check_orphans(spec_dir: Path, docs: List[Path]) -> List[Finding]:
 # the governor
 # --------------------------------------------------------------------------- #
 
+def check_realization_invariant(nodes, doc: str = "") -> List[Finding]:
+    """REQ-18 FR-5 — invariant 9: an ``llm``-regime derivation edge obligates its target node's
+    ``verify`` (the acceptance oracle) to be non-empty, firing **only once the node's ``lives`` evidence
+    is present** (mirroring the ships_when⟺lives gate) so unbuilt/spec nodes never fail. A ``deterministic``
+    or ``human`` edge imposes no such obligation. Each violation is a named finding — never a crash.
+    """
+    from .models import RealizationRegime
+    from .realization import resolve_edge_regime
+
+    findings: List[Finding] = []
+    for n in nodes:
+        # activation gate: an un-realized node (no lives) is never obligated; a satisfied one (verify set)
+        # passes. Only a REALIZED node with an empty oracle can violate.
+        if not getattr(n, "lives", None) or getattr(n, "verify", ""):
+            continue
+        for e in getattr(n, "derivation", ()):
+            if resolve_edge_regime(n, e) == RealizationRegime.LLM:
+                findings.append(Finding(
+                    "FR-5", _SEVERITY_FAIL, doc or n.key,
+                    f"{doc or n.key}: node {n.key!r} is realized by an llm-regime edge "
+                    f"(from {e.from_key!r}) but its verify (acceptance oracle) is empty — invariant 9 "
+                    f"requires a stochastic edge's target to carry a verify. Add a Verify: clause.",
+                    fr=n.key,
+                ))
+                break  # one finding per node
+    return findings
+
+
 def govern_corpus(spec_dir: Path) -> GovernReport:
     """Run the full 5-check governance battery over a directory of ``REQ-*.md`` docs (FR-6, read-only).
 
@@ -487,6 +515,13 @@ def govern_corpus(spec_dir: Path) -> GovernReport:
         except Exception:  # pragma: no cover - _req_summary is itself defensive
             summary = {"health": "info"}
         report.findings.extend(_check_coverage(p, summary))
+        # REQ-18 FR-5: invariant 9 over the doc's projected requirement nodes. In approach (a) no
+        # requirement edge declares an `llm` regime, so this never fires yet — it is wired + proven on
+        # fixtures (test_govern) and ready for REQ-19 (b), when measured llm regimes appear.
+        try:
+            report.findings.extend(check_realization_invariant(nodes_from_requirements(p), p.name))
+        except Exception:  # pragma: no cover - projection is itself defensive; never abort the sweep
+            pass
 
     report.findings.extend(_check_orphans(spec_dir, docs))
     report.findings.extend(_check_index_freshness(spec_dir, docs))

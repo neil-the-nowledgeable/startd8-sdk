@@ -80,8 +80,6 @@ def _safe_color(color: str) -> str:
 
 def _facets_html(node: Node) -> str:
     """Render the status facets as chips — each with its own source-declared glyph + safe colour."""
-    if not node.status_facets:
-        return ""
     chips: List[str] = []
     for f in node.status_facets:
         g = (html.escape(f.glyph) + " ") if f.glyph else ""
@@ -90,6 +88,16 @@ def _facets_html(node: Node) -> str:
         chips.append(
             f'<span class="facet"{style} title="{html.escape(f.name)}">{g}{html.escape(f.value)}</span>'
         )
+    # REQ-18 FR-6: the derived realization facet, exposed alongside the status-vector facets. Rendered
+    # only when the node's subtree declares a regime — an `unknown` node adds no chip, so existing renders
+    # (requirement/capability graphs with no regime data) are unchanged.
+    from .realization import realization_facet
+
+    rz = realization_facet(node)
+    if rz != "unknown":
+        chips.append(f'<span class="facet" title="realization">realization:{html.escape(rz)}</span>')
+    if not chips:
+        return ""
     return '<span class="facets">' + "".join(chips) + "</span>"
 
 

@@ -19,7 +19,7 @@ import graphlib
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from .models import DerivationEdge, Node, NodeEvidence, derive_status
+from .models import DerivationEdge, Node, NodeEvidence, RealizationRegime, derive_status
 from .naming import name_forms
 from .view_definition import (
     DEFINITION_REGISTRY,
@@ -44,6 +44,11 @@ class Stage(NamedTuple):
     essence: str  # essential | accidental
     does: str
     child_keys: Tuple[str, ...]  # DEPENDS-ON: the stage(s) this one consumes
+    # REQ-18 FR-1: the DECLARED realization regime of the transform that produces this stage — the
+    # prose→product pipeline the source models is the deterministic ``$0`` compiler (backend_codegen /
+    # det-req / forward_manifest), so its edges declare ``deterministic``. The honest, natural place to
+    # declare (handoff §2); requirement graphs carry no declared regime until REQ-19 (b) measures it.
+    regime: str = RealizationRegime.DETERMINISTIC
 
 
 # The six named stages of the prose→product compiler, with the concrete SDK artifact that realises each
@@ -169,7 +174,7 @@ def nodes_from_pipeline(repo: Optional[Path] = None) -> List[Node]:
             # distinct from containment ``children`` — so ``pipeline_provenance`` reads the compilation
             # chain from the typed edge rather than reconstructing it. ``child_keys`` is retained for
             # topo_order + backward compat; the ``regime`` slot stays unset here (NR-6).
-            derivation=tuple(DerivationEdge(from_key=ck) for ck in st.child_keys),
+            derivation=tuple(DerivationEdge(from_key=ck, regime=st.regime) for ck in st.child_keys),
             attributes=attrs,
         ))
     # Fail-loud build-time acyclicity guard (R8-EB-3): validate the stage DAG is acyclic at construction,

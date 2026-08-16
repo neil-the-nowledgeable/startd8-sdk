@@ -203,6 +203,17 @@ def nodes_to_wireframe_plan(
     shape = {"nodes": len(nodes), "sections": len(sections)}
     reject_app_bound_node_shape(shape)
 
+    # REQ-18 FR-4: the realization-regime distribution over the whole node corpus (each top-level node's
+    # subtree), for the summary determinism-% line. Empty when no node declares a regime (requirement /
+    # capability graphs) → the line does not render → byte-identical (FR-7).
+    from collections import Counter
+
+    from .realization import derive_realization
+
+    realization: Counter = Counter()
+    for n in nodes:
+        realization.update(derive_realization(n))
+
     return WireframePlan(
         project_root=project_root,
         sections=tuple(sections),
@@ -212,6 +223,7 @@ def nodes_to_wireframe_plan(
         readiness=_sv_readiness(nodes),
         status_counts=status_counts,
         content_coverage=ContentCoverageStats(),
+        realization=dict(realization),
     )
 
 

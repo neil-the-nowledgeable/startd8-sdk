@@ -213,6 +213,7 @@ class WireframePlan:
     readiness: Dict[str, str]       # generator → "ready" | "blocked(<reason>)"
     status_counts: Dict[str, int] = field(default_factory=dict)
     content_coverage: ContentCoverageStats = field(default_factory=ContentCoverageStats)  # FR-WCI-2
+    realization: Dict[str, int] = field(default_factory=dict)  # REQ-18: regime distribution (empty → no line)
 
     def section(self, key: str) -> WireframeSection:
         for s in self.sections:

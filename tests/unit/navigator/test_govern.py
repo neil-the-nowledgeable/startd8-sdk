@@ -282,3 +282,30 @@ def test_govern_report_is_a_dataclass_report():
     assert report.clean is True
     assert report.exit_code == 0
     assert report.fail_findings == []
+
+
+# ── REQ-18 FR-5 — invariant 9 (llm-regime edge obligates a non-empty verify, activation-gated) ─────
+
+def test_invariant_9_fires_only_for_realized_llm_target_with_empty_verify():
+    from startd8.navigator.govern import check_realization_invariant
+    from startd8.navigator.models import DerivationEdge, Node, NodeEvidence
+
+    llm_edge = (DerivationEdge(from_key="up", regime="llm"),)
+    lives = (NodeEvidence(type="code", ref="git:" + "a" * 40 + ":src/x.py"),)
+
+    # realized (lives) + llm edge + empty verify → ONE named invariant-9 finding
+    violating = Node(key="FR-1", does="", lives=lives, verify="", derivation=llm_edge)
+    f = check_realization_invariant([violating], "REQ-x.md")
+    assert len(f) == 1 and f[0].check == "FR-5" and f[0].fr == "FR-1"
+    assert "invariant 9" in f[0].message and "llm-regime" in f[0].message
+
+    # same node but empty lives (unbuilt/spec) → NO finding (activation gate)
+    assert check_realization_invariant([Node(key="FR-1", does="", verify="", derivation=llm_edge)]) == []
+
+    # llm edge + lives + NON-empty verify → satisfied, no finding
+    assert check_realization_invariant([Node(key="FR-1", does="", lives=lives, verify="x", derivation=llm_edge)]) == []
+
+    # deterministic edge + lives + empty verify → no obligation, no finding
+    det = Node(key="FR-1", does="", lives=lives, verify="",
+               derivation=(DerivationEdge(from_key="up", regime="deterministic"),))
+    assert check_realization_invariant([det]) == []

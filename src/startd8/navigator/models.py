@@ -45,6 +45,25 @@ class NodeStatus:
     GLYPH = {BUILT: "✅", THIN: "\U0001f7e1", SPEC: "\U0001f4c4", DEPRECATED: "⛔"}
 
 
+class RealizationRegime:
+    """How a node was realized — which back-end produced it (REQ-18). Carried (declared) on a
+    :class:`DerivationEdge`'s ``regime`` slot; a node's realization is *derived* from its incoming edges.
+
+    ``deterministic`` = the ``$0`` deterministic compiler · ``llm`` = the LLM interpreter ·
+    ``human`` = human-authored · ``unknown`` = undeclared (an edge with no regime). ``mixed`` is a
+    **derived-only** facet value for a parent whose subtree spans regimes — never stored on an edge.
+    """
+
+    DETERMINISTIC = "deterministic"
+    LLM = "llm"
+    HUMAN = "human"
+    UNKNOWN = "unknown"
+    MIXED = "mixed"  # derived-only (a spanning parent) — never a declared edge value
+
+    DECLARABLE = (DETERMINISTIC, LLM, HUMAN)      # values an edge may declare
+    ALL = (DETERMINISTIC, LLM, HUMAN, UNKNOWN)    # values a single node's regime may resolve to
+
+
 @dataclass(frozen=True)
 class NodeEvidence:
     """A ``lives`` reference: where the node is realised."""

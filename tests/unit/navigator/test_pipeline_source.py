@@ -480,8 +480,9 @@ def test_no_new_module_imports_wireframe_view_for_pipeline_path():
 # ── REQ-16 FR-1 — the typed derivation edge (distinct from containment; regime reserved/unset) ─────
 
 def test_stage_exposes_derivation_edge_distinct_from_children():
-    """REQ-16 FR-1: a stage with an upstream input exposes it as a typed DerivationEdge object,
-    distinct from containment `children`, carrying an OPTIONAL `regime` slot that is UNSET here."""
+    """REQ-16 FR-1: a stage with an upstream input exposes it as a typed DerivationEdge object, distinct
+    from containment `children`. REQ-18 FR-1 populates its `regime` slot with the declared `deterministic`
+    (the pipeline is the `$0` compiler); a BARE DerivationEdge still defaults `regime=None` (the reserved slot)."""
     from startd8.navigator.models import DerivationEdge
 
     nodes = {n.key: n for n in nodes_from_pipeline()}
@@ -491,7 +492,8 @@ def test_stage_exposes_derivation_edge_distinct_from_children():
     edge = contract.derivation[0]
     assert edge.from_key == "stage:functional"           # the typed derivation input
     assert edge.relation == "derived-from"
-    assert edge.regime is None                            # NR-6: the regime slot is reserved, unset here
+    assert edge.regime == "deterministic"                # REQ-18 FR-1: declared regime on the pipeline edge
+    assert DerivationEdge(from_key="x").regime is None    # REQ-16 NR-6: the slot itself still defaults unset
     # intent is the root — no upstream derivation
     assert nodes["stage:intent"].derivation == ()
 
