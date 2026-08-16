@@ -231,36 +231,70 @@ def test_capability_projection_reproduces_todays_profile_byte_for_byte():
 
 # ── FR-6 — Base-change propagation (the keystone, with FR-5) ─────────────────────────────────────
 
-def test_base_change_propagates_to_both_non_overriding_domains():
-    # A change to a shared base token that NEITHER domain overrides (theme.ink) reaches BOTH.
+# FR-6's guarantee has four independent conditions; each is asserted by ITS OWN test so a
+# regression names the exact broken condition (not "propagation, somewhere"). C1/C2 = a shared
+# base token NEITHER domain overrides (theme.ink) reaches each non-overriding domain; C3 = an
+# overriding domain (capability.accent) is insulated from a base change to that key; C4 = a
+# non-overriding domain still follows a base change to an OVERRIDABLE key (per-leaf, atomic).
+
+def _base_with_theme(**tokens):
+    """A registry whose `base` has the given theme token(s) mutated — the rest of the cascade intact."""
     mutated_base = replace(
         BASE_NAVIG8R_DEFINITION,
-        theme={**BASE_NAVIG8R_DEFINITION.theme, "ink": "#000000"},
+        theme={**BASE_NAVIG8R_DEFINITION.theme, **tokens},
     )
-    reg = {**DEFINITION_REGISTRY, "base": mutated_base}
+    return {**DEFINITION_REGISTRY, "base": mutated_base}
 
-    req = resolve(REQUIREMENTS_DEFINITION, reg)
-    cap = resolve(CAPABILITY_DEFINITION, reg)
-    assert req.theme["ink"] == "#000000"   # requirements did not override ink → inherits the change
-    assert cap.theme["ink"] == "#000000"   # capability did not override ink → inherits the change too
-    # no edit to either domain delta was needed
+
+def test_base_token_change_reaches_non_overriding_requirements_domain():
+    """C1: requirements overrides no theme, so a base `ink` change must reach its resolved value.
+
+    Why: the core propagation promise — a shared default edited once in the base shows up in a
+    domain that never mentions that token.
+    """
+    req = resolve(REQUIREMENTS_DEFINITION, _base_with_theme(ink="#000000"))
+    assert req.theme["ink"] == "#000000"
+
+
+def test_base_token_change_reaches_non_overriding_capability_domain():
+    """C2: capability overrides `accent` but NOT `ink`, so a base `ink` change must still reach it.
+
+    Why: proves propagation is per-domain and not defeated by the domain overriding some *other*
+    token — a second, independent inheritor of the same base edit.
+    """
+    cap = resolve(CAPABILITY_DEFINITION, _base_with_theme(ink="#000000"))
+    assert cap.theme["ink"] == "#000000"
+
+
+def test_overriding_domain_is_insulated_from_a_base_change_to_that_key():
+    """C3: capability overrides `accent`; a base `accent` change must NOT reach it (override wins).
+
+    Why: the atomic, per-leaf guarantee — an explicit domain override is not clobbered when the
+    base moves the same key underneath it.
+    """
+    cap = resolve(CAPABILITY_DEFINITION, _base_with_theme(accent="#ffffff"))
+    assert cap.theme["accent"] == "#3a6a94"
+
+
+def test_non_overriding_domain_follows_a_base_change_to_an_overridable_key():
+    """C4: requirements does NOT override `accent`, so a base `accent` change must reach it.
+
+    Why: the complement of C3 on the very same key — per-leaf means the base edit reaches exactly
+    the domains that stayed silent on that key, and only those.
+    """
+    req = resolve(REQUIREMENTS_DEFINITION, _base_with_theme(accent="#ffffff"))
+    assert req.theme["accent"] == "#ffffff"
+
+
+def test_propagation_requires_no_edit_to_the_domain_deltas():
+    """Invariant behind C1–C4: propagation is achieved with the domain deltas left untouched.
+
+    Why: the whole point is "change the base, not the deltas" — this pins that the deltas the
+    conditions rely on are genuinely thin (empty / single-key), so propagation isn't an artifact
+    of a delta silently re-stating the base.
+    """
     assert REQUIREMENTS_DEFINITION.theme == {}
     assert CAPABILITY_DEFINITION.theme == {"accent": "#3a6a94"}
-
-
-def test_a_domain_that_overrides_keeps_its_own_value_when_the_base_changes():
-    # capability overrides theme.accent; changing the BASE accent must NOT reach it, but MUST reach
-    # requirements (which does not override accent). This is the "atomic, per-leaf" guarantee.
-    mutated_base = replace(
-        BASE_NAVIG8R_DEFINITION,
-        theme={**BASE_NAVIG8R_DEFINITION.theme, "accent": "#ffffff"},
-    )
-    reg = {**DEFINITION_REGISTRY, "base": mutated_base}
-
-    req = resolve(REQUIREMENTS_DEFINITION, reg)
-    cap = resolve(CAPABILITY_DEFINITION, reg)
-    assert req.theme["accent"] == "#ffffff"   # non-overriding domain follows the base
-    assert cap.theme["accent"] == "#3a6a94"   # overriding domain keeps its own
 
 
 # ── FR-7 — RenderProfile projection (byte-identity) ──────────────────────────────────────────────
