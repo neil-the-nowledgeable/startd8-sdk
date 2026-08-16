@@ -313,7 +313,15 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
     # today (`_template.py` data-layer/data-scaffold). Populated verbatim so consuming them (FR-5) is
     # byte-identical; a domain delta can override one region's label atomically. `layers` = the legend.
     regions={
-        "layers": ["node", "derived", "computed", "scaffold"],
+        # REQ-15 FR-2: the layer taxonomy as an ordered keyed schema owned by the definition (was a flat,
+        # 3-way-inconsistent list). Populated with the renderer's ACTUAL layer names + outline colours
+        # (`_template.py` scaffold CSS) so rendering the legend + colouring FROM it (FR-3) is byte-identical.
+        "layers": {
+            "control": {"label": "control", "color": "accent2", "order": 0},
+            "descriptive": {"label": "descriptive", "color": "accent", "order": 1},
+            "computed": {"label": "computed", "color": "ochre", "order": 2},
+            "node": {"label": "node-driven", "color": "planned", "order": 3},
+        },
         "bindings": {
             "mast": {"layer": "descriptive", "scaffold": "masthead — profile chrome (eyebrow · headline · why/do)", "order": 0},
             "glance": {"layer": "computed", "scaffold": "glance band — computed summary (status_counts · plan.shape)", "order": 1},

@@ -498,7 +498,12 @@ def test_base_models_the_region_layer_taxonomy():
     assert b["mast"]["layer"] == "descriptive"
     assert b["mast"]["scaffold"] == "masthead — profile chrome (eyebrow · headline · why/do)"
     assert b["outline"]["layer"] == "node"
-    assert regions["layers"] == ["node", "derived", "computed", "scaffold"]
+    # REQ-15 FR-2: layers is now an ordered keyed schema (id → label/color/order), matching the layers
+    # actually used by the bindings — not the old flat, inconsistent list.
+    assert set(regions["layers"]) == {"control", "descriptive", "computed", "node"}
+    assert regions["layers"]["control"] == {"label": "control", "color": "accent2", "order": 0}
+    used = {v["layer"] for v in b.values()}
+    assert used == set(regions["layers"]), "every used layer must be declared in the layer schema"
 
 
 def test_control_and_regions_ride_the_cascade_by_id():
