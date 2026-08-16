@@ -406,12 +406,50 @@ NODE_SCHEMA_DEFINITION = ViewDefinition(
     },
 )
 
+# REQ-08 FR-1/D-1: a FOURTH real domain extending the same base — the prose→product pipeline view.
+# Each stage is a Node (``category="pipeline-stage"``); its status derives from its ``sdk_artifact``
+# resolving on disk via ``derive_status(has_code_evidence=…, maturity="stable")`` → {built, spec}
+# only (never thin — the constant maturity closes the outcome). The ``vocabulary.statuses`` map is
+# therefore **keyed by the ``NodeStatus`` ids** ``built``/``spec`` (R1-F2), not prose labels, so the
+# legend resolves every status ``nodes_from_pipeline()`` can emit. Overrides no theme → inherits the
+# base tokens (byte-safe), shares the activated theme.
+PIPELINE_DEFINITION = ViewDefinition(
+    name="pipeline",
+    extends="base",
+    vocabulary={
+        "gap_noun": "stage",
+        "statuses": {
+            "built": {"label": "Built", "color": "#3d7a57", "meaning": "the stage's SDK artifact exists on disk", "severity": 0},
+            "spec": {"label": "Spec", "color": "#6b6252", "meaning": "the stage's SDK artifact is not present yet", "severity": 3, "is_gap": True},
+        },
+    },
+    chrome={
+        "title": "The pipeline — a first look",
+        "eyebrow": "Prose→product pipeline",
+        "section_lead": "How prose becomes a product",
+        "headline": "A first look at the prose→product pipeline",
+        "summary_meta": [
+            "The six stages of the prose→product compiler rendered as Nodes — intent · functional · "
+            "contract · impl · test · doc, each grounded in the SDK artifact that realises it.",
+        ],
+        "why": (
+            "Each stage is a Node: what it transforms, its compiler analogue, and where it Lives "
+            "(the SDK artifact) — built (green) when that artifact exists, spec when it doesn't."
+        ),
+        "do": (
+            "Read top-down along the DEPENDS-ON edges — intent → functional → contract → "
+            "{impl, test, doc}. A spec stage marks a gap in the pipeline's realisation."
+        ),
+    },
+)
+
 # The definition registry the resolver consults for ``extends`` lookups.
 DEFINITION_REGISTRY: Dict[str, ViewDefinition] = {
     "base": BASE_NAVIG8R_DEFINITION,
     "requirements": REQUIREMENTS_DEFINITION,
     "capability": CAPABILITY_DEFINITION,
     "node-schema": NODE_SCHEMA_DEFINITION,
+    "pipeline": PIPELINE_DEFINITION,
 }
 
 # REQ-12: the content-context fields a chrome binding may reference (from ``requirement_identity``).

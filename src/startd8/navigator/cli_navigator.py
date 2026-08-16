@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -33,7 +33,21 @@ from .sources_capability import (
     nodes_from_capability_index,
 )
 from .sources_node_schema import NODE_SCHEMA_PROFILE, nodes_from_node_schema
+from .sources_pipeline import (
+    PIPELINE_PROFILE,
+    nodes_from_pipeline,
+    stages as pipeline_stages,
+)
 from .sources_requirements import nodes_from_requirements, requirements_profile_for
+from .provenance import pipeline_provenance
+from .verify_oracle import (
+    OracleDescriptor,
+    OracleVerdict,
+    aggregate_exit_code,
+    classify,
+    evaluate,
+    verdict_to_dict,
+)
 from .view_definition import (
     BASE_NAVIG8R_DEFINITION,
     DEFINITION_REGISTRY,
@@ -61,7 +75,7 @@ def build(
     source: str = typer.Option(
         ...,
         "--source",
-        help="Node source: capability-index | requirements | node-schema | nodes-json",
+        help="Node source: capability-index | requirements | node-schema | pipeline | nodes-json",
     ),
     fmt: str = typer.Option("json", "--format", help="Output format: json | html | a11y"),
     renderer: Optional[str] = typer.Option(
@@ -117,6 +131,19 @@ def build(
             nodes = nodes_from_node_schema()
             profile = NODE_SCHEMA_PROFILE
             project_root = "."
+        elif source == "pipeline":
+            nodes = nodes_from_pipeline()
+            # FR-7 (D-5): fold each stage's upstream provenance chain onto its Node's
+            # ``attributes["artifact_chain"]`` — surfaces as a tree meta row (render_tree.py), no new
+            # shell. The graph renderer shows the stage DAG; the chain is a tree affordance.
+            _stages = pipeline_stages()
+            for n in nodes:
+                chain = pipeline_provenance(nodes, _stages, query=n.attributes.get("sdk_artifact", n.key))
+                n.attributes["artifact_chain"] = " -> ".join(
+                    f"{r['stage']}({'built' if r['present'] else 'spec'})" for r in chain if r["stage"]
+                ) or "(unowned)"
+            profile = PIPELINE_PROFILE
+            project_root = "."
         elif source == "nodes-json":
             if nodes_json is None:
                 console.print("[red]error:[/red] --nodes-json is required for source=nodes-json")
@@ -128,7 +155,7 @@ def build(
         else:
             console.print(
                 f"[red]error:[/red] unknown --source {source!r} "
-                "(expected capability-index|requirements|node-schema|nodes-json)"
+                "(expected capability-index|requirements|node-schema|pipeline|nodes-json)"
             )
             raise typer.Exit(_EXIT_ERR)
     except (FileNotFoundError, ValueError, OSError) as exc:
@@ -204,6 +231,106 @@ def build(
 
     console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html|a11y)")
     raise typer.Exit(_EXIT_ERR)
+
+
+# FR-7 (D-D): map an oracle verdict to a NodeStatus for the tree render (no new shell).
+_VERDICT_STATUS = {
+    "pass": "built",
+    "fail": "deprecated",
+    "skip": "spec",
+    "error": "unknown",
+}
+
+
+@navigator_app.command("verify")
+def verify(
+    requirements: Path = typer.Option(
+        ..., "--requirements", help="det-req markdown path whose Verify: clauses become the oracle"
+    ),
+    run_oracle: bool = typer.Option(
+        False, "--run-oracle",
+        help="Opt-in: execute command-shaped Verify: clauses (read-only startd8 navigator subcommands, "
+        "argv/no-shell). Default OFF — every clause reports skip, no subprocess.",
+    ),
+    fmt: str = typer.Option("json", "--format", help="Output format: json | html"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
+    oracle_timeout: int = typer.Option(
+        60, "--oracle-timeout", help="Per-command timeout in seconds under --run-oracle (a timeout is a "
+        "distinct fail reason)."
+    ),
+) -> None:
+    """Promote each requirement's ``Verify:`` clause to a checkable acceptance oracle (REQ-08 FR-5/FR-7).
+
+    Emits a per-FR verdict (``pass|fail|skip|error``). Default inert: it evaluates nothing (every clause
+    reports ``skip``, no subprocess). Only ``--run-oracle`` executes the extracted command — argv (no
+    shell), gated by a read-only ``startd8 navigator`` subcommand allow-list, an argv-token self-exec
+    guard, and ``--oracle-timeout``; ``pass`` means only "the extracted command exited 0" (the prose
+    assertion rides alongside as the human-checkable residue). Aggregate process exit code: 0 iff no
+    ``fail``/``error`` verdict, so CI can gate on it.
+    """
+    fmt = fmt.strip().lower()
+    if fmt not in ("json", "html"):
+        console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)")
+        raise typer.Exit(_EXIT_ERR)
+    try:
+        descriptors: List[OracleDescriptor] = classify(requirements)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+
+    verdicts: List[OracleVerdict] = evaluate(descriptors, run_oracle=run_oracle, timeout=oracle_timeout)
+    rc = aggregate_exit_code(verdicts)
+
+    if fmt == "json":
+        payload = {
+            "requirements": str(requirements),
+            "run_oracle": run_oracle,
+            "verdicts": [verdict_to_dict(v) for v in verdicts],
+        }
+        text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+        if out is None:
+            sys.stdout.write(text)
+        else:
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                console.print(f"[red]error:[/red] {exc}")
+                raise typer.Exit(_EXIT_ERR)
+            console.print(f"wrote {out} ({len(verdicts)} verdicts)")
+        raise typer.Exit(rc)
+
+    # fmt == "html": project each verdict to a Node and reuse the existing tree renderer (D-D, no shell).
+    if out is None:
+        console.print("[red]error:[/red] --out is required for --format html")
+        raise typer.Exit(_EXIT_ERR)
+    from .models import Node
+
+    verdict_nodes = [
+        Node(
+            key=v.fr_id or f"verdict-{i}",
+            does=f"{v.verdict.upper()} — {v.reason}" if v.reason else v.verdict.upper(),
+            status=_VERDICT_STATUS.get(v.verdict, "unknown"),
+            category="oracle-verdict",
+            attributes={
+                "kind": "oracle-verdict",
+                "verdict": v.verdict,
+                "assertion_text": v.assertion_text,
+                "reason": v.reason,
+            },
+        )
+        for i, v in enumerate(verdicts)
+    ]
+    try:
+        render_navigator_tree_html(
+            verdict_nodes, out,
+            title=f"Verify oracle — {requirements.name}",
+        )
+    except OSError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+    console.print(f"wrote {out} ({len(verdict_nodes)} verdicts, tree)")
+    raise typer.Exit(rc)
 
 
 def _validate_node_json(node_list, path: Path, where: str) -> None:
