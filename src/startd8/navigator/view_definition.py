@@ -315,6 +315,17 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
                           "rawData": {"label": "Raw data", "order": 0},
                           "nodeData": {"label": "Node data", "order": 1},
                       }},
+            # REQ-view-definition-mode FR-9: Paging — the first FUNCTIONAL display capability the View
+            # Definition owns. A pick-one page size shows N requirement nodes at a time; a prev/next bar
+            # pages through the rest, down to one at a time. Default All; definition-owned (a domain can
+            # reconfigure the sizes); additive + profiled-navigator-only (app path byte-identical).
+            "paging": {"label": "Paging", "hint": "· show N at a time", "order": 3,
+                       "toggles": {
+                           "pageAll": {"label": "All", "order": 0},
+                           "page10": {"label": "10", "order": 1},
+                           "page5": {"label": "5", "order": 2},
+                           "page1": {"label": "1 at a time", "order": 3},
+                       }},
         },
     },
     glance={"summary": "status-counts"},

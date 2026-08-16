@@ -178,6 +178,24 @@ def test_debug_group_and_raw_data_panel_ship_and_are_byte_safe():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+def test_paging_control_ships_and_is_byte_safe():
+    # REQ-view-definition-mode FR-9: a definition-owned Paging group (pick-one page size incl. 1-at-a-time)
+    # + a #pagebar below the outline pages through the requirement nodes N at a time. Client-side machinery
+    # ships in the profiled render; the app path is byte-identical (no paging emitted without a profile).
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert 'data-group="paging"' in profiled                 # the Paging group header
+    for tid in ('id="pageAll"', 'id="page10"', 'id="page5"', 'id="page1"'):
+        assert tid in profiled, tid                          # the pick-one page sizes incl. 1-at-a-time
+    assert "function applyPaging" in profiled                # the paging engine
+    assert 'id="pagebar"' in profiled                        # the prev/next bar element
+    # the bar sits below the node outline (appears after #outline in the document)
+    assert profiled.index('id="pagebar"') > profiled.index('id="outline"')
+    assert "pg-hidden" in profiled and "pg-next" in profiled  # slice-hiding + next control
+    # app path byte-identical (paging is profiled-navigator-only)
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
 def test_frame_provenance_reads_as_definition_summary_not_cruft():
     # REQ-view-definition-mode FR-7: a bare frame (payload.frame) must NOT report its empty chrome slots
     # as "cruft" — the readout reads as a definition summary. (Client-side: the frame-branch ships in JS.)
