@@ -23,9 +23,11 @@ resolver + base + a 2-domain proof + the RenderProfile projection, nothing more.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from startd8.wireframe.profile import RenderProfile, StatusStyle
 
@@ -438,3 +440,35 @@ def validate_definitions(registry: Mapping[str, ViewDefinition]) -> List[str]:
                         f"{ref!r} (known: {', '.join(BINDING_CONTEXT_FIELDS)})"
                     )
     return issues
+
+
+def load_definition(source: Union[str, Path, Mapping[str, Any]]) -> ViewDefinition:
+    """REQ-13 FR-1: load an externally-authored View Definition from a VIEW-SCHEMA JSON file or dict.
+
+    ``source`` is a path to a JSON file or an already-parsed mapping. The import half of the cross-repo
+    seam (EC-1 is the export half) — a second repo authors its presentation as ``{name, extends, …}``
+    JSON and the navigator consumes it via :meth:`ViewDefinition.from_dict`. Raises a clear ``ValueError``
+    when the payload is not a JSON object or lacks a ``name``.
+    """
+    if isinstance(source, (str, Path)):
+        data = json.loads(Path(source).read_text(encoding="utf-8"))
+    else:
+        data = source
+    if not isinstance(data, Mapping):
+        raise ValueError(f"VIEW-SCHEMA must be a JSON object, got {type(data).__name__}")
+    if not data.get("name"):
+        raise ValueError("VIEW-SCHEMA is missing the required 'name' field")
+    return ViewDefinition.from_dict(data)
+
+
+def resolve_external(
+    definition: ViewDefinition,
+    registry: Mapping[str, ViewDefinition] = DEFINITION_REGISTRY,
+) -> ResolvedDefinition:
+    """REQ-13 FR-2: resolve an external definition against the shipped base registry (read-only).
+
+    The external definition is resolved against a COPY of ``registry`` that includes it, so its
+    ``extends: "base"`` chain flattens against the shipped base and it inherits the shared
+    theme/lenses/control/glance/regions. The shipped registry is never mutated (NR-2).
+    """
+    return resolve(definition, {**registry, definition.name: definition})

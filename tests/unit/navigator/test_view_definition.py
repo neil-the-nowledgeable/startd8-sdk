@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -23,12 +24,16 @@ from startd8.navigator.view_definition import (
     ResolvedDefinition,
     ViewDefinition,
     definition_diff,
+    load_definition,
     resolve,
     resolve_bindings,
+    resolve_external,
     to_render_profile,
     validate_definitions,
 )
 from startd8.wireframe.profile import RenderProfile, StatusStyle
+
+_LEGAL_FIXTURE = Path(__file__).parent / "fixtures" / "legal-view-definition.json"
 
 
 # ── FR-1 — ViewDefinition model: serializable, keyed collections, JSON round-trip ────────────────
@@ -435,3 +440,33 @@ def test_validate_flags_unknown_extends_and_unknown_binding_field():
     issues = validate_definitions(reg)
     assert any("unknown definition 'ghost'" in i for i in issues)
     assert any("unknown context field 'nope'" in i for i in issues)
+
+
+# ── REQ-13 — cross-repo VIEW-SCHEMA import ───────────────────────────────────────────────────────
+
+def test_load_definition_from_dict_and_requires_name():
+    d = load_definition({"name": "x", "extends": "base", "vocabulary": {"gap_noun": "thing"}})
+    assert isinstance(d, ViewDefinition) and d.name == "x"
+    with pytest.raises(ValueError, match="missing the required 'name'"):
+        load_definition({"extends": "base"})
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        load_definition([1, 2, 3])
+
+
+def test_external_definition_inherits_the_shipped_base_and_projects():
+    # FR-2/FR-4: the synthetic 'legal' adopter loads, resolves against the base, and projects.
+    legal = load_definition(_LEGAL_FIXTURE)
+    resolved = resolve_external(legal)
+    assert resolved.theme == BASE_NAVIG8R_DEFINITION.theme          # inherits the shared theme
+    assert resolved.lenses == BASE_NAVIG8R_DEFINITION.lenses        # …and lenses/control/…
+    profile = to_render_profile(resolved)
+    assert profile.eyebrow == "This statute"                         # its own chrome
+    assert profile.gap_noun == "provision"
+    assert profile.theme_tokens == BASE_NAVIG8R_DEFINITION.theme     # inherited theme reaches the render
+    assert tuple(s.key for s in profile.statuses) == ("enacted", "proposed", "contested")
+
+
+def test_resolve_external_does_not_mutate_the_shipped_registry():
+    before = set(DEFINITION_REGISTRY)
+    resolve_external(load_definition(_LEGAL_FIXTURE))
+    assert set(DEFINITION_REGISTRY) == before                        # NR-2: registry untouched

@@ -38,7 +38,9 @@ from .view_definition import (
     BASE_NAVIG8R_DEFINITION,
     DEFINITION_REGISTRY,
     definition_diff,
+    load_definition,
     resolve,
+    resolve_external,
     validate_definitions,
 )
 
@@ -451,14 +453,19 @@ def view_definition(
         help="Govern the registry: check every definition resolves + bindings reference known fields. "
         "Exit 0=clean, 1=issues (EC-6).",
     ),
+    from_file: Optional[Path] = typer.Option(
+        None, "--from",
+        help="Consume an EXTERNAL VIEW-SCHEMA JSON file (REQ-13): load it, resolve against the shipped "
+        "base, validate, and dump the resolved JSON. The cross-repo import seam.",
+    ),
 ) -> None:
-    """Dump a View Definition (REQ-10) as JSON — the cross-repo ``VIEW-SCHEMA`` export seam (EC-1).
+    """Dump a View Definition (REQ-10) as JSON — the cross-repo ``VIEW-SCHEMA`` seam.
 
     Serializes via the definition's own ``to_dict`` so an off-repo adopter (legal · benchmark · dev-os)
     can author its presentation as a base + a thin delta and consume it without importing Python.
     ``--name`` selects one definition; omitted, it dumps every definition in the registry. ``--diff``
     (with ``--name``) shows only what that domain overrides/adds vs the base (EC-4). ``--validate``
-    governs the whole registry (EC-6).
+    governs the whole registry (EC-6). ``--from`` consumes an external VIEW-SCHEMA file (REQ-13 import).
     """
     if validate:
         issues = validate_definitions(DEFINITION_REGISTRY)
@@ -467,6 +474,23 @@ def view_definition(
                 console.print(f"[red]definition:[/red] {issue}")
             raise typer.Exit(_EXIT_ERR)
         console.print(f"[green]ok:[/green] {len(DEFINITION_REGISTRY)} definitions valid")
+        raise typer.Exit(_EXIT_OK)
+    if from_file is not None:
+        # REQ-13: consume an externally-authored definition — load, resolve against the shipped base,
+        # validate the augmented registry, then dump the resolved JSON (the second-repo import proof).
+        try:
+            external = load_definition(from_file)
+            augmented = {**DEFINITION_REGISTRY, external.name: external}
+            issues = validate_definitions(augmented)
+            if issues:
+                for issue in issues:
+                    console.print(f"[red]external:[/red] {issue}")
+                raise typer.Exit(_EXIT_ERR)
+            payload = resolve_external(external).to_dict()
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]error:[/red] {exc}")
+            raise typer.Exit(_EXIT_ERR)
+        sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
         raise typer.Exit(_EXIT_OK)
     try:
         if name is not None:

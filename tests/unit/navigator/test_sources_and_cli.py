@@ -270,3 +270,20 @@ def test_ground_emits_counts_and_date(tmp_path: Path):
     assert payload["grounded"]  # ISO date
     # library API
     assert ground_tree(src)["key_count"] >= 1
+
+
+def test_view_definition_cli_from_consumes_an_external_file():
+    fixture = Path(__file__).parent / "fixtures" / "legal-view-definition.json"
+    res = RUNNER.invoke(app, ["navigator", "view-definition", "--from", str(fixture)])
+    assert res.exit_code == 0, res.output
+    resolved = json.loads(res.stdout)
+    assert resolved["chrome"]["eyebrow"] == "This statute"      # its own chrome
+    assert resolved["theme"]["accent"] == "#1b545f"             # inherited base theme
+
+
+def test_view_definition_cli_from_rejects_a_malformed_external(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"name": "rogue", "extends": "ghost"}', encoding="utf-8")
+    res = RUNNER.invoke(app, ["navigator", "view-definition", "--from", str(bad)])
+    assert res.exit_code == 1
+    assert "unknown definition" in res.output or "external" in res.output
