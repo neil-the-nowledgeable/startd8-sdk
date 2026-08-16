@@ -12,6 +12,7 @@
 
 > **Readable handle:** `feature/navigator-lifts-the-audience-fluency-debug-a0a42985`
 > **Semantic name:** *Navigator lifts the audience × fluency × debug lenses out of the wireframe renderer into a shared Node-view-model transform so every renderer inherits them without forking.*
+> **Canonical ref:** `cc:intent:requirements-visualization:feature:req-04`
 
 ---
 
