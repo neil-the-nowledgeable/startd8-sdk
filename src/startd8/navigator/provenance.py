@@ -132,7 +132,7 @@ def pipeline_provenance(
         path = _fr_file_path(fr_node) if fr_node is not None else None
         if path is None:
             if requirement_nodes is None:
-                reason = f"FR {fr_id}: pass requirement_nodes to resolve an FR-id query"
+                reason = f"FR {fr_id}: no requirement corpus provided to resolve an FR-id query"
             elif fr_node is None:
                 reason = f"FR {fr_id}: not in the provided requirement corpus"
             else:

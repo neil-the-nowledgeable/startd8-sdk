@@ -323,7 +323,7 @@ def test_provenance_fr_id_without_corpus_is_not_found():
     """R8-EB-4: an FR-id with no requirement_nodes → an honest not-found row (never an invented path)."""
     rows = pipeline_provenance(nodes_from_pipeline(), stages(), query="FR-3")
     assert len(rows) == 1 and rows[0]["present"] is False
-    assert "requirement_nodes" in rows[0]["origin"]
+    assert "no requirement corpus" in rows[0]["origin"]
 
 
 def test_provenance_unknown_fr_id_is_not_found():
@@ -355,6 +355,13 @@ def test_cli_provenance_fr_id(tmp_path):
     assert res.exit_code == 0, res.output
     chain = json.loads(res.stdout)["chain"]
     assert chain[-1]["stage"] == "stage:impl"
+
+
+def test_cli_provenance_fr_id_without_requirements_errors_with_flag_name(tmp_path):
+    """HTH harvest: an FR-id query without --requirements errors naming the CLI flag (not the lib param)."""
+    res = RUNNER.invoke(app, ["navigator", "provenance", "--query", "FR-1"])
+    assert res.exit_code != 0
+    assert "--requirements" in res.output and "requirement_nodes" not in res.output
 
 
 def test_cli_provenance_unowned_path_exits_nonzero():

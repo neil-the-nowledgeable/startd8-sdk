@@ -39,7 +39,7 @@ from .sources_pipeline import (
     stages as pipeline_stages,
 )
 from .sources_requirements import nodes_from_requirements, requirements_profile_for
-from .provenance import pipeline_provenance
+from .provenance import _FR_ID_RE, pipeline_provenance
 from .verify_oracle import (
     OracleDescriptor,
     OracleVerdict,
@@ -365,6 +365,11 @@ def provenance(
     test_emitter → docs), so an FR-id traces only when its file falls under one of those; an FR implemented
     elsewhere honestly reports not-found (exit 1).
     """
+    # A friendly pre-check: an FR-id query needs a corpus to resolve against — name the CLI flag, not
+    # the library param (which the not-found row would otherwise surface).
+    if _FR_ID_RE.match(query.strip()) and requirements is None:
+        console.print("[red]error:[/red] an FR-id query requires --requirements <det-req.md> to resolve")
+        raise typer.Exit(_EXIT_ERR)
     _stages = pipeline_stages()
     stage_nodes = nodes_from_pipeline()
     req_nodes = None

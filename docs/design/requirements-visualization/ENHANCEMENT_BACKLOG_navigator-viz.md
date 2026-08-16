@@ -41,3 +41,20 @@ remain as triaged rows (re-ground before building — a backlog item is a belief
 **Value-path lesson carried forward:** the GATE-2 reachability probe scored `topo_order` "wired" on a
 **test-only** reference — Phase-2.5 must grep for a *non-test* caller to catch production-dormancy the
 probe can't see.
+
+### R8-EB-4/5 own HTH harvest 2026-08-16 (`fc647853`)
+
+The FR-id query + `provenance` CLI got their own full harden-then-harvest (they shipped after the parent
+REQ-08 harvest). Phase-1 fixed one Low/UX defect (the no-corpus not-found reason leaked the internal
+`requirement_nodes` param name — now interface-agnostic + a friendly CLI pre-check names `--requirements`).
+Phase-2.5 inventory: **5 new symbols scanned, all wired** (no dormants — the capability shipped with its
+CLI consumer by design). One new row:
+
+| ID | Effort | Row | Evidence | Status |
+|----|--------|-----|----------|--------|
+| **R8-EB-6** | S | Give `navigator provenance` a `--format html` (project the chain rows to Nodes → existing tree renderer, mirroring `verify --format html`) — today it is JSON-only | `cli_navigator.py` `provenance` emits only JSON | open |
+
+**Retro surprise (belief→actual):** an FR-id traces only when its file falls under a *modeled compiler
+stage* — so a spec's own FRs implemented outside those stages (e.g. REQ-08's, in `navigator/`) honestly
+report not-found. A query capability's reach is bounded by the domain model it queries; the command help
+says so rather than implying every FR traces.
