@@ -536,3 +536,16 @@ def test_req14_region_override_flows_to_the_projected_profile_for_the_scaffold_m
     # a non-overriding domain projects the base anatomy verbatim (byte-identity anchor).
     base_prof = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
     assert base_prof.regions["bindings"]["outline"]["scaffold"] == "outline — node sections + cards (the node-driven layer)"
+
+
+def test_req15_layer_schema_projects_and_a_domain_can_relabel_a_layer():
+    # FR-3: the layer schema rides the profile; a domain overriding a layer label projects it (the legend
+    # is rebuilt from profile.regions.layers at render, so the relabel shows).
+    base = to_render_profile(resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY))
+    assert base.regions["layers"]["node"]["label"] == "node-driven"       # base value → byte-identical legend
+    child = ViewDefinition(name="lyrchild", extends="base",
+                           regions={"layers": {"node": {"label": "requirements"}}})
+    reg = {**DEFINITION_REGISTRY, "lyrchild": child}
+    prof = to_render_profile(resolve(child, reg))
+    assert prof.regions["layers"]["node"]["label"] == "requirements"      # relabel projected
+    assert prof.regions["layers"]["control"]["label"] == "control"        # sibling layer kept

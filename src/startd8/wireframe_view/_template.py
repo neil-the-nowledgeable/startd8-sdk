@@ -164,6 +164,16 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.scaffold-only [data-layer="node"] *{visibility:hidden}
   body.scaffold-only [data-layer="node"]{visibility:visible}
   #debug .dbg-opt.dbg-sub{margin-left:16px}
+  /* REQ-15 FR-1/FR-4: frame-bare — hide EVERY region's content (keep the region outline + its ::before
+     meta-description), so the frame source shows only the scaffolding + control surface. A per-layer
+     toggle sets body.show-layer-<id>, which reveals that one layer's content (progressive disclosure). */
+  body.frame-bare [data-scaffold] *{visibility:hidden}
+  body.frame-bare [data-scaffold]{visibility:visible}
+  body.frame-bare.show-layer-control [data-layer="control"] *,
+  body.frame-bare.show-layer-descriptive [data-layer="descriptive"] *,
+  body.frame-bare.show-layer-computed [data-layer="computed"] *,
+  body.frame-bare.show-layer-node [data-layer="node"] *{visibility:visible}
+  #debug #layerToggles{display:none} body.scaffold #debug #layerToggles{display:block}
   /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
   #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
     font-size:10px;font-family:var(--mono);line-height:1.7}
@@ -739,6 +749,25 @@ __PLAN_DATA__
       var r=rg.bindings[rid], el=document.getElementById(rid)||document.querySelector('[data-region="'+rid+'"]');
       if(el){ if(r.layer!=null) el.setAttribute("data-layer",r.layer); if(r.scaffold!=null) el.setAttribute("data-scaffold",r.scaffold); }
     }); }
+    // REQ-15 FR-3: render the layer LEGEND from the definition's ordered layer schema (was hardcoded +
+    // 3-way inconsistent). The base schema reproduces the current legend text → byte-identical.
+    var ly=(rg&&rg.layers)||null, leg=document.querySelector("#debug .dbg-layers");
+    if(ly&&leg){
+      var ids=Object.keys(ly).sort(function(a,b){return (ly[a].order||0)-(ly[b].order||0);});
+      leg.innerHTML="layers: "+ids.map(function(id){return '<span class="ll '+id+'">'+(ly[id].label||id)+'</span>';}).join("");
+      // REQ-15 FR-4: build a per-layer show/hide toggle from the schema so the operator reveals one layer
+      // at a time / none / all. Toggling sets body.show-layer-<id>; the frame source starts all-hidden.
+      var host=document.getElementById("layerToggles");
+      if(host){
+        host.innerHTML=ids.map(function(id){return '<label class="dbg-opt dbg-sub"><input type="checkbox" data-layer-toggle="'+id+'"><span>show '+(ly[id].label||id)+'</span></label>';}).join("");
+        host.querySelectorAll("[data-layer-toggle]").forEach(function(cb){
+          cb.addEventListener("change",function(){ document.body.classList.toggle("show-layer-"+cb.getAttribute("data-layer-toggle"), cb.checked); });
+        });
+      }
+    }
+    // REQ-15 FR-1: the frame source renders scaffold-mode-on with every layer's content hidden — only the
+    // region meta-descriptions (::before) + the control surface show. Per-layer toggles reveal a layer.
+    if(payload.frame){ document.body.classList.add("scaffold","frame-bare"); }
   }
 
   // ---------- QW-1 + EC-4: the role (base voice + delivery kits) / depth toggle + open/close ----------
@@ -816,6 +845,9 @@ __PLAN_DATA__
       // FR-16: scaffold-only — a sub-option of scaffold mode that empties the node-driven content so
       // the adopter sees just the labelled template skeleton. Checking it also turns scaffold mode on.
       '<label class="dbg-opt dbg-sub"><input type="checkbox" id="scaffoldOnly"><span>Scaffold only (hide node content)</span></label>'+
+      // REQ-15 FR-4: host for the per-layer disclosure toggles (built from the definition's layer schema
+      // by applyDefinitionOverride). Empty in the served HTML; populated at runtime, byte-safe.
+      '<div id="layerToggles"></div>'+
       '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
         '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
         '<span class="ll node">node-driven</span></div>'+
