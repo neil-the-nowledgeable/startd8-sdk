@@ -34,7 +34,12 @@ from .sources_capability import (
 )
 from .sources_node_schema import NODE_SCHEMA_PROFILE, nodes_from_node_schema
 from .sources_requirements import nodes_from_requirements, requirements_profile_for
-from .view_definition import DEFINITION_REGISTRY, resolve
+from .view_definition import (
+    BASE_NAVIG8R_DEFINITION,
+    DEFINITION_REGISTRY,
+    definition_diff,
+    resolve,
+)
 
 navigator_app = typer.Typer(
     help="NODE-SCHEMA navigator — render requirements / capability-index as Nodes.",
@@ -436,12 +441,17 @@ def view_definition(
         True, "--resolved/--raw",
         help="Dump the RESOLVED definition (extends chain flattened, default) or the raw authored delta.",
     ),
+    diff: bool = typer.Option(
+        False, "--diff",
+        help="With --name: dump only the leaves this domain overrides/adds vs the base (its delta).",
+    ),
 ) -> None:
     """Dump a View Definition (REQ-10) as JSON — the cross-repo ``VIEW-SCHEMA`` export seam (EC-1).
 
     Serializes via the definition's own ``to_dict`` so an off-repo adopter (legal · benchmark · dev-os)
     can author its presentation as a base + a thin delta and consume it without importing Python.
-    ``--name`` selects one definition; omitted, it dumps every definition in the registry.
+    ``--name`` selects one definition; omitted, it dumps every definition in the registry. ``--diff``
+    (with ``--name``) shows only what that domain overrides/adds vs the base (EC-4).
     """
     try:
         if name is not None:
@@ -453,7 +463,10 @@ def view_definition(
                 )
                 raise typer.Exit(_EXIT_ERR)
             defn = DEFINITION_REGISTRY[key]
-            payload = resolve(defn, DEFINITION_REGISTRY).to_dict() if resolved else defn.to_dict()
+            if diff:
+                payload = definition_diff(defn, BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+            else:
+                payload = resolve(defn, DEFINITION_REGISTRY).to_dict() if resolved else defn.to_dict()
         else:
             payload = {
                 k: (resolve(d, DEFINITION_REGISTRY).to_dict() if resolved else d.to_dict())

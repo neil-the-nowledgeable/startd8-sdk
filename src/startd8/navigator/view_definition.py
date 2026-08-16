@@ -159,6 +159,36 @@ def _resolve(
     return ResolvedDefinition(**merged)
 
 
+def _diff_leaves(base: Mapping[str, Any], over: Mapping[str, Any]) -> Dict[str, Any]:
+    """The leaf keys where ``over`` differs from ``base`` — recursing dicts, comparing other leaves."""
+    out: Dict[str, Any] = {}
+    for key, val in over.items():
+        if isinstance(val, dict) and isinstance(base.get(key), dict):
+            sub = _diff_leaves(base[key], val)
+            if sub:
+                out[key] = sub
+        elif base.get(key) != val:
+            out[key] = _copy(val)
+    return out
+
+
+def definition_diff(
+    domain: ViewDefinition,
+    base: ViewDefinition,
+    registry: Mapping[str, ViewDefinition],
+) -> Dict[str, Any]:
+    """The leaves a ``domain`` overrides/adds vs a ``base`` — *what makes this domain different*.
+
+    Compares the two RESOLVED forms and returns only the differing/added leaves (nested by section),
+    so an author or governance check can see exactly a domain's delta without reading the whole merge
+    (e.g. capability → ``{"theme": {"accent": "#3a6a94"}, "vocabulary": {...}, "chrome": {...}}``).
+    Inherited-and-unchanged sections (lenses/control/…) are omitted.
+    """
+    resolved_base = resolve(base, registry).to_dict()
+    resolved_domain = resolve(domain, registry).to_dict()
+    return _diff_leaves(resolved_base, resolved_domain)
+
+
 def to_render_profile(resolved: ResolvedDefinition) -> RenderProfile:
     """Project a resolved definition to the existing :class:`RenderProfile` (renderers unchanged).
 

@@ -46,6 +46,14 @@ def test_view_definition_cli_dumps_whole_registry_and_rejects_unknown():
     assert "unknown definition" in bad.output
 
 
+def test_view_definition_cli_diff_shows_only_the_domain_delta():
+    res = RUNNER.invoke(app, ["navigator", "view-definition", "--name", "capability", "--diff"])
+    assert res.exit_code == 0, res.output
+    delta = json.loads(res.stdout)
+    assert delta["theme"] == {"accent": "#3a6a94"}   # only the overridden leaf
+    assert "lenses" not in delta                      # inherited-unchanged omitted
+
+
 # ---- FR-17: deterministic masthead identity (derived, not static profile copy) ----
 def test_requirement_identity_extracts_key_title_semantic():
     idy = requirement_identity(_REQ01)

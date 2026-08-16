@@ -21,6 +21,7 @@ from .view_definition import (
     NODE_SCHEMA_DEFINITION,
     ResolvedDefinition,
     ViewDefinition,
+    definition_diff,
     resolve,
     to_render_profile,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "NODE_SCHEMA_DEFINITION",
     "ResolvedDefinition",
     "ViewDefinition",
+    "definition_diff",
     "resolve",
     "to_render_profile",
 ]

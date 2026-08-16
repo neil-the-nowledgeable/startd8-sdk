@@ -22,6 +22,7 @@ from startd8.navigator.view_definition import (
     REQUIREMENTS_DEFINITION,
     ResolvedDefinition,
     ViewDefinition,
+    definition_diff,
     resolve,
     to_render_profile,
 )
@@ -350,3 +351,19 @@ def test_node_schema_projection_reproduces_the_former_literal_and_inherits_theme
     assert NODE_SCHEMA_PROFILE.statuses[1].color == "#2b7382"      # 'derived' teal, unchanged
     # …and now inherits the activated base theme (REQ-11), overriding nothing.
     assert NODE_SCHEMA_PROFILE.theme_tokens == BASE_NAVIG8R_DEFINITION.theme
+
+
+# ── EC-4 (REQ-10 backlog) — definition_diff surfaces a domain's delta vs the base ────────────────
+
+def test_definition_diff_shows_only_what_a_domain_overrides_or_adds():
+    delta = definition_diff(CAPABILITY_DEFINITION, BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+    # capability overrides theme.accent and adds its own vocabulary + chrome…
+    assert delta["theme"] == {"accent": "#3a6a94"}          # only the overridden leaf, not ink/paper
+    assert delta["vocabulary"]["gap_noun"] == "capability"
+    assert "chrome" in delta
+    # …and inherited-unchanged sections do NOT appear in the delta.
+    assert "lenses" not in delta and "control" not in delta and "regions" not in delta
+
+
+def test_definition_diff_of_the_base_against_itself_is_empty():
+    assert definition_diff(BASE_NAVIG8R_DEFINITION, BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY) == {}
