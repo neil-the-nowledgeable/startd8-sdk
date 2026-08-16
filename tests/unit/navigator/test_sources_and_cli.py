@@ -15,10 +15,20 @@ from startd8.navigator.ground import ground_tree
 from startd8.navigator.sources_capability import nodes_from_capability_index
 from startd8.navigator.sources_requirements import (
     REQUIREMENTS_PROFILE,
+    _initiative_slug,
     nodes_from_requirements,
     requirement_identity,
     requirements_profile_for,
 )
+
+
+def test_initiative_slug_strips_the_req_plan_brand_for_didl_canonical():
+    # DIDL: the canonical initiative must NOT carry the REQ-/PLAN- content-type brand — strip both the
+    # integer-led (REQ-01-) and the semantic (REQ-<slug>) filename forms.
+    assert _initiative_slug(Path("REQ-01-sdk-node-home.md")) == "sdk-node-home"          # integer-led
+    assert _initiative_slug(Path("REQ-view-definition-mode.md")) == "view-definition-mode"  # DIDL semantic
+    assert _initiative_slug(Path("PLAN-01-sdk-node-home.md")) == "sdk-node-home"          # PLAN- brand too
+    assert not _initiative_slug(Path("REQ-anything-here.md")).lower().startswith(("req-", "plan-"))
 
 FIXTURE = Path(__file__).parent / "fixtures" / "REQ-fixture-minimal.md"
 _REQ01 = Path("docs/design/requirements-visualization/REQ-01-sdk-node-home.md")
