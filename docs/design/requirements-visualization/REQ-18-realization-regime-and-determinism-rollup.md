@@ -77,6 +77,13 @@ additive and byte-identical; no construction subsystem is touched.
 - **FR-6 — realization as a derived §3a facet.** A node's realization facet — `realization:deterministic|llm|human|unknown`, and `realization:mixed` for a parent spanning regimes — is DERIVED from its incoming edges and exposed to the existing facet engine, so cross-cutting by realization works. Name: The node exposes a derived realization facet including mixed for non-uniform parents to the existing facet engine. Touches: `src/startd8/navigator/realization.py`, `tests/unit/navigator/test_realization.py`. Lives: code src/startd8/navigator/realization.py. Approve?: is realization a derived facet usable in the existing facet mechanism?. Verify: faceting a graph by `realization:llm` returns the llm-realized nodes, and a parent spanning regimes exposes `realization:mixed`. Serves: O-1
 - **FR-7 — Additive, byte-identical, no construction coupling.** The whole feature is additive: existing domain renders (requirements/capability) are byte-identical (the determinism-% line renders only when regime data is present; the shipped fixtures carry none), the seam is unwired, and nothing imports a construction subsystem. Name: The realization feature is additive byte-identical and imports no construction subsystem. Touches: `tests/unit/wireframe/test_render_profile.py`, `tests/unit/navigator/test_realization.py`. Lives: test tests/unit/wireframe/test_render_profile.py. Approve?: are existing renders byte-identical and free of construction-subsystem imports?. Verify: `test_no_profile_is_byte_identical` passes unedited; a fixture with no declared regime renders no determinism-% line; `realization.py` imports nothing from `backend_codegen`/`contractors`/`micro_prime`. Serves: O-3
 
+> **Amendment (REQ-22, 2026-08-16) — invariant 9 strengthened from PRESENCE to LIVENESS.** FR-5 as
+> written obligates `verify` **non-empty** — presence only. Grounded in the NetBSD `O-4` Functional Spine
+> Fracture (`dev-os/FINDING-verify-liveness-lacuna.md`), a present-but-*dead* verify (a gate that no longer
+> resolves/runs/compares) would still pass FR-5 — the SDK's own instance of the presence≠liveness lacuna.
+> **REQ-22 FR-7 strengthens invariant 9 to require a *live* verify**, not merely a present one. FR-5 here
+> stands as the activation-gating rule; the liveness predicate is REQ-22's.
+
 ## Non-requirements
 
 - **NR-1:** Approach (a) ships a DECLARED regime + a determinism-% labeled `declared`. Grounding it in MEASURED construction provenance is **approach (b)** — the named, additive follow-on that fills the seam. Do NOT wire a construction provenance source here.
