@@ -64,6 +64,35 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
     border-radius:10px;padding:12px 14px;margin-top:14px}
   .whybox b{color:var(--accent);font-weight:700}
 
+  /* ---------- doc-context band (profiled requirements render only) ---------- */
+  body.nav-profiled .dc-band{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;align-items:center}
+  body.nav-profiled .dc-chip{display:inline-flex;align-items:baseline;gap:5px;font-family:var(--mono);
+    font-size:11px;color:var(--ink2);background:var(--card);border:1px solid var(--line);
+    border-radius:6px;padding:3px 8px;line-height:1.5;white-space:nowrap}
+  body.nav-profiled .dc-chip .dc-k{font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--faint);font-weight:600}
+  body.nav-profiled .dc-crit{font-weight:700}
+  body.nav-profiled .dc-crit-high{color:#ab473a;border-color:#ab473a55}
+  body.nav-profiled .dc-crit-medium{color:#a9781a;border-color:#a9781a55}
+  body.nav-profiled .dc-crit-low{color:#3d7a57;border-color:#3d7a5755}
+  body.nav-profiled .dc-backend{color:var(--accent);border-color:var(--accent)}
+  body.nav-profiled .dc-counts{color:var(--faint)}
+  body.nav-profiled .dc-risks{margin-top:8px;font-size:12px;color:var(--ink2)}
+  body.nav-profiled .dc-risks summary{cursor:pointer;font-family:var(--mono);font-size:11px;
+    color:var(--ink2);padding:3px 0;list-style-position:outside}
+  body.nav-profiled .dc-risks summary::-webkit-details-marker{color:var(--faint)}
+  body.nav-profiled .dc-risk{border-left:2px solid var(--line);padding:5px 0 5px 10px;margin:6px 0 6px 2px;
+    font-size:12px;line-height:1.5}
+  body.nav-profiled .dc-risk.dc-pri-high{border-left-color:#ab473a}
+  body.nav-profiled .dc-risk.dc-pri-medium{border-left-color:#a9781a}
+  body.nav-profiled .dc-risk.dc-pri-low{border-left-color:#3d7a57}
+  body.nav-profiled .dc-rp{font-family:var(--mono);font-size:9px;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--faint);margin-right:6px}
+  body.nav-profiled .dc-rt{font-weight:700;color:var(--ink)}
+  body.nav-profiled .dc-mit{color:var(--ink2);font-size:11.5px;margin-top:2px}
+  body.nav-profiled .dc-cite{font-family:var(--mono);font-size:10px;color:var(--accent)}
+  body.nav-profiled .dc-nocite{font-family:var(--mono);font-size:10px;color:#ab473a}
+
   /* ---------- at-a-glance strip ---------- */
   .glance{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;margin:26px 0 6px;
     background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
@@ -244,6 +273,9 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.nav-profiled #outline .item:hover{box-shadow:0 3px 15px rgba(45,33,16,.08)}
   /* value-first hierarchy: a small id/status EYEBROW, then the DIDL NAME as the large heading */
   body.nav-profiled #outline .item .ci-top{display:flex;align-items:center;gap:9px;margin-bottom:6px}
+  body.nav-profiled #outline .item .ci-full{margin-left:auto;font-family:var(--mono);font-size:10.5px;
+    color:var(--accent);text-decoration:none;border-bottom:1px solid transparent;white-space:nowrap}
+  body.nav-profiled #outline .item .ci-full:hover{border-bottom-color:var(--accent)}
   body.nav-profiled #outline .item .ci-top .lbl-key{display:inline-block;font-family:var(--mono);
     font-size:10.5px;font-weight:700;letter-spacing:.02em;color:var(--accent);background:rgba(27,84,95,.08);
     padding:2px 7px;border-radius:5px;flex:none}
@@ -417,6 +449,55 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .ni-added{color:var(--accent2);font-family:var(--mono);font-size:12px;margin:6px 0 0}
   @media (max-width:560px){.node-inspect td,.node-inspect .ni-k,.node-inspect .ni-v{display:block;width:auto}}
 
+  /* ---------- requirement DETAIL panel (promoted inspector, reader variant; profiled-navigator only) ---------- */
+  body.nav-profiled #outline .item.cd-able{cursor:pointer}
+  body.nav-profiled #outline .item.cd-open{background:var(--card)}
+  body.nav-profiled .ci-detail{margin-top:11px;padding-top:11px;border-top:1px solid var(--line);
+    display:grid;gap:8px;font-size:12.5px;cursor:default}
+  body.nav-profiled .cd-row{display:grid;grid-template-columns:104px 1fr;gap:12px;align-items:baseline}
+  body.nav-profiled .cd-k{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--faint);font-weight:600;padding-top:1px}
+  body.nav-profiled .cd-v{color:var(--ink);line-height:1.55;word-break:break-word}
+  body.nav-profiled .cd-touches .cd-v{display:grid;gap:2px}
+  body.nav-profiled .cd-touch{display:flex;gap:9px;align-items:baseline;font-family:var(--mono);font-size:11.5px}
+  body.nav-profiled .cd-tk{font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;padding:1px 6px;
+    border-radius:4px;min-width:46px;text-align:center;font-weight:700;flex:none}
+  body.nav-profiled .cd-tk-code{background:#3a6a941e;color:#3a6a94}
+  body.nav-profiled .cd-tk-test{background:#3d7a571e;color:#3d7a57}
+  body.nav-profiled .cd-tk-config{background:#a9781a1e;color:#a9781a}
+  body.nav-profiled .cd-tk-doc{background:#7a6a481e;color:#7a6a48}
+  body.nav-profiled .cd-tk-build{background:#ab473a1e;color:#ab473a}
+  body.nav-profiled .cd-tk-other{background:var(--line);color:var(--faint)}
+  body.nav-profiled .cd-tp{color:var(--ink2)}
+  body.nav-profiled .cd-full{display:inline-block;font-family:var(--mono);font-size:11px;
+    color:var(--accent);text-decoration:none;border-bottom:1px solid transparent}
+  body.nav-profiled .cd-full:hover{border-bottom-color:var(--accent)}
+  body.nav-profiled .cd-full-top{margin-bottom:9px}
+  body.nav-profiled .cd-full-bot{margin-top:5px}
+
+  /* ---------- full-page requirement view (client-side route; profiled-navigator only) ---------- */
+  #fullview{display:none}
+  body.fullview-open .wrap,body.fullview-open #debug{display:none}
+  body.fullview-open #fullview{display:block}
+  .fv{max-width:820px;margin:0 auto;padding:38px 26px 80px}
+  .fv-back{display:inline-block;margin-bottom:22px;font-family:var(--mono);font-size:12px;color:var(--accent);
+    text-decoration:none;border-bottom:1px solid transparent}
+  .fv-back:hover{border-bottom-color:var(--accent)}
+  .fv-head{border-bottom:2px solid var(--line);padding-bottom:16px;margin-bottom:22px}
+  .fv-eyebrow{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+  .fv-name{font-family:var(--serif);font-size:27px;line-height:1.25;color:var(--ink);margin:0;font-weight:600}
+  .fv-body{display:grid;gap:14px}
+  .fv-row{display:grid;grid-template-columns:150px 1fr;gap:20px;align-items:baseline;
+    padding-bottom:13px;border-bottom:1px solid var(--line)}
+  .fv-k{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--faint);font-weight:600;padding-top:2px}
+  .fv-v{color:var(--ink);font-size:14.5px;line-height:1.6;word-break:break-word}
+  .fv-touches{margin-top:10px}
+  .fv-sk{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--faint);font-weight:600;margin-bottom:10px}
+  .fv-touches .cd-touch{padding:3px 0}
+  @media (max-width:600px){.fv-row{grid-template-columns:1fr;gap:4px}}
+
   /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
   .status-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
   .status-chip{font-size:11px;font-weight:700;letter-spacing:.03em;padding:3px 9px;border-radius:20px;
@@ -463,6 +544,8 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   <!-- FR-8: raw-data debug panel — populated + shown by the Debug group's Raw data / Node data toggles. -->
   <section class="rawdata" id="rawdata" aria-label="Raw data" hidden></section>
 </div>
+<!-- Full-page requirement detail (client-side route; populated by buildFullView on #<key> hash, profiled only). -->
+<div id="fullview" data-layer="node" data-scaffold="full-page requirement view — buildFullView on the #<key> route"></div>
 
 <!-- Embedded view-model (application/json is never executed; view.render_html escapes "<" on embed). -->
 <script type="application/json" id="plan-data">
@@ -571,6 +654,33 @@ __PLAN_DATA__
   }
 
   // ---------- masthead ----------
+  // Doc-context band — the REQ's overall nature (criticality/domain/audience/trust/data-class/version +
+  // FR/objective/non-goal counts + the risk profile with mitigation→FR coverage). MAXIMAL for now; pare
+  // back after review. Rendered only when payload.profile.doc_context is populated (a per-doc req render).
+  function docContextBand(){
+    var P=payload.profile, c=(P&&P.doc_context)||null; if(!c||!Object.keys(c).length) return "";
+    function chip(cls,label,val,title){ return val?'<span class="dc-chip '+cls+'" title="'+esc(title||label)+'"><span class="dc-k">'+esc(label)+'</span>'+esc(val)+'</span>':''; }
+    var chips=chip("dc-crit dc-crit-"+esc(c.criticality||""),"criticality",c.criticality,"how critical this requirement is")
+      + chip("dc-backend","domain",(c.backend||"").replace("python-",""),"backend / projection domain: "+(c.backend||""))
+      + chip("dc-aud","for",c.audience,"audience — who this is for")
+      + chip("dc-trust","trust",c.trust_boundary,"trust boundary")
+      + chip("dc-data","data",c.data_classification,"data classification")
+      + chip("dc-ver","version",c.version,"requirement version");
+    var counts=[]; if(c.fr_count)counts.push(c.fr_count+" FRs"); if(c.objectives)counts.push(c.objectives+" objectives"); if(c.non_goals)counts.push(c.non_goals+" non-goals");
+    if(counts.length) chips+='<span class="dc-chip dc-counts">'+esc(counts.join(" · "))+'</span>';
+    var risks=c.risks||[], rhtml="";
+    if(risks.length){
+      var hi=0,unmit=0; risks.forEach(function(r){ if(r.priority==="high")hi++; if(!(r.cites&&r.cites.length))unmit++; });
+      var sum=risks.length+" risks · "+hi+" high · "+(unmit?("⚠ "+unmit+" unmitigated"):"all mitigated");
+      var rows=risks.map(function(r){
+        var cite=(r.cites&&r.cites.length)?'<span class="dc-cite">'+esc(r.cites.join(" "))+'</span>':'<span class="dc-nocite">⚠ no FR cited</span>';
+        return '<div class="dc-risk dc-pri-'+esc(r.priority)+'"><span class="dc-rp">'+esc(r.priority)+'</span><span class="dc-rt">'+esc(r.type)+'</span> '+esc(r.desc)+
+          '<div class="dc-mit">→ '+esc(r.mitigation)+' '+cite+'</div></div>';
+      }).join("");
+      rhtml='<details class="dc-risks"'+(unmit?' open':'')+'><summary>'+esc(sum)+'</summary>'+rows+'</details>';
+    }
+    return (chips||rhtml)?'<div class="dc-band" data-layer="descriptive" data-scaffold="doc-context band — criticality/backend/audience/trust/risks (profile.doc_context)">'+chips+'</div>'+rhtml:'';
+  }
   function renderMast(){
     var h=document.getElementById("mast");
     if(EU){
@@ -596,7 +706,8 @@ __PLAN_DATA__
         '<h1 class="headline">'+esc(headline)+'</h1>'+ meta +
         ((why||doo)?'<div class="whybox" data-region="whybox" data-layer="descriptive" data-scaffold="reading guidance — profile.why / profile.do">'+
           '<div><b>Why </b>'+esc(why)+'</div>'+
-          '<div><b>Do </b>'+esc(doo)+'</div></div>':'');
+          '<div><b>Do </b>'+esc(doo)+'</div></div>':'')+
+        docContextBand();
     }
     if(data.schema_version!==EXPECTED_SCHEMA){
       document.getElementById("warn").innerHTML='<div class="banner">This preview was made with a '+
@@ -741,6 +852,83 @@ __PLAN_DATA__
     if(sd.scope){ chips+='<span class="sig sig-scope" title="files it touches">'+esc(sd.scope)+'</span>'; }
     return chips?'<div class="sigstrip">'+chips+'</div>':'';
   }
+  // The requirement's full record as ordered {k,v} entries — read BY KEY from item.fields + first-class
+  // slots (no prose re-parse). ONE extraction shared by the inline peek (buildDetail) and the full-page
+  // view (buildFullView) so the two can't drift. Values are pre-escaped HTML (esc()).
+  function recordEntries(item){
+    var f=item.fields||{}, e=[];
+    function add(label,val){ if(val) e.push({k:label, v:val}); }
+    add("Name", f.name?esc(f.name):"");
+    add("Statement", f.statement?esc(f.statement):"");
+    add("Verify", f.verify?esc(f.verify):"");
+    add("Serves", f.serves?esc(f.serves+(f.serves_objective?(" · "+f.serves_objective):"")):"");
+    add("Type", f.archetype?esc(f.archetype+(f.archetype_gloss?(" · "+f.archetype_gloss):"")):"");
+    add("Depends on", f.depends?esc(f.depends):"");
+    add("Won’t", f.wont?esc(f.wont):"");
+    add("Ships when", item.ships_when?esc(item.ships_when):"");
+    if(item.lives&&item.lives.length){ add("Evidence", item.lives.map(function(x){ return esc((x.type||"ref")+": "+(x.ref||"")); }).join("<br>")); }
+    if(item.confidence!=null){ var c=(typeof item.confidence==="number")?item.confidence.toFixed(2):String(item.confidence); add("Confidence", esc(c)); }
+    add("Handle", f.handle?esc(f.handle):"");
+    return e;
+  }
+  // The full typed Touches list as HTML rows (path + source-bound kind badge). Shared by both views.
+  function touchesRows(item){
+    if(!(item.touches&&item.touches.length)) return "";
+    return item.touches.map(function(t){
+      return '<div class="cd-touch"><span class="cd-tk cd-tk-'+esc(t.kind||"other")+'">'+esc(t.kind||"other")+
+        '</span><span class="cd-tp">'+esc(t.path||"")+'</span></div>';
+    }).join("");
+  }
+  // Inline PEEK panel (the promoted inspector — reader variant): a compact record + an 'open full view'
+  // link into the client-side full-page route. The debug/edit grid (buildInspect) stays behind the toggle.
+  function buildDetail(card){
+    var item=card._nodeData||{}, d=document.createElement("div"); d.className="ci-detail";
+    d.setAttribute("data-layer","node");   // registered region (view_definition regions.bindings: detail)
+    d.setAttribute("data-scaffold","requirement detail peek — click-to-expand record + typed Touches (item.fields/touches)");
+    var full='<a class="cd-full" href="#'+encodeURIComponent(item.key||"")+'">open full view →</a>';
+    var html=recordEntries(item).map(function(e){
+      return '<div class="cd-row"><span class="cd-k">'+esc(e.k)+'</span><span class="cd-v">'+e.v+'</span></div>'; }).join("");
+    var tr=touchesRows(item);
+    if(tr) html+='<div class="cd-row cd-touches"><span class="cd-k">Touches · '+item.touches.length+'</span><span class="cd-v">'+tr+'</span></div>';
+    // The full-view link rides BOTH the top and the bottom of the panel so a reader never has to hunt for
+    // it — reach the full page immediately on expand, or after reading the record.
+    d.innerHTML='<div class="cd-full-top">'+full+'</div>'+html+'<div class="cd-full-bot">'+full+'</div>';
+    return d;
+  }
+  // Full-page requirement view (client-side route): a dedicated page for ONE requirement, reached by the
+  // peek's link or a #<key> deep-link. Same shared extraction, fuller layout. Back link clears the hash.
+  function buildFullView(item){
+    var f=item.fields||{}, d=document.createElement("div"); d.className="fv";
+    var rows=recordEntries(item).map(function(e){
+      return '<div class="fv-row"><div class="fv-k">'+esc(e.k)+'</div><div class="fv-v">'+e.v+'</div></div>'; }).join("");
+    var tr=touchesRows(item);
+    d.innerHTML=
+      '<a class="fv-back" href="#">← all requirements</a>'+
+      '<div class="fv-head"><div class="fv-eyebrow"><span class="lbl-key">'+esc(item.key||"")+'</span>'+badge(item.status)+'</div>'+
+        '<h1 class="fv-name">'+esc(f.name||item.label||"")+'</h1></div>'+
+      '<div class="fv-body">'+(rows||'<div class="fv-row"><div class="fv-v">(no further detail)</div></div>')+
+      (tr?'<div class="fv-touches"><div class="fv-sk">Touches · '+item.touches.length+' — the full blast-radius</div>'+tr+'</div>':'')+
+      '</div>';
+    return d;
+  }
+  // Client-side routing for the full-page view (profiled only): #<key> opens that requirement's page;
+  // empty/unknown hash restores the browse. Called on hashchange AND after each renderAll (deep-link on load).
+  function findItemByKey(k){
+    var found=null;
+    (data.sections||[]).forEach(function(sec){ (sec.items||[]).forEach(function(it){ if(it.key===k) found=it; }); });
+    return found;
+  }
+  function resolveHash(){
+    if(!payload.profile) return;   // full-page view is a profiled-navigator feature only
+    var h=decodeURIComponent((location.hash||"").replace(/^#/,""));
+    var item=h?findItemByKey(h):null;
+    if(item){
+      var host=document.getElementById("fullview"); host.innerHTML=""; host.appendChild(buildFullView(item));
+      document.body.classList.add("fullview-open"); window.scrollTo(0,0);
+    } else {
+      document.body.classList.remove("fullview-open");
+    }
+  }
   function renderItem(k,item,nav){
     var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
     // PF-1: expose the item's status as a data attribute when a domain profile is active so the
@@ -775,12 +963,27 @@ __PLAN_DATA__
       var kk=item.key||"";
       var does=kk ? item.label.replace(new RegExp("^"+kk.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&")+"\\s*—\\s*"),"") : item.label;
       w.innerHTML=
-        '<div class="ci-top"><span class="lbl-key">'+esc(kk)+'</span>'+badge(item.status)+'</div>'+
+        '<div class="ci-top"><span class="lbl-key">'+esc(kk)+'</span>'+badge(item.status)+
+          '<a class="ci-full" href="#'+encodeURIComponent(item.key||"")+'">full view →</a></div>'+
         (sd.name?'<div class="ci-name-h">'+esc(sd.name)+'</div>':'')+
         ((does&&does!==item.label)?'<div class="det ci-does">'+esc(does)+'</div>':'')+
         signalStrip(item,sd)+
         (sd.stmt?'<div class="det">'+esc(sd.stmt)+'</div>':'')+
         sd.rows+livesHtml+wasHtml+sd.meta+metaHtml;
+      // FR-1: click the card to expand its read-only detail panel in place (profiled requirement cards
+      // only → app path adds no handler). Clicks on inner interactive elements (sketch, links, the debug
+      // inspector, the panel itself) are ignored so the toggle never hijacks them.
+      w.classList.add("cd-able");
+      w.addEventListener("click", function(ev){
+        // Ignore only interactive bits INSIDE this card (the sketch details, links, the debug inspector,
+        // the panel itself) — NOT the section <details> that WRAPS every card (an ancestor match here was
+        // swallowing every click). w.contains() is false for ancestors, true for the card's own descendants.
+        var hit=ev.target.closest("details,a,input,label,button,summary,.node-inspect,.ci-detail");
+        if(hit && w.contains(hit)) return;
+        var ex=w.querySelector(".ci-detail");
+        if(ex){ ex.parentNode.removeChild(ex); w.classList.remove("cd-open"); }
+        else { w.appendChild(buildDetail(w)); w.classList.add("cd-open"); }
+      });
     } else {
       var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
       w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
@@ -892,6 +1095,7 @@ __PLAN_DATA__
     renderSignbar();   // EC-2: sign-off progress + export
     applyDefinitionOverride();   // REQ-14: apply the resolved control/region deltas over the defaults
     if(_pagingHook) _pagingHook();   // FR-9: re-page the freshly-rendered cards
+    resolveHash();   // re-resolve the full-page route against the freshly-rendered variant (deep-link on load)
   }
 
   // REQ-14 (FR-3/FR-5/FR-7): apply a resolved ViewDefinition's control + regions as an ADDITIVE runtime
@@ -1195,6 +1399,7 @@ __PLAN_DATA__
     syncView();
   }
 
+  window.addEventListener("hashchange", resolveHash);   // full-page route: react to #<key> / back
   renderAll();
 })();
 </script>

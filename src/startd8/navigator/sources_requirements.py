@@ -70,6 +70,36 @@ def outcome_nodes_from_requirements(path: Path, *, text: Optional[str] = None) -
     return out
 
 
+def _parse_doc_context(text: str) -> dict:
+    """Everything the det-req HEADER + Risks section authors about the WHOLE requirement — none of which
+    the navigator surfaced before. Maximal on purpose (pare back after seeing it rendered)."""
+    def field(name: str) -> str:
+        m = re.search(r"\*\*" + re.escape(name) + r":\*\*\s*([^\n*]+)", text)
+        return m.group(1).strip() if m else ""
+
+    risks = []
+    for m in re.finditer(
+        r"^\|\s*(quality|scope|security|perf\w*|reliab\w*|cost|legal|ethic\w*)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(low|medium|high)\s*\|",
+        text, re.MULTILINE | re.IGNORECASE,
+    ):
+        typ, desc, mit, pri = m.groups()
+        cites = sorted(set(re.findall(r"\b(?:FR|NR|O)-\d+\b", mit)))
+        risks.append({"type": typ.lower(), "desc": desc.strip(), "mitigation": mit.strip(),
+                      "priority": pri.lower(), "cites": cites})
+    return {
+        "criticality": field("Criticality"),
+        "backend": field("Backend"),
+        "audience": field("Audience"),
+        "trust_boundary": field("Trust boundary"),
+        "data_classification": field("Data classification"),
+        "version": field("Version"),
+        "objectives": len(_OBJECTIVE_RE.findall(text)),
+        "non_goals": len(re.findall(r"^- \*\*NR-\d+", text, re.MULTILINE)),
+        "fr_count": len(re.findall(r"^- \*\*FR-\d+", text, re.MULTILINE)),
+        "risks": risks,
+    }
+
+
 # Functional archetype — the 'what kind of requirement' a reader grasps at a glance. DERIVED lexically
 # for now (a hint, provenance=derived); an authored ``Type:`` FR field can override it later (the writer
 # spec already reserves the seam). Each → (plain label for the broadest audience, one-line gloss).
@@ -194,7 +224,9 @@ def requirements_profile_for(path: Path, text: Optional[str] = None) -> RenderPr
         doc_title = title
     else:
         doc_title = prof.title
-    return replace(prof, title=doc_title)
+    # Attach the doc-level context band (criticality/backend/audience/trust/data-class/risks/counts) so
+    # the masthead can orient the reader with the REQ's overall nature before any FR is read.
+    return replace(prof, title=doc_title, doc_context=_parse_doc_context(text if text is not None else path.read_text(encoding="utf-8")))
 
 
 def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Node]:

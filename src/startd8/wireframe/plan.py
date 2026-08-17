@@ -149,6 +149,10 @@ class WireframeItem:
     # A domain projection fills this so the HTML card reads fields STRUCTURALLY instead of re-parsing the
     # ``detail`` prose blob — ``detail`` remains the terminal text/JSON string (wireframe/render.py).
     fields: Tuple[Tuple[str, str], ...] = ()
+    # Full authored Touches list with a source-bound derived kind per entry, as ordered (path, kind)
+    # pairs (hashable). Defaults empty; compose omits when unset. The detail panel reads this STRUCTURALLY
+    # (never a re-stringified blob) to show a requirement's complete blast-radius, typed.
+    touches: Tuple[Tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

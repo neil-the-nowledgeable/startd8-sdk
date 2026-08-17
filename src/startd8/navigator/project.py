@@ -97,6 +97,49 @@ def _node_meta(node: Node) -> str:
     return " · ".join(bits)
 
 
+# Touches-kind classification (REQ-requirement-detail-on-navigator-card FR-4): a source-bound kind per
+# authored Touches entry, derived deterministically from the path alone (never guessed from meaning).
+# The test rule mirrors sources_requirements._TEST_PATH (one stable regex, cross-referenced here).
+_TOUCH_TEST = re.compile(r"(?:^|/)tests?(?:/|_)|(?:^|/)test_|_test\.")
+_TOUCH_CODE_EXT = {".py", ".go", ".js", ".ts", ".tsx", ".jsx", ".java", ".cs", ".rb", ".rs",
+                   ".c", ".cpp", ".cc", ".h", ".hpp", ".sh", ".sql"}
+_TOUCH_CONFIG_EXT = {".yaml", ".yml", ".toml", ".json", ".ini", ".env", ".cfg", ".conf"}
+_TOUCH_DOC_EXT = {".md", ".rst", ".txt"}
+_TOUCH_BUILD_NAMES = {"dockerfile", "makefile", "go.mod", "go.sum"}
+
+
+def _classify_touch(path: str) -> str:
+    """Source-bound kind for one authored Touches entry, from its path/extension alone."""
+    p = path.strip().strip("`").strip().lower()
+    if not p:
+        return "other"
+    base = p.rsplit("/", 1)[-1]
+    if base in _TOUCH_BUILD_NAMES or base.endswith((".mk", ".lock")):
+        return "build"
+    if _TOUCH_TEST.search(p):
+        return "test"
+    ext = base[base.rfind("."):] if "." in base else ""
+    if ext in _TOUCH_CODE_EXT:
+        return "code"
+    if ext in _TOUCH_CONFIG_EXT:
+        return "config"
+    if ext in _TOUCH_DOC_EXT:
+        return "doc"
+    return "other"   # a bare projection token (e.g. "navigator-build") or an unknown extension
+
+
+def _typed_touches(attr_touches: str) -> List[tuple]:
+    """Split the node's joined ``touches`` attribute back to entries and tag each with its kind — the
+    full authored blast-radius, typed. Deterministic + source-bound; the split is over a comma-joined
+    path list (authored paths carry no ``, ``), and backticks/whitespace are stripped per entry."""
+    out: List[tuple] = []
+    for raw in (attr_touches or "").split(", "):
+        p = raw.strip().strip("`").strip()
+        if p:
+            out.append((p, _classify_touch(p)))
+    return out
+
+
 def _node_fields(node: Node) -> Dict[str, str]:
     """The requirement's fields, STRUCTURED — the single extraction the HTML card reads by key (via
     ``WireframeItem.fields``) and that ``_node_detail`` formats its text/JSON string from. Only fields
@@ -241,6 +284,7 @@ def nodes_to_wireframe_plan(
                     approve_prompts=prompts,
                     meta=_node_meta(node),
                     fields=tuple(_node_fields(node).items()),
+                    touches=tuple(_typed_touches(node.attributes.get("touches", ""))),
                 )
             )
         sections.append(

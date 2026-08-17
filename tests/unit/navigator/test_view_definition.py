@@ -612,3 +612,17 @@ def test_req15_layer_schema_projects_and_a_domain_can_relabel_a_layer():
     prof = to_render_profile(resolve(child, reg))
     assert prof.regions["layers"]["node"]["label"] == "requirements"      # relabel projected
     assert prof.regions["layers"]["control"]["label"] == "control"        # sibling layer kept
+
+
+def test_new_detail_regions_are_registered_in_the_view_definition():
+    # REQ-requirement-detail-on-navigator-card FR-8: the doc-context band, the inline detail peek, and the
+    # full-page view are registered as region bindings in the base definition, so the View Definition
+    # stays an honest map of the renderer's anatomy (the scaffold/frame mode reads bindings).
+    bindings = BASE_NAVIG8R_DEFINITION.regions["bindings"]
+    for region in ("docband", "detail", "fullview"):
+        assert region in bindings, f"{region} not registered in regions.bindings"
+        assert bindings[region]["scaffold"], f"{region} binding missing a scaffold role"
+        assert bindings[region]["layer"] in ("descriptive", "node", "computed", "control")
+    # they inherit into the requirements domain (extends base) and project into the profile
+    resolved = resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY)
+    assert {"docband", "detail", "fullview"} <= set(resolved.regions["bindings"])

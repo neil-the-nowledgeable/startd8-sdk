@@ -96,6 +96,10 @@ class RenderProfile:
     # (possibly domain-overridden) values over these.
     field_display: Mapping[str, object] = field(default_factory=lambda: dict(DEFAULT_FIELD_DISPLAY))
     region_templates: Mapping[str, object] = field(default_factory=lambda: dict(DEFAULT_REGION_TEMPLATES))
+    # Doc-level context (criticality/backend/audience/trust/data-class/risks/counts) parsed from the REQ
+    # header + Risks section. Empty by default (byte-identity guard) — the masthead band only renders when
+    # populated, which a per-doc requirements render does.
+    doc_context: Mapping[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """JSON-safe payload the template's client renderer reads (``data.profile``)."""
@@ -124,6 +128,7 @@ class RenderProfile:
             "regions": dict(self.regions),
             "field_display": dict(self.field_display),
             "region_templates": dict(self.region_templates),
+            "doc_context": dict(self.doc_context),
         }
 
 

@@ -418,3 +418,66 @@ def test_req19_no_provenance_render_byte_identical_to_declared():
     also_declared = render_html(nodes_to_wireframe_plan(nodes, realization_provenance=None))
     assert declared == also_declared
     assert "(declared)" in declared and "(measured)" not in declared               # pipeline is declared
+
+
+# ── REQ-requirement-detail-on-navigator-card — detail peek + full-page route ────────────────────
+
+def _detail_plan() -> WireframePlan:
+    """A keyed requirement item carrying structured fields + a typed Touches list — the shape the
+    detail peek and full-page view read by key."""
+    item = WireframeItem(
+        label="FR-1 — Sign in", status="spec", detail="", paths=(), key="FR-1",
+        fields=(("name", "Sign-in flow"), ("verify", "a login test passes"), ("handle", "req/sign-in")),
+        touches=(("src/auth.py", "code"), ("tests/test_auth.py", "test"), ("app.yaml", "config")),
+    )
+    sec = WireframeSection(key="identity", title="Identity", status="spec", items=(item,))
+    return WireframePlan(
+        project_root=".", sections=(sec,), input_provenance={}, merge_warnings=(),
+        shape={"nodes": 1, "sections": 1}, readiness={}, status_counts={"spec": 1},
+        content_coverage=ContentCoverageStats(),
+    )
+
+
+def test_detail_peek_and_fullview_are_wired_and_byte_safe():
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_detail_plan(), profile=prof)
+    # FR-2/FR-3: one shared extraction feeds both views (no duplicated field logic to drift)
+    assert "function recordEntries" in profiled and "function touchesRows" in profiled
+    assert "function buildDetail" in profiled and "function buildFullView" in profiled
+    # FR-1 REGRESSION PIN: the card click bails only for interactive elements INSIDE the card
+    # (w.contains(hit)) — NOT the <details class="sec"> ancestor that once swallowed every click.
+    assert "w.contains(hit)) return" in profiled
+    assert 'if(ev.target.closest("details,a,input,label,button,.node-inspect,.ci-detail")) return' not in profiled
+    # FR-1/OQ-3: the full-view link rides three spots — the card status-pill row + top + bottom of the peek
+    assert 'class="ci-full"' in profiled                       # next to the Grounded/Spec pill
+    assert 'class="cd-full-top"' in profiled and 'class="cd-full-bot"' in profiled
+    # FR-7: the full-page client-side route (#<key>) + back-to-browse takeover
+    assert "function resolveHash" in profiled
+    assert 'addEventListener("hashchange", resolveHash)' in profiled
+    assert "fullview-open" in profiled and 'id="fullview"' in profiled
+    assert "if(!payload.profile) return;" in profiled          # profiled-navigator-only route
+    # FR-6: app path (no profile) stays byte-identical
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_typed_touches_ride_the_payload_structurally():
+    # FR-5: the typed Touches list is carried as a JSON array of {path, kind} objects — NOT a
+    # re-stringified blob the client must re-parse.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_detail_plan(), profile=prof)
+    assert '"touches"' in profiled and '"kind"' in profiled and '"path"' in profiled
+    assert '"code"' in profiled and '"config"' in profiled
+    # app path never emits the key (omit-when-empty guard)
+    assert '"touches"' not in render_html(_plan())
+
+
+def test_new_detail_regions_carry_scaffold_roles():
+    # FR-8 (element side): the doc-context band, the inline detail peek, and the full-page view carry
+    # the data-scaffold roles that match their View Definition region bindings, so the frame/scaffold
+    # mode maps the renderer's anatomy honestly.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_detail_plan(), profile=prof)
+    assert 'data-scaffold="full-page requirement view' in profiled      # #fullview (static HTML attr)
+    assert 'data-scaffold="doc-context band' in profiled                # dc-band (inline HTML attr)
+    # ci-detail sets its role via setAttribute (JS-created), so it emits as a two-arg call, not `="`.
+    assert 'requirement detail peek — click-to-expand record' in profiled

@@ -372,6 +372,14 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
             "whybox": {"layer": "descriptive", "scaffold": "reading guidance — profile.why / profile.do", "order": 6},
             "shape": {"layer": "computed", "scaffold": "shape — plan.shape (dialect-aware)", "order": 7},
             "glance-status-cell": {"layer": "computed", "scaffold": "status roll-up — status_counts (+ PF-1 grounding filter)", "order": 8},
+            # REQ-requirement-detail-on-navigator-card: the doc-context masthead band + the per-node detail
+            # surfaces are the renderer's newer anatomy — registered here (like whybox/shape) so the frame
+            # mode maps them honestly. `docband` = the requirement's doc-level context chips/risks under the
+            # masthead; `detail` = the inline click-to-expand peek on a card; `fullview` = the full-page
+            # single-requirement route (#<key>). Each carries the `data-scaffold` role its element renders.
+            "docband": {"layer": "descriptive", "scaffold": "doc-context band — criticality/backend/audience/trust/risks (profile.doc_context)", "order": 9},
+            "detail": {"layer": "node", "scaffold": "requirement detail peek — click-to-expand record + typed Touches (item.fields/touches)", "order": 10},
+            "fullview": {"layer": "node", "scaffold": "full-page requirement view — buildFullView on the #<key> route", "order": 11},
         },
     },
     # FR-13: the display-logic DATA — the inspector field→element mapping + the frame region templates —

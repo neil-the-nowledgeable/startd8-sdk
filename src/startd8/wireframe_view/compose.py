@@ -161,6 +161,11 @@ def _item_view(section_key: str, item, role: str = "architect", entity_cols: Opt
     fields = getattr(item, "fields", ()) or ()
     if fields:
         view["fields"] = {k: v for k, v in fields}
+    # Full typed Touches list (path + source-bound kind) — omit when empty (app-path byte-identical);
+    # the detail panel reads this structurally as the requirement's complete blast-radius.
+    touches = getattr(item, "touches", ()) or ()
+    if touches:
+        view["touches"] = [{"path": p, "kind": k} for p, k in touches]
     return view
 
 
