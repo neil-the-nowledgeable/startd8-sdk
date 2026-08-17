@@ -74,8 +74,20 @@ def nodes_from_retrospective(spec_dir, provenance) -> List[Node]:
         except Exception:  # pragma: no cover - projection is defensive; a bad doc never aborts the sweep
             continue
         for finding in check_determinism_regression(reqs, provenance, p.name):
-            lessons.append(build_lesson_from_regression(finding))
+            lessons.append(_tag_revise_tier(build_lesson_from_regression(finding)))
     return lessons
+
+
+def _tag_revise_tier(lesson: Node) -> Node:
+    """REQ-21 — tag a Lesson's proposed ``revise_tier``. At projection time the byte-identity of the
+    generated product is UNPROVEN (no guard is run here), so every revise defaults to ``human`` (fail-safe,
+    the REQ-20 default). The auto-tier is only reached by ``revise_tier.auto_apply_revise`` *through* the
+    guard — never at projection. This surfaces the amendment live while keeping the default human."""
+    from .revise_tier import ReviseEligibility, classify_revise_tier
+
+    tier = classify_revise_tier(ReviseEligibility(byte_identical=None, reversible=True,
+                                                  lesson_confidence=lesson.confidence))
+    return dataclasses.replace(lesson, attributes={**lesson.attributes, "revise_tier": tier})
 
 
 def lesson_status(lesson: Node) -> str:

@@ -479,6 +479,27 @@ def check_determinism_regression(nodes, provenance, doc: str = "") -> List[Findi
     return findings
 
 
+def check_auto_revise_audit(audits, doc: str = "") -> List[Finding]:
+    """REQ-21 FR-6 — autonomy with a trail: every auto-applied revise MUST carry a complete audit record
+    (lesson · target · byte-identity guard result · timestamp · revert reference). An incomplete/silent
+    record is a named finding — an unaudited autonomous change is exactly what the auto-tier forbids."""
+    findings: List[Finding] = []
+    for a in audits:
+        d = a.to_dict() if hasattr(a, "to_dict") else dict(a)
+        missing = [k for k in ("lesson", "target", "guard_result", "timestamp", "revert_ref")
+                   if not d.get(k) and d.get(k) is not False]
+        if not d.get("revert_ref"):
+            missing = list(dict.fromkeys(missing + ["revert_ref"]))  # a revert_ref is mandatory (reversible)
+        if missing:
+            findings.append(Finding(
+                "FR-6", _SEVERITY_FAIL, doc or str(d.get("lesson", "?")),
+                f"auto-applied revise from lesson {d.get('lesson', '?')!r} has an incomplete audit record "
+                f"(missing {', '.join(missing)}) — an auto-apply must never be silent or irreversible.",
+                fr=str(d.get("lesson", "")),
+            ))
+    return findings
+
+
 def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
     """REQ-20 FR-2 — a Lesson (``category=="lesson"``) that is not grounded (no ``derived-from`` edge or
     no ``lives`` evidence citing its outcome) is an **ungrounded belief** (cruft, invariant 4) — a named
