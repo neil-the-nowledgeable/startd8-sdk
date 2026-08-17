@@ -33,6 +33,19 @@ latent format.
 `iterations[] = { id, name, frs[], targetFiles[], dependsOn[], gate, costClass, status }`, batched
 `foundation → logic → integration` (§9 keeps this to a small number).
 
+> **Pilot fold-back (G-3, REQ-29 FR-7) — the default grouping is one-iteration-per-FR.** The pilot
+> proved that transitive shared-`Touches` batching *over-merges* on a hub file (REQ-08's 9 FRs all
+> Touch `cli_navigator.py` → a single collapsed iteration). So the projector's **default** is the
+> transparent one-iteration-per-FR scaffold; "batch FRs that share Touches" is retained as an **opt-in**
+> (`generate plan --strategy shared-touches`). *Strategic* role-based batching (foundation/logic/
+> integration) is human judgment the req does not encode — the human-gated residue, not a `$0` derivation.
+>
+> **Pilot fold-back (G-2) — `costClass` is coarse absent a per-FR regime.** The projector derives the
+> band from the FR's `Touches` path + `Lives` type: a `$0`-codegen target → `deterministic-$0`, a
+> no-code doc-only FR → `human`, else `llm-integration` (an iteration rolls up to its dearest FR). A
+> *finer* band needs a per-FR realization declaration in the det-req (there is none yet); the single
+> band is honest, not a defect.
+
 | Iteration field | Derivation from the det-req |
 |-----------------|------------------------------|
 | `id` | `F-n` (sequence) |
@@ -49,6 +62,17 @@ latent format.
 The iteration dependency graph. **MUST be acyclic** (reuse `queue.py` cycle detection — the same guard the
 corpus DAG self-study used). Derived from the FR topology; the det-req's authored dependencies are the sole
 source (the projector **does not invent** an edge — §8).
+
+> **Pilot fold-back (G-1, REQ-29 FR-7) — the authored FR-dependency field is a det-req gap.** This
+> section assumes the req carries an *authored acyclic dependency topology*, but the det-req single-line
+> FR grammar has **no parsed slot** for it: `Verify:` captures to end-of-line and `Touches:` captures up
+> to `Verify:`, leaving nowhere to author an FR→FR edge. Consequence: on today's corpus every projected
+> `dependsOn` is **empty** and the build-order DAG (visible in the hand-authored `PLAN-01`/`PLAN-nl-*`) is
+> 100% human-residue. The projector is **ready**: it parses a first-class `Depends: FR-x, FR-y` field
+> when present and cycle-rejects it via `queue.py` (`PlanDependencyCycleError`). The fix is upstream — a
+> **det-req-kit grammar request** to add a parsed, position-defined `Depends:` FR field (like `Serves:`).
+> Until then, `dependsOn` derives only from that field and is honestly empty when unauthored — never
+> inferred from shared `Touches`/ordinal (that would invent an edge, §8).
 
 ## 4. Reuse (Mottainai) **[core]**
 
@@ -96,10 +120,16 @@ A plan MUST NOT declare post-CRP maturity it has not earned. *(Rungs mirror the 
 ## 9. The projector — CITE, don't define (Mottainai)
 
 The `$0` REQ→PLAN projector is **not specified here** (charter §2 — the kit owns the format, not the generator).
-It reuses: `queue.py` (acyclic ordering + cycle detection) · the navigator graph projection (the dependency
-topology) · the realization regime (REQ-18/19 → `costClass`). It is registered SDK-side under the
-deterministic-providers group (like `backend_codegen`). Because all its inputs live in the det-req, the projection
-is `$0` and satisfies "never inferred" **by construction**.
+It reuses: `queue.py` (acyclic ordering + cycle detection) · `det_req.parse_fr_lines` (the FRs) ·
+`naming.name_forms` (the DIDL) · the realization regime vocabulary (REQ-18 → `costClass`). It is registered
+SDK-side under the deterministic-providers group (like `backend_codegen`). Because all its inputs live in the
+det-req, the projection is `$0` and satisfies "never inferred" **by construction**.
+
+> **BUILT (REQ-29, 2026-08-17):** `src/startd8/plan_codegen/` (`projector.py` · `provider.py`
+> `DetPlanProjectorProvider` · `conformance.py` SARIF via imported `coverage_map/findings_sarif`), driven by
+> `startd8 generate plan --requirements <req>` and registered under
+> `startd8.contractors.deterministic_providers`. Piloted golden-first on five REQs; the friction folded back
+> into §2/§3 above (G-1/G-2/G-3). Pilot report: `PILOT_REPORT_REQ-29-det-plan-projector.md`.
 
 ## 10. Conformance (the `extract.py` gate — what a validator checks)
 
@@ -109,6 +139,11 @@ traces to an authored req dependency (no invented edges); every iteration carrie
 inflated beyond earned evidence (§7); and `companionKind == PLAN` (a solo REQ has no plan doc at all). A
 `.bad` fixture (cyclic deps · phantom `pairsWith` · an FR-less iteration · an invented dependency) must fail the
 gate `exit 1`.
+
+*v0.1.1 — REQ-29 pilot fold-back (`/reflective-adoption`): §2 default grouping = one-iteration-per-FR (G-3);
+§2 `costClass` coarse-band derivation documented (G-2); §3 records the det-req FR-dependency-field gap (G-1) that
+keeps `dependsOn` honestly empty on today's corpus; §9 marks the projector BUILT. No conformance rule changed —
+the fold-back clarifies derivation + defaults, not the contract.*
 
 *v0.1 — formalizes `det-req-kit §9`'s inline plan schema into a versioned det-doc-kit member; adds the
 companion-kind / maturity-ladder / plan-liveness foundations proved by the reflective-pairs index. The projector

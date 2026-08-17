@@ -1002,6 +1002,122 @@ def _emit_or_check_artifacts(
     raise typer.Exit(0)
 
 
+@generate_app.command("plan")
+def plan(
+    requirements: Path = typer.Option(
+        ..., "--requirements", "-r", help="Path to the det-req doc to project a det-plan/0.1 from."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out",
+        help="Output path for the projected det-plan/0.1 markdown. Absent → print to stdout.",
+    ),
+    check: bool = typer.Option(
+        False, "--check",
+        help="Drift-check an on-disk plan against a fresh projection; write nothing. "
+        "Exit 0=in-sync, 1=drift, 2=error.",
+    ),
+    sarif: Optional[Path] = typer.Option(
+        None, "--sarif",
+        help="Also write the conformance + plan-liveness findings as SARIF 2.1.0 to this path.",
+    ),
+    strategy: str = typer.Option(
+        "per-fr", "--strategy",
+        help="FR→iteration grouping: 'per-fr' (default, one iteration per FR) or 'shared-touches'.",
+    ),
+) -> None:
+    """Project a det-req into a det-plan/0.1 document — deterministic, $0 (no LLM).
+
+    The "generate plan" analog of "generate backend": every field derives from the requirement
+    (iterations ← FRs, targetFiles ← Touches, dependsOn ← authored Depends:, gate ← Verify,
+    costClass ← the realization regime). Fires only on a plan-owed REQ; a solo-by-design REQ
+    projects nothing (reported skipped, exit 0). A projected plan is stamped maturity 0.1.
+    """
+    from .plan_codegen import (
+        NotPlanOwedError,
+        PlanDependencyCycleError,
+        findings_to_sarif,
+        project_plan,
+        render_plan,
+        validate_plan,
+    )
+
+    try:
+        req_text = requirements.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read requirements {requirements}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        det_plan = project_plan(req_text, req_path=requirements, strategy=strategy)
+    except NotPlanOwedError as exc:
+        # Correct-absence, not an error: a solo-by-design REQ owes no plan (FR-3).
+        console.print(f"[yellow]skipped[/yellow]: {requirements.name} is solo-by-design — {exc}")
+        raise typer.Exit(0)
+    except PlanDependencyCycleError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+    except ValueError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    rendered = render_plan(det_plan)
+    req_fr_ids = {fr for it in det_plan.iterations for fr in it.frs}
+    findings = validate_plan(
+        det_plan, req_fr_ids=req_fr_ids, base_dir=requirements.resolve().parent
+    )
+
+    if sarif is not None:
+        try:
+            sarif.parent.mkdir(parents=True, exist_ok=True)
+            sarif.write_text(
+                json.dumps(findings_to_sarif(findings, corpus=requirements.name), indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write sarif {sarif}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        console.print(f"[green]wrote[/green] SARIF ({len(findings)} finding(s)) → {sarif}")
+
+    errors = [f for f in findings if f.severity == "error"]
+    for f in findings:
+        color = "red" if f.severity == "error" else "yellow"
+        console.print(f"[{color}]{f.severity}[/{color}] ({f.check}): {f.message}")
+
+    if check:
+        try:
+            ondisk = out.read_text(encoding="utf-8") if (out and out.exists()) else None
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read {out}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        if ondisk is None:
+            console.print(f"[yellow]drift[/yellow]: no plan on disk at {out}")
+            raise typer.Exit(1)
+        if ondisk != rendered:
+            console.print(f"[yellow]drift[/yellow]: {out} differs from a fresh projection")
+            raise typer.Exit(1)
+        console.print(f"[green]in_sync[/green]: {out} matches the projection")
+        raise typer.Exit(2 if errors else 0)
+
+    if errors:
+        console.print(f"[red]{len(errors)} conformance error(s)[/red] — not writing a nonconformant plan")
+        raise typer.Exit(1)
+
+    if out is None:
+        console.print(rendered)
+        raise typer.Exit(0)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot write {out}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+    console.print(
+        f"[green]wrote[/green] {out}  ({len(det_plan.iterations)} iteration(s), maturity "
+        f"{det_plan.maturity})"
+    )
+    raise typer.Exit(0)
+
+
 @generate_app.command("grpc")
 def grpc(
     manifest: Path = typer.Option(
@@ -1015,7 +1131,7 @@ def grpc(
     ),
 ):
     """Deterministically emit gRPC server skeletons (Python/Go) from grpc.yaml + .proto — $0 LLM."""
-    from .proto_codegen import is_owned_proto_skeleton, proto_skeleton_in_sync, render_grpc_skeletons
+    from .proto_codegen import proto_skeleton_in_sync, render_grpc_skeletons
 
     try:
         manifest_text = manifest.read_text(encoding="utf-8")
@@ -1058,7 +1174,7 @@ def events(
     ),
 ):
     """Deterministically emit Kafka event stubs from events.yaml + Prisma — $0 LLM."""
-    from .events_codegen import events_file_in_sync, is_owned_events_file, render_events_artifacts
+    from .events_codegen import events_file_in_sync, render_events_artifacts
     from .scaffold_codegen.manifest import parse_app_manifest
 
     try:
