@@ -165,6 +165,21 @@ def test_view_definition_shows_every_region_display_logic_template():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+def test_requirement_card_readability_is_profiled_navigator_only_and_byte_safe():
+    # frontend-design: the editorial requirement-card styling (status spine, FR-id tag, serif prose,
+    # evidence block) is scoped to body.nav-profiled so a generated-app preview (no profile) keeps the
+    # plain .item card — the app path stays byte-identical. The scoping ships in the (client-side) render.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert "body.nav-profiled #outline .item{" in profiled              # the card styling is scoped
+    assert "border-left:3px solid var(--st" in profiled                 # the status spine
+    assert "body.nav-profiled #outline .item .det{font-family:var(--serif)" in profiled  # readable prose
+    assert 'classList.toggle("nav-profiled", !!payload.profile)' in profiled  # class added only when profiled
+    assert 'w.style.setProperty("--st"' in profiled                     # status colour stamped per card
+    # app path byte-identical (nav-profiled never set without a profile)
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
 def test_debug_group_and_raw_data_panel_ship_and_are_byte_safe():
     # REQ-view-definition-mode FR-8: the Debug control group (Raw data / Node data) + a #rawdata panel
     # positioned BELOW the sign-off (#signbar) ship in the profiled render, hidden by default; app-safe.
