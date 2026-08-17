@@ -166,12 +166,12 @@ def test_view_definition_shows_every_region_display_logic_template():
 
 
 def test_requirement_card_shows_structured_what_how_why_and_is_byte_safe():
-    # The profiled card parses the node-detail blob into captioned WHAT/HOW/WHY slots (Verify = how you'll
-    # know, Serves = why it matters). Client-side machinery ships; the app path keeps the plain .det blob.
+    # The profiled card reads item.fields STRUCTURALLY into captioned WHAT/HOW/WHY slots (Verify = how you'll
+    # know, Serves = why it matters) — no prose blob re-parse. The app path (no profile) keeps the plain .det.
     prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
     profiled = render_html(_keyed_plan(), profile=prof)
-    assert "function structuredDet" in profiled                       # the blob→slots parser
-    assert "var sd=structuredDet(item.detail)" in profiled            # profiled branch composes the value-first card
+    assert "function fieldsToSd" in profiled                          # the structured field reader
+    assert "var sd=fieldsToSd(item)" in profiled                      # profiled branch composes the value-first card
     assert "if(payload.profile && !EU){" in profiled                  # app path (no profile) keeps the plain card
     assert "Verify · how you’ll know" in profiled and "Serves · why it matters" in profiled  # captions
     # value-first hierarchy: the DIDL deterministic NAME leads as the large heading, above an id/status eyebrow
@@ -181,7 +181,7 @@ def test_requirement_card_shows_structured_what_how_why_and_is_byte_safe():
     assert 'class="sig sig-arch"' in profiled and "sig-ground" in profiled
     assert ".ci-name-h{font-family:var(--serif);font-size:19px" in profiled   # first + largest
     assert "body.nav-profiled #outline .item .ci-row.ci-why{border-left-color:var(--accent)" in profiled
-    # app path byte-identical (structuredDet only runs when a profile is present)
+    # app path byte-identical (fieldsToSd only runs when a profile is present)
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 

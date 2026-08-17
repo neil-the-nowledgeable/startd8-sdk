@@ -97,40 +97,77 @@ def _node_meta(node: Node) -> str:
     return " · ".join(bits)
 
 
-def _node_detail(node: Node) -> str:
-    lines: List[str] = []
+def _node_fields(node: Node) -> Dict[str, str]:
+    """The requirement's fields, STRUCTURED — the single extraction the HTML card reads by key (via
+    ``WireframeItem.fields``) and that ``_node_detail`` formats its text/JSON string from. Only fields
+    with no first-class ``WireframeItem`` slot live here; ``confidence``/``ships_when`` stay first-class
+    (the card reads ``item.confidence``/``item.ships_when``) so they are not double-carried.
+    """
     a = node.attributes
-    # Deterministic semantic name first (identify by meaning, not the integer key alone).
+    f: Dict[str, str] = {}
     if a.get("name"):
-        lines.append("NAME → " + a["name"])
-    if a.get("archetype"):   # the functional archetype (what kind of requirement) + its plain gloss
-        line = "TYPE → " + a["archetype"]
+        f["name"] = a["name"]
+    if a.get("archetype"):   # functional archetype (what kind of requirement) + its plain gloss
+        f["archetype"] = a["archetype"]
         if a.get("archetype_gloss"):
-            line += " · " + a["archetype_gloss"]
-        lines.append(line)
+            f["archetype_gloss"] = a["archetype_gloss"]
     if a.get("touches_count"):   # scope / blast-radius — how many files it touches
-        n = a["touches_count"]
-        lines.append("SCOPE → " + n + (" file" if n == "1" else " files"))
+        f["touches_count"] = a["touches_count"]
     if a.get("handle"):
-        lines.append("HANDLE: " + a["handle"])
+        f["handle"] = a["handle"]
     desc = a.get("description") or node.does
     if desc and desc != node.does:
-        lines.append(desc.strip())
+        f["statement"] = desc.strip()
     if a.get("verify"):
-        lines.append("VERIFY → " + a["verify"])
+        f["verify"] = a["verify"]
     if a.get("serves"):
-        line = "SERVES → " + a["serves"]
+        f["serves"] = a["serves"]
         if a.get("serves_objective"):   # the joined objective text — the 'why / system benefit'
-            line += " · " + a["serves_objective"]
-        lines.append(line)
+            f["serves_objective"] = a["serves_objective"]
     if a.get("fr_health"):
-        lines.append("FR-HEALTH: " + a["fr_health"])
+        f["fr_health"] = a["fr_health"]
     if node.wont:
-        lines.append("WON'T: " + "; ".join(node.wont))
+        f["wont"] = "; ".join(node.wont)
+    if node.child_keys:
+        f["depends"] = ", ".join(node.child_keys)
+    return f
+
+
+def _node_detail(node: Node) -> str:
+    """The terminal text/JSON detail string (``wireframe/render.py`` Rich tree + canonical JSON body).
+    Formatted FROM :func:`_node_fields` so the string and the structured card can never drift; the
+    first-class ``ships_when``/``confidence`` are appended here (string surface only)."""
+    f = _node_fields(node)
+    lines: List[str] = []
+    if f.get("name"):   # Deterministic semantic name first (identify by meaning, not the integer key).
+        lines.append("NAME → " + f["name"])
+    if f.get("archetype"):
+        line = "TYPE → " + f["archetype"]
+        if f.get("archetype_gloss"):
+            line += " · " + f["archetype_gloss"]
+        lines.append(line)
+    if f.get("touches_count"):
+        n = f["touches_count"]
+        lines.append("SCOPE → " + n + (" file" if n == "1" else " files"))
+    if f.get("handle"):
+        lines.append("HANDLE: " + f["handle"])
+    if f.get("statement"):
+        lines.append(f["statement"])
+    if f.get("verify"):
+        lines.append("VERIFY → " + f["verify"])
+    if f.get("serves"):
+        line = "SERVES → " + f["serves"]
+        if f.get("serves_objective"):
+            line += " · " + f["serves_objective"]
+        lines.append(line)
+    if f.get("fr_health"):
+        lines.append("FR-HEALTH: " + f["fr_health"])
+    if f.get("wont"):
+        lines.append("WON'T: " + f["wont"])
     if node.ships_when:
         lines.append("SHIPS-WHEN: " + node.ships_when)
-    if node.child_keys:
-        lines.append("DEPENDS-ON: " + ", ".join(node.child_keys))
+    if f.get("depends"):
+        lines.append("DEPENDS-ON: " + f["depends"])
     if node.confidence is not None:
         lines.append(f"confidence: {node.confidence:.2f}")
     return "\n".join(lines)
@@ -203,6 +240,7 @@ def nodes_to_wireframe_plan(
                     route_state=node.route_state or "",
                     approve_prompts=prompts,
                     meta=_node_meta(node),
+                    fields=tuple(_node_fields(node).items()),
                 )
             )
         sections.append(

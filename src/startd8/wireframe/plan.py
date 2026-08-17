@@ -144,6 +144,11 @@ class WireframeItem:
     approve_prompts: Tuple[str, ...] = ()
     # Compact structural metadata (type · default · provenance · ← origin) — revealed in structure-only.
     meta: str = ""
+    # Structured requirement fields (name/verify/serves/archetype/…), as ordered (key, value) pairs so
+    # the frozen item stays hashable. Defaults empty; compose omits when unset (app path byte-identical).
+    # A domain projection fills this so the HTML card reads fields STRUCTURALLY instead of re-parsing the
+    # ``detail`` prose blob — ``detail`` remains the terminal text/JSON string (wireframe/render.py).
+    fields: Tuple[Tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

@@ -706,29 +706,26 @@ __PLAN_DATA__
 
   // ---------- items ----------
   // Turn the node-detail blob (NAME →/VERIFY →/SERVES →/WON'T:/DEPENDS-ON:/confidence:) into captioned
-  // WHAT/HOW/WHY rows for the profiled requirement card. Recognised prefixes become a labelled row; the
-  // served objective (joined onto SERVES) carries the 'why it matters'; any bare line is the statement.
-  var _SLOT={ "VERIFY → ":{cap:"Verify · how you’ll know",cls:"ci-how"},
-              "SERVES → ":{cap:"Serves · why it matters",cls:"ci-why"},
-              "WON’T: ":{cap:"Won’t",cls:"ci-wont"}, "WON'T: ":{cap:"Won’t",cls:"ci-wont"},
-              "DEPENDS-ON: ":{cap:"Depends on",cls:"ci-dep"}, "SHIPS-WHEN: ":{cap:"Ships when",cls:"ci-dep"} };
-  function structuredDet(detail){
-    var name="", arch="", scope="", serves="", rows="", stmt="", metaParts=[];
-    (detail||"").split("\n").forEach(function(ln){
-      ln=ln.replace(/\s+$/,""); if(!ln) return;
-      if(ln.indexOf("NAME → ")===0){ name=ln.slice(7); return; }   // the DIDL deterministic name (heading)
-      if(ln.indexOf("TYPE → ")===0){ arch=ln.slice(7); return; }   // archetype "label · gloss" (signal chip)
-      if(ln.indexOf("SCOPE → ")===0){ scope=ln.slice(8); return; } // "2 files"
-      if(ln.indexOf("HANDLE: ")===0){ metaParts.push('<span class="ci-hd">'+esc(ln.slice(8))+'</span>'); return; }
-      if(ln.indexOf("FR-HEALTH: ")===0) return;
-      if(ln.indexOf("confidence: ")===0){ metaParts.unshift('<span class="ci-conf">conf '+esc(ln.slice(12))+'</span>'); return; }
-      var hit=null; for(var p in _SLOT){ if(ln.indexOf(p)===0){ hit=p; break; } }
-      if(hit){ var s=_SLOT[hit];
-        if(hit==="SERVES → "){ var m=ln.slice(hit.length).match(/^(O-\d+)/); if(m) serves=m[1]; }
-        rows+='<div class="ci-row '+s.cls+'"><span class="ci-cap">'+s.cap+'</span>'+esc(ln.slice(hit.length))+'</div>'; }
-      else { stmt+=(stmt?" ":"")+ln; }
-    });
-    return { name:name, arch:arch, scope:scope, serves:serves, stmt:stmt, rows:rows,
+  // WHAT/HOW/WHY rows for the profiled requirement card, read STRUCTURALLY from item.fields (the domain
+  // projection's typed output) — no prose blob re-parse. Each present field becomes a labelled row; the
+  // served objective (joined onto Serves) carries the 'why it matters'. confidence/ships_when are read
+  // first-class off the item, not from fields (they have their own WireframeItem slots).
+  function fieldsToSd(item){
+    var f=item.fields||{};
+    var arch=f.archetype?(f.archetype+(f.archetype_gloss?(" · "+f.archetype_gloss):"")):"";
+    var scope=f.touches_count?(f.touches_count+(f.touches_count==="1"?" file":" files")):"";
+    var rows="";
+    function row(cap,cls,val){ if(val){ rows+='<div class="ci-row '+cls+'"><span class="ci-cap">'+cap+'</span>'+esc(val)+'</div>'; } }
+    row("Verify · how you’ll know","ci-how",f.verify);
+    row("Serves · why it matters","ci-why", f.serves?(f.serves+(f.serves_objective?(" · "+f.serves_objective):"")):"");
+    row("Won’t","ci-wont",f.wont);
+    row("Ships when","ci-dep",item.ships_when);
+    row("Depends on","ci-dep",f.depends);
+    var metaParts=[];
+    if(item.confidence!=null){ var c=(typeof item.confidence==="number")?item.confidence.toFixed(2):String(item.confidence);
+      metaParts.push('<span class="ci-conf">conf '+esc(c)+'</span>'); }
+    if(f.handle){ metaParts.push('<span class="ci-hd">'+esc(f.handle)+'</span>'); }
+    return { name:f.name||"", arch:arch, scope:scope, serves:f.serves||"", stmt:f.statement||"", rows:rows,
              meta:(metaParts.length?'<div class="ci-meta">'+metaParts.join(" · ")+'</div>':'') };
   }
   // At-a-glance SIGNAL STRIP — plain-labelled chips (technical detail on hover) for the broadest audience:
@@ -774,7 +771,7 @@ __PLAN_DATA__
     if(payload.profile && !EU){
       // VALUE-FIRST requirement card: the DIDL deterministic NAME leads (largest); a small id/status
       // eyebrow; then what it does, why it matters (Serves+objective), how you'll know (Verify), evidence.
-      var sd=structuredDet(item.detail);
+      var sd=fieldsToSd(item);
       var kk=item.key||"";
       var does=kk ? item.label.replace(new RegExp("^"+kk.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&")+"\\s*—\\s*"),"") : item.label;
       w.innerHTML=

@@ -156,6 +156,11 @@ def _item_view(section_key: str, item, role: str = "architect", entity_cols: Opt
     meta = getattr(item, "meta", "") or ""
     if meta:
         view["meta"] = meta
+    # Structured requirement fields (name/verify/serves/…) — omit when empty so the app-path JSON
+    # keyset is unchanged; the HTML card reads these by key instead of re-parsing the detail blob.
+    fields = getattr(item, "fields", ()) or ()
+    if fields:
+        view["fields"] = {k: v for k, v in fields}
     return view
 
 
