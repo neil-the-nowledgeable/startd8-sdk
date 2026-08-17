@@ -38,12 +38,28 @@ Formalizing a bookend doc is **false precision** — do not do it.
 - **BACK (reflect on actuals):** HANSEI/RETROSPECTIVE · the §0/§0.1/§0.2 feedback markers · the *selection*
   judgment inside HARVEST/YOKOTEN. *(The essential complexity Brooks says no tool removes.)*
 
-## 5. The shared kit structure (every member mirrors det-req-kit)
+## 5. The shared kit structure — a typed checklist, NOT a blanket mirror
 
-- `README.md` — abstraction + backends · `SCHEMA.md` — the **versioned field spec (the format)** ·
-  `<doc>.schema.json` — the machine contract · `extract.py` — thin markdown→JSON extract + schema-validate +
-  the **liveness gate** (CI-droppable, `exit 1` on schema / dangling ref) · `new.py` — skeleton generator (no
-  content-from-intent) · `templates/` · `examples/` · `tests/` (good + `.bad` fixtures).
+> **The mirror-inertia guard** (metabolized via `/audit-then-metabolize`, 2026-08-17): *"mirror
+> det-req-kit"* is **inertia** — det-req-kit is one *instance* that accreted process clutter, source-doc-
+> specific tools, and a vendored SARIF copy. Mirroring the *instance* copies its flaws. A member mirrors
+> det-req-kit's **format essentials only**; every other member is a **specific per-kit choice, justified,
+> never a default.** The class this guards: *instance-accretion mistaken for template-structure.*
+
+- **Format-essentials (mandatory, every kit):** `SCHEMA.md` (the versioned field spec) · `<doc>.schema.json`
+  (the machine contract) · `extract.py` (thin extract + schema-validate + the liveness gate, `exit 1` on
+  schema/dangling) · `templates/` · `examples/` · `tests/` (good + `.bad` fixtures) · a **thin** `README.md`.
+- **Source-kit-only (an AUTHORED doc; a DERIVED doc has a projector INSTEAD):** `new.py` (skeleton generator)
+  and a finding→doc-stub (`sarif_to_req_stub`-style). A **derived-doc kit** (det-plan, det-crp, …) has
+  **neither** — its `$0` projector *is* its generator, and you cannot stub-seed a doc that is projected.
+- **Reuse, NEVER vendor:** SARIF via the **one** `coverage_map/findings_sarif.py` (import it). *det-req-kit
+  **vendored** a copy (`sarif.py`) kept in golden-parity sync — a mirror-drift risk; the family reuses the
+  single renderer, it does not vendor a copy per kit.*
+- **Never in the kit dir (the bookend-exclusion applies to the dir itself):** process/retrospective docs
+  (`_HANSEI`/`_HARVEST`/`_SWEEP`/`YOKOTEN`/`ENHANCEMENT_BACKLOG`) live in the retrospective home, **not** the
+  format kit. *det-req-kit mixes 8 of them into its dir — the family keeps the kit dir format-only.*
+- **Per-kit specific choice (justify, don't default):** `BACKEND_ROUTING.md` (only if the doc has >1 backend) ·
+  `reconcile/` (only if corpus reconciliation is in scope) · `sarif_scan.py` (batch, only if a corpus scan is needed).
 
 ## 6. Cross-cutting invariants every kit inherits
 
@@ -58,8 +74,9 @@ Formalizing a bookend doc is **false precision** — do not do it.
 5. **DIDL naming** — every kit-governed artifact carries a semantic name + readable handle + canonical ref; no
    integer-only names.
 6. **Findings interchange = SARIF (the second IR)** — a kit's `extract.py` liveness/conformance gate emits its
-   findings as **SARIF 2.1.0** (the shared finding-bus — `det-req-kit/sarif.py` already does this, reusing
-   `startd8-sdk/coverage_map/findings_sarif.py`), so a doc defect annotates a PR / IDE exactly like a code
+   findings as **SARIF 2.1.0** (the shared finding-bus — via the ONE `startd8-sdk/coverage_map/findings_sarif.py`,
+   **imported not vendored**; note `det-req-kit/sarif.py` *vendored* a copy — §5's reuse-not-vendor rule exists
+   so the family does not repeat that mirror-drift), so a doc defect annotates a PR / IDE exactly like a code
    finding. This is the family's tie to the NLPS's *other* IR: the **Node** is the wire-format of the document
    half; **SARIF** is the wire-format of the **findings** half. The interchange is bidirectional and closes the
    loop: inbound SARIF **seeds a source-doc stub** (`det-req-kit/sarif_to_req_stub.py` — the finding→REQ-stub
