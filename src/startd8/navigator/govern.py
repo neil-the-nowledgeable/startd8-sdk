@@ -612,18 +612,238 @@ def check_served_by_dead_fr(fr_nodes, doc: str = "") -> List[Finding]:
     return findings
 
 
-def check_liveness_layer(fr_nodes, outcome_nodes=(), doc: str = "") -> List[Finding]:
-    """REQ-23 FR-5 — the single ``liveness`` govern layer: run all present-but-dead cells (REQ-22 verify-
-    liveness + REQ-23 target-unmeasured + served-by-a-dead-FR) and report them under ONE heading — each
-    finding's ``ref`` carries a ``liveness:<cell>`` tag — so the column is enforced as one layer, not a
-    scatter. A corpus clean on all three → the layer is clean (empty)."""
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# REQ-25 — the liveness layer's HYPOTHESIS cells (fact-rungs ship, judgment-rungs park-by-default).
+#
+# REQ-22/23 shipped the *fact* cells (structural death → GAP). The census left three *hypothesis* cells
+# — mitigation-inert / non-goal-violated / touches-dead — that check SEMANTIC death. Each decomposes into
+# a deterministic FACT-RUNG (ships as a GAP/trigger, REUSING an existing checker — NR-2) and a semantic
+# JUDGMENT-RUNG (parked-by-default behind a precision gate — NR-3/NR-4; a false GAP is a durable-red-
+# carrying-no-truth). This module ships the fact-rungs + the parking machinery; the judgment EXECUTION is
+# inert until a labeled fixture set un-parks it (NR-6).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+_LANG_BY_EXT = {".py": "python", ".go": "go", ".js": "javascript", ".ts": "typescript",
+                ".java": "java", ".cs": "csharp"}
+
+
+def _first_code_lives(node, repo_root=None) -> "Path | None":
+    """The first ``lives`` evidence ref that resolves to an EXISTING code file (the realized artifact the
+    fact-rungs inspect). ``ref`` may be ``type:path`` or a bare path; joined under ``repo_root`` when given.
+    Returns ``None`` when the node cites no on-disk code (un-realized → its liveness is unknown, not dead)."""
+    root = Path(repo_root) if repo_root else None
+    for ev in getattr(node, "lives", ()) or ():
+        raw = (getattr(ev, "ref", "") or "").strip()
+        cand = raw.split(":", 1)[1] if ":" in raw and not raw.split(":", 1)[0].isdigit() else raw
+        for p in ((root / cand) if root else Path(cand), Path(cand)):
+            if p.suffix in _LANG_BY_EXT and p.is_file():
+                return p
+    return None
+
+
+def _ast_imports(src: str) -> List[str]:
+    """Every imported module name in a Python source (reuse the ``ast`` machinery — NR-2). Records the
+    module AND, for ``from X import Y``, both ``X`` and the fully-qualified ``X.Y`` — so a ban on ``Y``
+    catches ``from X import Y`` (which records module ``X`` alone). A syntax error → ``[]`` (never crash)."""
+    import ast
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    out: List[str] = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            out += [a.name for a in n.names]
+        elif isinstance(n, ast.ImportFrom):
+            mod = n.module or ""
+            out.append(mod)
+            out += [f"{mod}.{a.name}" if mod else a.name for a in n.names]
+    return out
+
+
+# FR-1 — the named security mitigations the query_prime/security verifier can attest, keyed by the
+# ``security_mitigation`` attribute a node declares.
+def _mitigation_check_type(mitig: str):
+    from startd8.query_prime.models import SecurityCheckType
+    return {
+        "injection": SecurityCheckType.INJECTION,
+        "credential": SecurityCheckType.CREDENTIAL_LEAKAGE,
+        "credentials": SecurityCheckType.CREDENTIAL_LEAKAGE,
+        "lifecycle": SecurityCheckType.LIFECYCLE,
+    }.get(mitig.strip().lower())
+
+
+def check_mitigation_inert(nodes, repo_root=None, doc: str = "") -> List[Finding]:
+    """REQ-25 FR-1 — the ``mitigation-inert`` FACT-rung: a node declaring a named security mitigation
+    (``attributes['security_mitigation']`` ∈ injection|credentials|lifecycle) whose realized code the
+    ``query_prime/security`` verifier reports the mitigation ABSENT for (a finding of that class) → GAP —
+    the mitigation is present in the spec but not live in the code. REUSES ``verify_file`` (NR-2, no new
+    checker). Only realized nodes (a lives code file). Never crashes (a bad file → skip). Advisory (NR-1)."""
+    findings: List[Finding] = []
+    for n in nodes:
+        mitig = str((getattr(n, "attributes", {}) or {}).get("security_mitigation", "")).strip()
+        check_type = _mitigation_check_type(mitig) if mitig else None
+        if check_type is None:
+            continue
+        path = _first_code_lives(n, repo_root)
+        if path is None:
+            continue
+        try:
+            from startd8.query_prime.models import DatabaseType
+            from startd8.query_prime.security import verify_file
+            result = verify_file(path.read_text(encoding="utf-8"), str(path), DatabaseType.SQLITE,
+                                 _LANG_BY_EXT.get(path.suffix, "python"))
+        except Exception:  # pragma: no cover - the verifier is defensive; a bad file never aborts the sweep
+            continue
+        if any(getattr(f, "check_type", None) == check_type for f in getattr(result, "findings", ()) or ()):
+            findings.append(Finding(
+                "FR-1", _SEVERITY_FAIL, doc or n.key,
+                f"{doc or n.key}: node {n.key!r} declares the security mitigation {mitig!r} but the verifier "
+                f"reports it ABSENT in {path} — present in the spec, not live in the code (mitigation-inert). "
+                f"Repair the mitigation or route to a retrospective revision.",
+                fr=n.key, ref="liveness:mitigation-inert"))
+    return findings
+
+
+def check_non_goal_violated(nodes, repo_root=None, doc: str = "") -> List[Finding]:
+    """REQ-25 FR-2 — the ``non-goal-violated`` FACT-rung: a node whose ``wont`` declares a structural import
+    ban (``no-import:<module>``) that its realized Python code VIOLATES (AST imports the banned module) →
+    GAP. REUSES the import/AST machinery (NR-2). Non-Python lives are skipped (AST is Python). Advisory."""
+    findings: List[Finding] = []
+    for n in nodes:
+        bans = [w.split("no-import:", 1)[1].strip()
+                for w in (getattr(n, "wont", ()) or ()) if "no-import:" in w]
+        if not bans:
+            continue
+        path = _first_code_lives(n, repo_root)
+        if path is None or path.suffix != ".py":
+            continue
+        try:
+            imported = _ast_imports(path.read_text(encoding="utf-8"))
+        except OSError:  # pragma: no cover
+            continue
+        violated = sorted({b for b in bans if any(b in m for m in imported)})
+        if violated:
+            findings.append(Finding(
+                "FR-2", _SEVERITY_FAIL, doc or n.key,
+                f"{doc or n.key}: node {n.key!r} declares the non-goal 'no-import: {', '.join(violated)}' but "
+                f"{path} imports it — a structural non-goal the code violates. Remove the import or route to "
+                f"a retrospective revision.",
+                fr=n.key, ref="liveness:non-goal-violated"))
+    return findings
+
+
+def check_touches_provenance_changed(nodes, changed_provenance_keys, doc: str = "") -> List[Finding]:
+    """REQ-25 FR-3 — the ``touches-dead`` FACT-trigger: a node whose Touches'd/lives file's realization
+    provenance CHANGED since its last attestation (``changed_provenance_keys`` = the REQ-19 provenance-
+    change signal, reused exactly as ``recheck_verify_liveness_on_drift`` consumes ``changed_impl_keys``)
+    raises a re-judge TRIGGER — a fact (the file moved), not yet a judgment (whether the claim still holds).
+    An unchanged Touches'd file raises none. REUSES REQ-19 provenance-change (NR-2)."""
+    changed = set(changed_provenance_keys or ())
+    if not changed:
+        return []
+    findings: List[Finding] = []
+    for n in nodes:
+        hit = sorted({ev.ref for ev in (getattr(n, "lives", ()) or ())
+                      if ev.ref in changed or ev.ref.split(":")[-1] in changed})
+        if hit:
+            findings.append(Finding(
+                "FR-3", _SEVERITY_FAIL, doc or n.key,
+                f"{doc or n.key}: node {n.key!r} Touches file(s) {hit} whose realization provenance CHANGED "
+                f"since last attestation — a re-judge trigger: re-verify whether the claim still holds "
+                f"against the changed code, or route to a retrospective revision.",
+                fr=n.key, ref="liveness:touches-provenance-changed"))
+    return findings
+
+
+# ── FR-4/5/6 — the judgment-rung parking machinery (declared, not executed until precision-cleared) ──
+
+# REQ-07 FR-7: a semantic judgment-rung un-parks only above this measured precision on a labeled fixture
+# set — below it (or with no baseline) the rung stays parked and executes nothing (NR-3).
+PRECISION_THRESHOLD = 0.9
+
+
+@dataclass(frozen=True)
+class JudgmentRung:
+    """A cell's SEMANTIC judgment-rung — the residual judgment its fact-rung can't make deterministically.
+    Parked by default: it executes ONLY when it clears the precision threshold on a labeled fixture set
+    (``precision``) AND its LLM-judge is verify-live (``judge_verify_live``, FR-6 — the judge is itself
+    LLM-realized ⇒ invariant 9 ⇒ must carry a live verify, so the checker never trips its own class)."""
+
+    cell: str
+    precision: "float | None" = None      # measured on a labeled fixture set; None → no baseline → parked
+    judge_verify_live: bool = False       # FR-6: the judge carries a live verify (invariant 9)
+
+
+def judgment_rung_for(cell: str, *, precision=None, judge=None) -> JudgmentRung:
+    """Build a :class:`JudgmentRung`, deriving ``judge_verify_live`` from the ``judge`` node's own verify
+    gate (FR-6 dogfood: reuse ``_gate_liveness`` — the judge un-parks a rung only if the judge itself is
+    verify-live). No judge → not live → parked."""
+    live = bool(judge is not None and _gate_liveness(judge)[0] == "live")
+    return JudgmentRung(cell=cell, precision=precision, judge_verify_live=live)
+
+
+def is_unparked(rung: JudgmentRung) -> bool:
+    """FR-4/FR-6 — a judgment-rung executes ONLY when it clears the precision threshold AND its judge is
+    verify-live. Default (no baseline / non-live judge) → parked (``False``)."""
+    return (rung.precision is not None and rung.precision >= PRECISION_THRESHOLD and rung.judge_verify_live)
+
+
+def run_judgment_rung(rung: JudgmentRung, candidates=(), doc: str = "") -> List[Finding]:
+    """FR-4/FR-5 — a PARKED rung executes nothing (returns ``[]``, NR-3). An UN-PARKED rung emits precision-
+    governed CANDIDATES (``_SEVERITY_ADVISORY``, evidence-citing, dismissible-in-one-glance) — NEVER a GAP
+    (NR-4: a false judgment is dismissible, not trusted as a fact). Each ``candidate`` is a mapping with
+    ``key`` (the node) + ``evidence`` (the cited bytes)."""
+    if not is_unparked(rung):
+        return []  # FR-4 parked → executes nothing
+    out: List[Finding] = []
+    for c in candidates:
+        key = str(c.get("key", ""))
+        out.append(Finding(
+            "FR-5", _SEVERITY_ADVISORY, doc or key,
+            f"{doc or key}: candidate ({rung.cell}) — {c.get('evidence', '')}. A precision-governed "
+            f"judgment (precision {rung.precision}), dismissible in one glance; NOT a fact.",
+            fr=key, ref=f"candidate:{rung.cell}"))
+    return out
+
+
+def check_liveness_layer(
+    fr_nodes, outcome_nodes=(), doc: str = "", *,
+    repo_root=None, changed_provenance_keys=(), judgment_rungs=(),
+) -> List[Finding]:
+    """REQ-23 FR-5 + REQ-25 FR-7 — the single ``liveness`` govern layer: run every present-but-dead cell
+    (REQ-22 verify-liveness + REQ-23 target-unmeasured/served-by-a-dead-FR + REQ-25 mitigation-inert/
+    non-goal-violated/touches-provenance-changed) and report them under ONE heading — each finding's
+    ``ref`` carries a ``liveness:<cell>`` tag. The REQ-25 fact-rungs are Tier-1 (always run); the semantic
+    judgment-rungs are Tier-2 (``judgment_rungs``) — parked by default, executing nothing until a labeled
+    fixture set un-parks them (FR-4), and even then emitting candidates, never GAPs (FR-5). A clean corpus
+    with the default (no security_mitigation / no-import wont / no changed provenance / no rungs) → the new
+    cells add nothing (byte-identical, FR-8)."""
     layer: List[Finding] = [
         Finding(f.check, f.severity, f.doc, f.message, f.fr, ref="liveness:verify-liveness")
         for f in check_verify_liveness(fr_nodes, doc)
     ]
     layer += check_target_unmeasured(outcome_nodes, doc)
     layer += check_served_by_dead_fr(fr_nodes, doc)
+    # REQ-25 Tier-1 fact-rungs (reuse; ship as GAP/trigger)
+    layer += check_mitigation_inert(fr_nodes, repo_root, doc)
+    layer += check_non_goal_violated(fr_nodes, repo_root, doc)
+    layer += check_touches_provenance_changed(fr_nodes, changed_provenance_keys, doc)
+    # REQ-25 Tier-2 judgment-rungs (parked-by-default; candidates, never GAPs)
+    for rung in judgment_rungs or ():
+        layer += run_judgment_rung(rung, doc=doc)
     return layer
+
+
+def lessons_from_liveness_layer(findings, *, confidence=None) -> List["Any"]:
+    """REQ-25 FR-7 — route each CONFIRMED-dead liveness GAP (a ``_SEVERITY_FAIL`` ``liveness:*`` finding) to
+    a human-gated retrospective ``Lesson`` (REQ-20, propose-don't-dispose). Advisory CANDIDATES (a parked/
+    precision judgment) are NOT routed — only facts become proposed revisions. Reuses REQ-22's
+    ``build_lesson_from_liveness_gap`` (NR-2)."""
+    from .sources_retrospective import build_lesson_from_liveness_gap
+    return [build_lesson_from_liveness_gap(f, confidence=confidence)
+            for f in findings
+            if f.severity == _SEVERITY_FAIL and str(f.ref).startswith("liveness:")]
 
 
 def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
@@ -723,6 +943,14 @@ def govern_corpus(spec_dir: Path, *, realization_provenance=None) -> GovernRepor
         try:
             _req_nodes = nodes_from_requirements(p)
             report.findings.extend(check_realization_invariant(_req_nodes, p.name))
+            # REQ-25 FR-1/FR-2 fact-rungs (reuse the security verifier + import/AST checks). Opt-in:
+            # they fire only on a node that DECLARES a `security_mitigation` attribute or a `no-import:`
+            # non-goal — a signal the requirement corpus doesn't carry today, so this is byte-identical
+            # on the current corpus (FR-8) while making the cells reachable from `navigator govern` (no
+            # seam-fuel). The verify-liveness / target-unmeasured / served-by-dead cells stay OUT of the
+            # default sweep (a REQ-22/23-scope wiring — the corpus isn't authored with Signals/gates yet).
+            report.findings.extend(check_mitigation_inert(_req_nodes, repo_root, p.name))
+            report.findings.extend(check_non_goal_violated(_req_nodes, repo_root, p.name))
             # REQ-19 FR-6: planned-vs-realized regression, only when a measured provenance source is given.
             if realization_provenance is not None:
                 report.findings.extend(
