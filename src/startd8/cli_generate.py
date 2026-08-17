@@ -276,6 +276,13 @@ def backend(
         "app/templates/_nav.html. base.html includes the partial tolerantly, so it stays "
         "byte-identical either way. Threaded to both generate and --check so drift stays consistent.",
     ),
+    emit_realization_provenance: bool = typer.Option(
+        False,
+        "--emit-realization-provenance",
+        help="REQ-19 FR-2: also write `realization-provenance.json` (sibling of app/) with a "
+        "`deterministic`-regime record per owned file — the navigator joins it to ground the "
+        "determinism-% as `measured`. Off by default (additive; zero effect on the generated tree).",
+    ),
 ) -> None:
     """Render the full all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + derived).
 
@@ -490,6 +497,20 @@ def backend(
             console.print(f"[red]error:[/red] cannot write {target}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
     console.print(f"[green]wrote[/green] {written} file(s) under {out}/app")
+
+    # REQ-19 FR-2 (opt-in): emit the deterministic realization-provenance artifact for the owned files,
+    # so the navigator can ground the determinism-% as `measured`. Written as a sibling of app/ (never
+    # inside the owned/drift-tracked app tree) — additive, zero effect on the generated tree.
+    if emit_realization_provenance:
+        from .backend_codegen.realization_emit import deterministic_records
+
+        prov_path = out / "realization-provenance.json"
+        prov_path.write_text(
+            json.dumps({"records": deterministic_records(rel for rel, _ in artifacts)},
+                       indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        console.print(f"[green]wrote[/green] {prov_path} ({written} deterministic records)")
 
     if export_openapi:
         from .validators.openapi_spec_gate import extract_openapi_spec_from_project

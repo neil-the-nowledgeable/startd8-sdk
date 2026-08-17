@@ -109,6 +109,11 @@ def build(
     fluency: str = typer.Option(
         "intermediate", "--fluency", help="fluency lens for tree/a11y labels (with --role)"
     ),
+    realization_provenance: Optional[Path] = typer.Option(
+        None, "--realization-provenance",
+        help="REQ-19: an emitted realization-provenance JSON artifact; grounds the determinism-% as "
+        "`measured` (else the declared fallback). Applies to --format html --renderer wireframe.",
+    ),
 ) -> None:
     """Project a source into Nodes and write JSON or HTML."""
     source = source.strip().lower()
@@ -212,6 +217,13 @@ def build(
                     semantic_only=semantic_only,
                 )
             else:  # wireframe
+                # REQ-19: load the measured provenance artifact (if given) → a join source that relabels
+                # the determinism-% `measured`. Absent → declared fallback, byte-identical.
+                _prov = None
+                if realization_provenance is not None:
+                    from .realization import MeasuredProvenanceSource
+                    from .realization_provenance import load_provenance
+                    _prov = MeasuredProvenanceSource(load_provenance(realization_provenance))
                 render_nodes_html(
                     nodes,
                     out,
@@ -219,6 +231,7 @@ def build(
                     group_by=group_by,
                     profile=profile,
                     frame=frame_mode,
+                    realization_provenance=_prov,
                 )
         except OSError as exc:
             console.print(f"[red]error:[/red] {exc}")
@@ -612,12 +625,18 @@ def govern(
     out: Optional[Path] = typer.Option(
         None, "--out", help="Write the report to a path (default: stdout)"
     ),
+    realization_provenance: Optional[Path] = typer.Option(
+        None, "--realization-provenance",
+        help="REQ-19 FR-6: an emitted realization-provenance JSON artifact; when given, also reports "
+        "planned-vs-realized determinism regressions (planned deterministic but measured llm).",
+    ),
 ) -> None:
     """Govern a directory of requirement docs against the corpus contract (REQ-06, read-only).
 
-    Runs the fixed 5-check battery (name-block presence · single-line-FR · dangling cross-ref ·
-    coverage · index-freshness) and emits a pass/fail governance report. Read-only: never writes
-    into the corpus. Exit 0 = clean · 1 = drift (any fail-severity finding) · 2 = operational error.
+    Runs the fixed check battery (name-block presence · single-line-FR · dangling cross-ref ·
+    coverage · index-freshness) and emits a pass/fail governance report. With ``--realization-provenance``
+    it also surfaces determinism regressions (REQ-19 FR-6). Read-only: never writes into the corpus.
+    Exit 0 = clean · 1 = drift (any fail-severity finding) · 2 = operational error.
     """
     directory = Path(directory)
     if not directory.is_dir():
@@ -628,7 +647,12 @@ def govern(
         console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected text|json)")
         raise typer.Exit(_EXIT_OPERATIONAL)
     try:
-        report = govern_corpus(directory)
+        _prov = None
+        if realization_provenance is not None:
+            from .realization import MeasuredProvenanceSource
+            from .realization_provenance import load_provenance
+            _prov = MeasuredProvenanceSource(load_provenance(realization_provenance))
+        report = govern_corpus(directory, realization_provenance=_prov)
         rendered = render_govern_json(report) if fmt == "json" else render_govern_text(report)
     except OSError as exc:
         console.print(f"[red]error:[/red] {exc}")

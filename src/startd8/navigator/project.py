@@ -331,11 +331,15 @@ def render_nodes_html(
     fluency: str = "intermediate",
     profile: Optional[RenderProfile] = None,
     frame: bool = False,
+    realization_provenance=None,
 ) -> Path:
-    """Render nodes via wireframe_view (FR-10). ``frame`` (REQ-15) renders scaffold-only bare frame."""
+    """Render nodes via wireframe_view (FR-10). ``frame`` (REQ-15) renders scaffold-only bare frame.
+    ``realization_provenance`` (REQ-19): a measured ProvenanceSource → the determinism-% relabels
+    ``measured`` when it grounds regimes above threshold (else the declared fallback, byte-identical)."""
     from startd8.wireframe_view import render_to_file
 
-    plan = nodes_to_wireframe_plan(nodes, project_root=project_root, group_by=group_by)
+    plan = nodes_to_wireframe_plan(nodes, project_root=project_root, group_by=group_by,
+                                   realization_provenance=realization_provenance)
     kwargs: Dict[str, Any] = {"role": role, "fluency": fluency}
     if frame:
         kwargs["frame"] = True

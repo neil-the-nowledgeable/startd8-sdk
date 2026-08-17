@@ -385,3 +385,40 @@ def test_eb1_presence_gated_byte_identical_when_empty():
 
     d = nodes_to_json([Node(key="cap.x", does="bare")])[0]
     assert "verify" not in d and "approve" not in d and "was" not in d and "derivation" not in d
+
+
+# ── REQ-19 follow-on — the measured path reachable from the CLI ────────────────────────────────────
+
+def test_build_realization_provenance_relabels_measured(tmp_path):
+    """REQ-19 live-wiring: `navigator build --realization-provenance` grounds the determinism-% as
+    `measured`; without it the pipeline renders `declared`."""
+    import json as _json
+    prov = tmp_path / "prov.json"
+    # override stage:impl's owned artifact to llm (high confidence) → a measured match
+    prov.write_text(_json.dumps({"records": [
+        {"file": "src/startd8/backend_codegen/", "regime": "llm", "source_confidence": 0.95}]}))
+    out = tmp_path / "pipe.html"
+    res = RUNNER.invoke(app, ["navigator", "build", "--source", "pipeline", "--format", "html",
+                             "--out", str(out), "--realization-provenance", str(prov)])
+    assert res.exit_code == 0, res.output
+    html = out.read_text()
+    assert "(measured)" in html and "(declared)" not in html
+
+    # without the flag → declared (byte-identical fallback)
+    out2 = tmp_path / "pipe2.html"
+    res2 = RUNNER.invoke(app, ["navigator", "build", "--source", "pipeline", "--format", "html", "--out", str(out2)])
+    assert res2.exit_code == 0 and "(declared)" in out2.read_text() and "(measured)" not in out2.read_text()
+
+
+def test_govern_accepts_realization_provenance_flag(tmp_path):
+    """REQ-19 FR-6 wired: `navigator govern --realization-provenance` runs (the regression check is
+    active; requirement nodes carry no declared regime so it fires only on measured drift)."""
+    import json as _json
+    (tmp_path / "REQ-01-x.md").write_text(
+        "# X — Requirements\n\n**Format:** det-req/0.1\n\n"
+        "- **FR-1 — Do.** A thing. Name: a thing. Verify: it works. Serves: O-1\n", encoding="utf-8")
+    prov = tmp_path / "prov.json"
+    prov.write_text(_json.dumps({"records": []}))
+    res = RUNNER.invoke(app, ["navigator", "govern", "--dir", str(tmp_path),
+                             "--realization-provenance", str(prov), "--format", "json"])
+    assert res.exit_code in (0, 1), res.output          # runs; 0 clean / 1 drift — never a flag error
