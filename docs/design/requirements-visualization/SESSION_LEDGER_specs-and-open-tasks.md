@@ -112,3 +112,22 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 > identity is unprovable for LLM output — REQ-21's own principle, not a gap). Build-time discovery: the
 > provenance-marker set only stripped 3 of 11 `$0` source-fingerprint stamps, so scaffold could never
 > pass — fixed to strip the whole family.
+
+> **Requirement-detail-on-card + node-fields distillation SHIPPED 2026-08-17** (`ce6ed667` distillation +
+> `788042a8` rendering): the navigator requirement card gains an inline detail **peek** and a new full-page
+> requirement **view** — surfacing far more of a requirement's authored data. First a behaviour-preserving
+> **distillation**: the card built its data by flattening structured `Node` fields into a `detail` prose
+> blob (11 prefix markers) then regex-reparsing it client-side — an untyped contract mirrored across Python
+> (`_node_detail`) and JS (`structuredDet`+`_SLOT`). Replaced by one structured extraction (`_node_fields`)
+> the card reads BY KEY (`fieldsToSd`); `detail` is now FORMATTED FROM it, so the text/JSON contract can't
+> drift. Then **richer rendering** on that seam: a doc-context masthead band (criticality/domain/audience/
+> risks with mitigation→FR coverage — kept MAXIMAL; pare is an audience/fluency lens tier, not a delete), a
+> full **typed Touches** list (`WireframeItem.touches` + a source-bound path→kind classifier), the inline
+> **peek** (click-to-expand record + Touches; `open full view →` at the status pill + top + bottom), and a
+> full-page **client-side `#<key>` route** (`buildFullView`/`resolveHash`; deep-link on load; back-to-
+> browse). One shared `recordEntries`/`touchesRows` feeds both views (no drift). New regions `docband`/
+> `detail`/`fullview` registered in the View Definition `regions.bindings` (FR-8). Spec
+> `REQ-requirement-detail-on-navigator-card.md` v0.3; 9 guard tests; 637 navigator+wireframe green; app-path
+> byte-identity held unedited. Build-time discovery: the card click bailed on the `<details class="sec">`
+> **ancestor** wrapper (`closest("details")`), swallowing every click — fixed to `w.contains(hit)` (inside-
+> card only) with a regression pin. Landed via a double-rebase onto a hot `main` + `--ff-only`.
