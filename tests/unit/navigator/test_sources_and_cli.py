@@ -22,6 +22,18 @@ from startd8.navigator.sources_requirements import (
 )
 
 
+def test_archetype_is_derived_from_title_not_the_byte_identity_verify_boilerplate():
+    # The functional archetype (what kind) derives from the FR's essence (title/name), NOT verify/does —
+    # whose recurring 'byte-identical' boilerplate would mislabel most FRs as safeguard. 'bug' must not
+    # match 'debug'. An authored Type: overrides.
+    from startd8.navigator.sources_requirements import _archetype
+    assert _archetype("Byte-identity + field-compat guard", "")[0] == "safeguard"
+    assert _archetype("Paging over the requirement nodes", "")[0] == "control"
+    assert _archetype("The View Definition shows every region template", "")[0] == "display"
+    assert _archetype("Migrate the display-logic data", "")[0] == "refactor"
+    assert _archetype("Debug group: raw data views", "")[0] != "fix"     # 'debug' is not a defect fix
+
+
 def test_served_objective_text_is_joined_onto_the_fr_for_the_why(tmp_path):
     # The card conveys 'why it matters' by joining Serves: O-N to the objective's value statement (the
     # objective text lives in the Objectives section; the FR only names the id).

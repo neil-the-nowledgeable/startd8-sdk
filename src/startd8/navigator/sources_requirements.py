@@ -44,6 +44,31 @@ def _parse_objectives(text: str) -> dict:
     return {m.group(1): m.group(2).strip() for m in _OBJECTIVE_RE.finditer(text)}
 
 
+# Functional archetype — the 'what kind of requirement' a reader grasps at a glance. DERIVED lexically
+# for now (a hint, provenance=derived); an authored ``Type:`` FR field can override it later (the writer
+# spec already reserves the seam). Each → (plain label for the broadest audience, one-line gloss).
+_ARCHETYPE_RULES = [
+    (("guard", "byte-ident", "byte-identical", "invariant", "additive", "unchanged", "no regression",
+      "preserve", "must not", "never "), ("safeguard", "protects an invariant / no-regression")),
+    (("fix ", "crash", "broke", "defect", "incorrect"), ("fix", "corrects a defect")),   # not 'bug' (deBUG)
+    (("migrate", "consolidat", "refactor", "move ", "unify", "reshape", "collapse", "retire"),
+     ("refactor", "restructures without changing behaviour")),
+    (("toggle", "switch", "picker", "panel", "paging", "on/off", "checkbox", "control ", "button"),
+     ("control", "a reader-facing control")),
+    (("show", "render", "display", "surface", "card", "template", "legend", "readout", "view "),
+     ("display", "renders / shows something")),
+]
+
+
+def _archetype(*parts: str) -> tuple:
+    """Best-effort functional archetype from an FR's wording. Returns (label, gloss)."""
+    hay = " ".join(p for p in parts if p).lower()
+    for keys, out in _ARCHETYPE_RULES:
+        if any(k in hay for k in keys):
+            return out
+    return ("capability", "adds a capability")
+
+
 def _lives_from_touches(
     touches: List[str],
     existing_refs: set,
@@ -226,6 +251,17 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
         served = [objectives[s] for s in (fr.get("serves") or []) if s in objectives]
         if served:
             attrs["serves_objective"] = " · ".join(served)
+        # Functional archetype (derive-now, author-later): an authored ``Type:`` wins if present.
+        # Classify from the TITLE (+ semantic name) — NOT verify/does, whose recurring byte-identity
+        # boilerplate would mislabel most FRs as "safeguard".
+        arch = (str(fr.get("type") or "").strip().lower(), "")
+        if not arch[0]:
+            arch = _archetype(str(fr.get("title", "")), str(fr.get("name", "")))
+        attrs["archetype"], attrs["archetype_gloss"] = arch[0], arch[1]
+        # Scope: how many files the FR touches (its blast-radius) — a plain at-a-glance size.
+        tcount = len([t for t in (fr.get("touches") or []) if str(t).strip()])
+        if tcount:
+            attrs["touches_count"] = str(tcount)
         if prompts:
             attrs["approve_prompts"] = " · ".join(prompts)
         if was:
