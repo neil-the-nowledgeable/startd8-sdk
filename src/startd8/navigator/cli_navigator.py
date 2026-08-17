@@ -732,6 +732,62 @@ def retrospective(
     raise typer.Exit(_EXIT_ERR)
 
 
+@navigator_app.command("revise-apply")
+def revise_apply_cmd(
+    schema: Path = typer.Option(..., "--schema", help="the contract file (schema.prisma) the revise edits"),
+    edit: Path = typer.Option(..., "--edit", help="JSON revise-edit {target, path, before, after}"),
+    lesson: Path = typer.Option(..., "--lesson", help="JSON lesson node (its confidence gates the tier)"),
+    apply: bool = typer.Option(False, "--apply", help="write the edit on proof (default: dry-run, no write)"),
+) -> None:
+    """REQ-24 — apply a revise's concrete edit THROUGH a real byte-identity guard (regenerate the `$0`
+    product + hash-compare). Auto-applies ONLY when the guard proves the product unchanged; any diff →
+    `human` (the contract is left byte-identical). Dry-run by default — pass `--apply` to write on proof."""
+    import subprocess
+    from datetime import datetime, timezone
+
+    from .project import nodes_from_json
+    from .revise_apply import apply_revise
+    from .revise_tier import ReviseEditError, eligibility_of, parse_revise_edit
+
+    try:
+        edit_obj = parse_revise_edit(json.loads(Path(edit).read_text(encoding="utf-8")))
+        lesson_data = json.loads(Path(lesson).read_text(encoding="utf-8"))
+        nodes = nodes_from_json(lesson_data if isinstance(lesson_data, list) else [lesson_data])
+        if not nodes:
+            raise ReviseEditError("--lesson JSON produced no node")
+        lesson_node = nodes[0]
+    except (OSError, ValueError, ReviseEditError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+
+    # claim byte_identical=True (the intent); the guard ENFORCES it. reversible = a git-tracked contract
+    # edit, no spend. confidence comes from the lesson (gates the tier).
+    elig = eligibility_of(lesson_node, byte_identical=True, effects=[])
+    try:
+        head = subprocess.run(["git", "-C", str(Path(schema).parent), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True, timeout=5)
+        revert_ref = head.stdout.strip() if head.returncode == 0 else "uncommitted"
+    except Exception:
+        revert_ref = "uncommitted"
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    try:
+        audit = apply_revise(schema, edit_obj, lesson_node, elig,
+                             timestamp=timestamp, revert_ref=revert_ref, dry_run=not apply)
+    except OSError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+
+    if audit is not None:
+        verb = "auto-applied" if apply else "auto-eligible (dry-run)"
+        console.print(f"[green]{verb}[/green]: revise of {audit.target!r} — guard proved the $0 product "
+                      f"byte-identical. audit: lesson={audit.lesson} revert={audit.revert_ref}")
+    else:
+        console.print("[yellow]human[/yellow]: not auto-applied — the tier is not `auto` or the guard "
+                      "did not prove the product unchanged. The contract is untouched; propose to a human.")
+    raise typer.Exit(_EXIT_OK)
+
+
 @navigator_app.command("view-definition")
 def view_definition(
     name: Optional[str] = typer.Option(

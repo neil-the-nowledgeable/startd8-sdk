@@ -41,6 +41,35 @@ def is_reversible(effects: Iterable[str] = ()) -> bool:
     return not (set(effects or ()) & IRREVERSIBLE_EFFECTS)
 
 
+class ReviseEditError(ValueError):
+    """A malformed revise edit — named so a bad edit fails loud, never silently no-ops."""
+
+
+@dataclasses.dataclass(frozen=True)
+class ReviseEdit:
+    """REQ-24 FR-1 — the CONCRETE contract mutation a revise applies (distinct from REQ-20's prose
+    proposal, which carries no edit): the ``target`` contract node key, the contract ``path``, and the
+    exact ``before`` text and its ``after`` replacement. Pure data (no construction import) — the applier
+    (``revise_apply.py``) proves it byte-identical by regenerating the product."""
+
+    target: str
+    path: str
+    before: str
+    after: str
+
+
+def parse_revise_edit(raw) -> ReviseEdit:
+    """Validate + build a :class:`ReviseEdit`, raising a named :class:`ReviseEditError` on any missing
+    field (``target``/``path``/``before`` must be non-empty; ``after`` may be empty for a deletion)."""
+    if not isinstance(raw, dict):
+        raise ReviseEditError(f"revise edit must be a mapping, got {type(raw).__name__}")
+    for key in ("target", "path", "before"):
+        if not str(raw.get(key, "")).strip():
+            raise ReviseEditError(f"revise edit missing required non-empty {key!r}")
+    return ReviseEdit(target=str(raw["target"]), path=str(raw["path"]),
+                      before=str(raw["before"]), after=str(raw.get("after", "")))
+
+
 def lesson_confidence(lesson: Node) -> Optional[float]:
     """The Lesson's grounding confidence (FR-4) — its ``confidence`` field, else a ``confidence``
     attribute; ``None`` when absent or unparseable (→ ``human``, fail-safe)."""
