@@ -62,6 +62,21 @@ the wireframe path deliberately never had, without disturbing it.
 
 ## Functional requirements
 
+> **Delivery reconciliation (2026-08-17): REQ-03 is BUILT + landed** (`d416fc38`; shared-lens
+> inheritance extended by REQ-09 `90efe69f`). All 6 FRs are functionally present — `render_a11y.py` +
+> `render_index.py` ported standalone, `build --format a11y` + `navigator index` wired, 21 tests in
+> `test_a11y_and_index.py`. The mujo recovery (§0) is complete; the capability lives in the forward home.
+>
+> **FR-1 clause superseded — "it must not import `wireframe_view`":** REQ-04 lifted the audience×fluency
+> lens transform to a **shared seam** (`node_lenses.apply_node_lenses`) that the tree, graph, AND a11y
+> renderers opt into (REQ-09), so `render_a11y.py` now carries a *guarded soft-import* of
+> `wireframe_view.node_lenses` (+ `wireframe.delivery_roles`). The firewall that actually matters is
+> intact and honored: the a11y renderer imports **no** `WireframePlan` / `compose` / `_template` / view
+> pipeline (verified in-code + by the FR-5 byte-identity test). Read FR-1's literal "no `wireframe_view`
+> import" as **"no wireframe *pipeline* import"** — the shared lens transform is a deliberate REQ-04/09
+> cross-renderer seam, not a firewall breach. (A cosmetic tidy — relocating `node_lenses` to a
+> renderer-neutral module — remains available but is not required for FR-1's intent.)
+
 - **FR-1 — A11y requirements renderer.** Port CC `render_a11y.py` (`ReqView` + `render_html` / `render_a11y_to_file`) into `src/startd8/navigator/render_a11y.py` as a standalone renderer with its own semantic HTML shell (ARIA landmarks, heading order, per-requirement rows with status + evidence) — it must not import `wireframe_view`. Name: SDK navigator renders a requirements doc as a semantic accessible view without importing wireframe. Touches: `src/startd8/navigator/render_a11y.py`, `src/startd8/navigator/cli_navigator.py`. Lives: link ContextCore/src/contextcore/navigator/render_a11y.py. Approve?: is the a11y renderer standalone (no wireframe import) with real landmarks/roles?. Verify: `startd8 navigator build --source requirements --format a11y --out x.html` exits 0; the HTML carries semantic landmarks and per-FR rows; the module has no `import wireframe_view`. Serves: O-1
 - **FR-2 — Corpus index (drill-to-leaf).** Port CC `render_index.py` (`render_index_to_file`) into `src/startd8/navigator/render_index.py`: given a directory of requirements docs, render an index page that links to one generated a11y leaf per doc (each via FR-1). Name: SDK navigator renders a directory of requirements as a drill-to-leaf corpus index. Touches: `src/startd8/navigator/render_index.py`, `src/startd8/navigator/cli_navigator.py`. Lives: link ContextCore/src/contextcore/navigator/render_index.py. Approve?: does the index drill to one a11y leaf per doc?. Verify: `startd8 navigator index --dir docs/design/requirements-visualization --out idx.html` writes an index + N leaf files and the links resolve. Serves: O-2
 - **FR-3 — CLI seam for a11y + index.** Extend the navigator CLI: `--format a11y` on `build` (single doc) and a new `navigator index` command (a directory), consistent with REQ-02's `--renderer` vocabulary; back-compat preserved (`--format html|json` unchanged). Name: Navigator CLI exposes a11y format on build and a corpus-index command for a directory. Touches: `src/startd8/navigator/cli_navigator.py`. Lives: code src/startd8/navigator/cli_navigator.py. Approve?: are the a11y + index CLI seams additive (no break to html/json)?. Verify: `startd8 navigator --help` lists `index`; `--format a11y` renders; existing `--format html|json` unchanged. Serves: O-1

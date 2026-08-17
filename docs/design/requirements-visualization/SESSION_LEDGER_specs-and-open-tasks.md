@@ -76,7 +76,16 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 
 ## Recommended next pickups (priority order)
 
-1. **REQ-03** (a11y renderer) — recovers lost work.
-2. **REQ-04** (lift lenses) — unblocks tree/a11y renderers from inheriting the lenses.
+> **Reconciled 2026-08-17:** the prior list (REQ-03 a11y renderer · REQ-04 lift-lenses) was **stale —
+> both are already built + landed** (see the Implemented table: REQ-03 `d416fc38`, REQ-04 `5cb91c37`).
+> The mujo recovery already happened. Real open pickups below.
 
-Both are specced and ready to build.
+1. **REQ-15** (frame / scaffolding view) — **BUILD-READY** (stage-0 ✓, 5/5 named FRs); the next Spec
+   Delivery Loop delivery. See the "Planned, no code yet" table.
+2. **REQ-25 fact-rungs** (liveness hypothesis cells) — spec landed (`fe16bd93`); the fact-rungs are
+   build-ready (deps built); judgment-rungs park behind the REQ-07 FR-7 precision gate pending a
+   labeled fixture set. REQ-scale, not a seam.
+3. **Larger open seams** (bigger than the closed REQ-20/24 seams): REQ-24 H2 (byte-identity guard is
+   bound to the `backend_codegen` Python `$0` path — polyglot/other output kinds uncovered) · REQ-19
+   measured-provenance **fuel** (emit not wired into a real `generate backend` run + no `build/govern
+   --realization-provenance` load flag).
