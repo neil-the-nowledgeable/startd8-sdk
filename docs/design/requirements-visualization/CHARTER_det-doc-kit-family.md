@@ -67,6 +67,16 @@ Formalizing a bookend doc is **false precision** — do not do it.
    human completes it — propose-don't-dispose). So `check/review/retrospect → SARIF → stub → forward loop` is
    the machine-readable, human-gated PDCA edge. *(A `Lesson` node (REQ-20) and a SARIF result are findings-half
    twins; a CRP review-log (Appendix A/B/C) and SARIF are its human/machine twins — reconcile, don't fork.)*
+7. **Runtime grounding (feature o11y + AI o11y — the territory edge)** — invariant 6 grounds findings in the
+   *map* (docs/code, authoring-time). The circle only closes when they are also grounded in the *territory* (the
+   running system). Two runtime signals feed the same SARIF finding-bus (the o11y→SARIF bridge is already routed):
+   **feature o11y** (`observability/parity.py` compare-live) is *runtime verify-liveness* — a declared feature with
+   no live emission is the deepest present-but-dead cell (the top of the liveness column); **AI o11y**
+   (`costs/otel_metrics.py`) is the *measured* realization regime that fills REQ-19's seam (a planned-`$0` node with
+   real LLM cost = a measured determinism regression). The generative fix reuses `scaffold_codegen/
+   instrumentation_gen.py` (Harbor-proven — gap → generated instrumentation → the feature emits). This makes
+   "verified" mean *"the feature emits a live signal proving it works, and here's what it cost"* — for the price of
+   wiring, since every piece exists. Detail: `ANALYSIS_runtime-grounding-feature-and-ai-o11y.md`; wiring: `REQ-28`.
 
 ## 7. The roster
 
