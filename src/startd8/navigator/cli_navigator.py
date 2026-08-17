@@ -704,10 +704,14 @@ def retrospective(
     ),
     fmt: str = typer.Option("json", "--format", help="Output format: json | html (graph)"),
     out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
+    store: Optional[Path] = typer.Option(
+        None, "--store", help="persist the derived Lessons into a store JSON, MERGING with any prior "
+        "run — human dispositions (accept/reject + rationale) are preserved across runs (REQ-20 H3)"),
 ) -> None:
     """Close the retrospective loop (REQ-20): build a grounded, human-gated Lesson per determinism
-    regression, each proposing a `revises` to its offending contract. Read-only, never auto-applies a
-    revise — the Lessons are `proposed` for a human to accept/reject."""
+    regression, each proposing a `revises` to its offending contract. Read-only on the corpus, never
+    auto-applies a revise — the Lessons are `proposed` for a human to accept/reject. With `--store`, the
+    Lessons gain cross-run memory (a rejected Lesson stays rejected on the next run)."""
     from .realization import MeasuredProvenanceSource
     from .realization_provenance import load_provenance
     from .sources_retrospective import nodes_from_retrospective
@@ -723,6 +727,15 @@ def retrospective(
     except (OSError, ValueError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_OPERATIONAL)
+
+    if store is not None:
+        from .lesson_store import load_lessons, merge_lessons, save_lessons
+        try:
+            lessons = merge_lessons(load_lessons(store), lessons)
+            save_lessons(store, lessons)
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]error:[/red] store {store}: {exc}")
+            raise typer.Exit(_EXIT_OPERATIONAL)
 
     if fmt == "json":
         payload = {"source": "retrospective", "lessons": nodes_to_json(lessons)}
@@ -748,27 +761,43 @@ def retrospective(
 @navigator_app.command("revise-apply")
 def revise_apply_cmd(
     schema: Path = typer.Option(..., "--schema", help="the contract file (schema.prisma) the revise edits"),
-    edit: Path = typer.Option(..., "--edit", help="JSON revise-edit {target, path, before, after}"),
     lesson: Path = typer.Option(..., "--lesson", help="JSON lesson node (its confidence gates the tier)"),
+    edit: Optional[Path] = typer.Option(
+        None, "--edit", help="JSON revise-edit {target, path, before, after}; OMIT to derive it from the "
+        "lesson when it carries a concrete `revise_edit` (a description-clarification lesson, REQ-24 H1)"),
     apply: bool = typer.Option(False, "--apply", help="write the edit on proof (default: dry-run, no write)"),
+    commit: bool = typer.Option(False, "--commit", help="with --apply on proof, git-commit the written "
+        "contract so the audit's revert_ref names a real commit (REQ-24 H3); off → the write is left "
+        "uncommitted for the human to stage"),
 ) -> None:
     """REQ-24 — apply a revise's concrete edit THROUGH a real byte-identity guard (regenerate the `$0`
     product + hash-compare). Auto-applies ONLY when the guard proves the product unchanged; any diff →
-    `human` (the contract is left byte-identical). Dry-run by default — pass `--apply` to write on proof."""
+    `human` (the contract is left byte-identical). Dry-run by default — pass `--apply` to write on proof.
+
+    The edit comes from `--edit`, or is DERIVED from `--lesson` when it carries a concrete `revise_edit`
+    (the Lesson→ReviseEdit producer, REQ-24 H1); a lesson without one still requires `--edit`."""
     import subprocess
     from datetime import datetime, timezone
 
     from .project import nodes_from_json
     from .revise_apply import apply_revise
-    from .revise_tier import ReviseEditError, eligibility_of, parse_revise_edit
+    from .revise_tier import ReviseEditError, eligibility_of, parse_revise_edit, revise_edit_from_lesson
 
     try:
-        edit_obj = parse_revise_edit(json.loads(Path(edit).read_text(encoding="utf-8")))
         lesson_data = json.loads(Path(lesson).read_text(encoding="utf-8"))
         nodes = nodes_from_json(lesson_data if isinstance(lesson_data, list) else [lesson_data])
         if not nodes:
             raise ReviseEditError("--lesson JSON produced no node")
         lesson_node = nodes[0]
+        if edit is not None:
+            edit_obj = parse_revise_edit(json.loads(Path(edit).read_text(encoding="utf-8")))
+        else:
+            edit_obj = revise_edit_from_lesson(lesson_node)
+            if edit_obj is None:
+                raise ReviseEditError(
+                    "no --edit given and the lesson carries no concrete `revise_edit` — a "
+                    "determinism-regression lesson proposes a plan re-examination, not a mechanical edit; "
+                    "supply --edit for those.")
     except (OSError, ValueError, ReviseEditError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)
@@ -793,11 +822,110 @@ def revise_apply_cmd(
 
     if audit is not None:
         verb = "auto-applied" if apply else "auto-eligible (dry-run)"
-        console.print(f"[green]{verb}[/green]: revise of {audit.target!r} — guard proved the $0 product "
-                      f"byte-identical. audit: lesson={audit.lesson} revert={audit.revert_ref}")
+        committed = ""
+        if audit is not None and apply and commit:
+            # REQ-24 H3 — capture the written contract as a real commit so revert is `git revert <sha>`,
+            # not a manual `git checkout`. Only the schema file is staged (never `git add -A`).
+            sdir = str(Path(schema).parent)
+            try:
+                add = subprocess.run(["git", "-C", sdir, "add", str(Path(schema).name)],
+                                     capture_output=True, text=True, timeout=10)
+                msg = (f"revise(auto): clarify {audit.target} — byte-identity-proven ($0 product "
+                       f"unchanged)\n\nlesson={audit.lesson} revert_ref={audit.revert_ref}")
+                cm = subprocess.run(["git", "-C", sdir, "commit", "-m", msg, "--only", str(Path(schema).name)],
+                                    capture_output=True, text=True, timeout=15)
+                if add.returncode == 0 and cm.returncode == 0:
+                    committed = " (committed)"
+                else:
+                    committed = " [yellow](commit skipped: git error)[/yellow]"
+            except Exception:
+                committed = " [yellow](commit skipped: git unavailable)[/yellow]"
+        console.print(f"[green]{verb}[/green]{committed}: revise of {audit.target!r} — guard proved the "
+                      f"$0 product byte-identical. audit: lesson={audit.lesson} revert={audit.revert_ref}")
     else:
         console.print("[yellow]human[/yellow]: not auto-applied — the tier is not `auto` or the guard "
                       "did not prove the product unchanged. The contract is untouched; propose to a human.")
+    raise typer.Exit(_EXIT_OK)
+
+
+# REQ-20 H2 — the human-disposition surface over the persisted Lesson store (REQ-20 H3). The IR never
+# self-disposes; these commands are the ONLY path that accepts/rejects a Lesson, and they always persist.
+lesson_app = typer.Typer(help="Dispose persisted retrospective Lessons (REQ-20): list | accept | reject.")
+navigator_app.add_typer(lesson_app, name="lesson")
+
+
+def _load_store_or_exit(store: Path):
+    from .lesson_store import load_lessons
+    try:
+        return load_lessons(store)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]error:[/red] store {store}: {exc}")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+
+
+@lesson_app.command("list")
+def lesson_list(
+    store: Path = typer.Option(..., "--store", help="the Lesson store JSON (written by `retrospective --store`)"),
+) -> None:
+    """List persisted Lessons with their disposition (proposed | accepted | rejected)."""
+    lessons = _load_store_or_exit(store)
+    if not lessons:
+        console.print(f"(store {store} holds no lessons)")
+        raise typer.Exit(_EXIT_OK)
+    from .sources_retrospective import lesson_status
+    for n in lessons:
+        st = lesson_status(n)
+        color = {"accepted": "green", "rejected": "yellow", "proposed": "cyan"}.get(st, "white")
+        proposes = n.attributes.get("proposes", "")
+        console.print(f"[{color}]{st:<9}[/{color}] {n.key} — {proposes}")
+    raise typer.Exit(_EXIT_OK)
+
+
+@lesson_app.command("accept")
+def lesson_accept(
+    store: Path = typer.Option(..., "--store", help="the Lesson store JSON"),
+    key: str = typer.Option(..., "--key", help="the Lesson key (or its bare requirement key)"),
+) -> None:
+    """Human disposition — ACCEPT a Lesson's `revises` proposal (persists; its revise becomes active)."""
+    from .lesson_store import find_lesson, save_lessons, upsert_lesson
+    from .sources_retrospective import accept_lesson
+
+    lessons = _load_store_or_exit(store)
+    target = find_lesson(lessons, key)
+    if target is None:
+        console.print(f"[red]error:[/red] no lesson {key!r} in {store}")
+        raise typer.Exit(_EXIT_ERR)
+    try:
+        save_lessons(store, upsert_lesson(lessons, accept_lesson(target)))
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+    console.print(f"[green]accepted[/green]: {target.key} — the revise is now active (still applied only "
+                  f"through the byte-identity guard).")
+    raise typer.Exit(_EXIT_OK)
+
+
+@lesson_app.command("reject")
+def lesson_reject(
+    store: Path = typer.Option(..., "--store", help="the Lesson store JSON"),
+    key: str = typer.Option(..., "--key", help="the Lesson key (or its bare requirement key)"),
+    rationale: str = typer.Option(..., "--rationale", help="why it's declined — retained across runs"),
+) -> None:
+    """Human disposition — REJECT a Lesson, RETAINED with its rationale (the memory keeps *why*)."""
+    from .lesson_store import find_lesson, save_lessons, upsert_lesson
+    from .sources_retrospective import reject_lesson
+
+    lessons = _load_store_or_exit(store)
+    target = find_lesson(lessons, key)
+    if target is None:
+        console.print(f"[red]error:[/red] no lesson {key!r} in {store}")
+        raise typer.Exit(_EXIT_ERR)
+    try:
+        save_lessons(store, upsert_lesson(lessons, reject_lesson(target, rationale)))
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+    console.print(f"[yellow]rejected[/yellow]: {target.key} — retained with rationale (survives re-runs).")
     raise typer.Exit(_EXIT_OK)
 
 

@@ -70,6 +70,22 @@ def parse_revise_edit(raw) -> ReviseEdit:
                       before=str(raw["before"]), after=str(raw.get("after", "")))
 
 
+def revise_edit_from_lesson(lesson: Node) -> Optional[ReviseEdit]:
+    """REQ-24 H1 — the honest Lesson→:class:`ReviseEdit` producer: extract the CONCRETE edit a Lesson
+    proposes, when it carries one. A description-clarification Lesson (built by
+    ``sources_retrospective.build_lesson_from_description_clarification``) stamps a ``revise_edit`` payload
+    into its attributes; a determinism-regression Lesson does NOT (its fix is a plan re-examination, not a
+    mechanical text edit) → returns ``None``. No edit is ever invented — a Lesson without a concrete
+    payload stays human-authored (the caller must supply ``--edit``)."""
+    raw = lesson.attributes.get("revise_edit")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return parse_revise_edit(raw)
+    except ReviseEditError:
+        return None
+
+
 def lesson_confidence(lesson: Node) -> Optional[float]:
     """The Lesson's grounding confidence (FR-4) — its ``confidence`` field, else a ``confidence``
     attribute; ``None`` when absent or unparseable (→ ``human``, fail-safe)."""

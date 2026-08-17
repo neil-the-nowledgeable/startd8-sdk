@@ -90,6 +90,45 @@ def build_lesson_from_liveness_gap(finding, *, confidence=None) -> Node:
     )
 
 
+def build_lesson_from_description_clarification(
+    req_key: str, *, path: str, before: str, after: str, confidence=None, outcome: str = "",
+) -> Node:
+    """REQ-24 H1 — a Lesson whose proposed ``revises`` IS a concrete, mechanical contract-text edit:
+    clarify an ambiguous/stale *description* in the contract. This is the honest fuel the retrospective
+    loop was missing — a prose clarification changes only source-comment text, so the generated ``$0``
+    product stays byte-identical (modulo the source-fingerprint stamp, per REQ-24), which is exactly the
+    class the REQ-21 auto-tier can safely apply through the byte-identity guard.
+
+    Unlike a determinism-regression Lesson (whose fix is a *plan re-examination*, not a text edit), this
+    Lesson carries a concrete ``revise_edit`` payload in its attributes so
+    :func:`revise_tier.revise_edit_from_lesson` can extract a :class:`ReviseEdit` — no edit is invented for
+    Lessons that don't carry one."""
+    key = (req_key or "").strip() or "unknown"
+    outcome_key = f"description-clarification:{key}"
+    return Node(
+        key=f"lesson:{key}",
+        does=(f"Description clarification for {key!r}: the contract text is ambiguous/stale — propose a "
+              f"prose edit that leaves the generated product byte-identical (auto-tier-eligible)."),
+        category=LESSON_CATEGORY,
+        confidence=confidence,
+        lives=(NodeEvidence(type="link", ref=outcome_key, note="description-clarification outcome"),),
+        derivation=(
+            DerivationEdge(from_key=outcome_key, relation=EdgeRelation.DERIVED_FROM),  # forward grounding
+            DerivationEdge(from_key=key, relation=EdgeRelation.REVISES),               # backward proposal
+        ),
+        attributes={
+            "kind": "lesson",
+            "status": LessonStatus.PROPOSED,
+            "outcome": outcome,
+            "proposes": f"clarify the description of {key} in {path}",
+            # the CONCRETE edit the producer extracts — the payload distinguishes a mechanically-appliable
+            # Lesson from a plan-re-examination one (which carries no `revise_edit`).
+            "revise_edit": {"target": key, "path": path, "before": before, "after": after},
+            "section_order": "90",
+        },
+    )
+
+
 def _measured_confidence(node: Node, provenance) -> Optional[float]:
     """REQ-21 FR-4 — the measured join confidence for a node's regime (its Lesson's grounding
     confidence): the provenance match on the node's derivation edges, else its lives; ``None`` when no
