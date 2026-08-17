@@ -171,9 +171,12 @@ def test_requirement_card_shows_structured_what_how_why_and_is_byte_safe():
     prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
     profiled = render_html(_keyed_plan(), profile=prof)
     assert "function structuredDet" in profiled                       # the blob→slots parser
-    assert "payload.profile?structuredDet(item.detail)" in profiled   # profiled card uses it; app path does not
+    assert "var sd=structuredDet(item.detail)" in profiled            # profiled branch composes the value-first card
+    assert "if(payload.profile && !EU){" in profiled                  # app path (no profile) keeps the plain card
     assert "Verify · how you’ll know" in profiled and "Serves · why it matters" in profiled  # captions
-    assert "Name · deterministic identity" in profiled                # DIDL semantic name shown up top
+    # value-first hierarchy: the DIDL deterministic NAME leads as the large heading, above an id/status eyebrow
+    assert 'class="ci-name-h"' in profiled and 'class="ci-top"' in profiled
+    assert ".ci-name-h{font-family:var(--serif);font-size:19px" in profiled   # first + largest
     assert "body.nav-profiled #outline .item .ci-row.ci-why{border-left-color:var(--accent)" in profiled
     # app path byte-identical (structuredDet only runs when a profile is present)
     assert render_html(_plan()) == render_html(_plan(), profile=None)

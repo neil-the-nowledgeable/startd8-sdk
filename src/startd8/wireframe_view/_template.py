@@ -242,13 +242,18 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
     border-radius:9px;transition:box-shadow .16s ease,border-left-color .16s}
   body.nav-profiled #outline .item:first-child{border-top:none}
   body.nav-profiled #outline .item:hover{box-shadow:0 3px 15px rgba(45,33,16,.08)}
-  body.nav-profiled #outline .item .row{gap:10px}
-  /* the FR-id as a leading mono tag (was hidden); pulled before the title via flex order */
-  body.nav-profiled #outline .item .lbl-key{display:inline-block;order:-1;font-family:var(--mono);
+  /* value-first hierarchy: a small id/status EYEBROW, then the DIDL NAME as the large heading */
+  body.nav-profiled #outline .item .ci-top{display:flex;align-items:center;gap:9px;margin-bottom:6px}
+  body.nav-profiled #outline .item .ci-top .lbl-key{display:inline-block;font-family:var(--mono);
     font-size:10.5px;font-weight:700;letter-spacing:.02em;color:var(--accent);background:rgba(27,84,95,.08);
     padding:2px 7px;border-radius:5px;flex:none}
-  body.nav-profiled #outline .item .lbl{font-size:15px;line-height:1.33;letter-spacing:-.005em;color:var(--ink)}
-  body.nav-profiled #outline .item .badge{margin-left:auto}   /* status to the right edge */
+  body.nav-profiled #outline .item .ci-top .badge{margin-left:auto}   /* status to the right edge */
+  /* the DIDL deterministic NAME — FIRST + LARGEST: the requirement's meaning at a glance */
+  body.nav-profiled #outline .item .ci-name-h{font-family:var(--serif);font-size:19px;font-weight:600;
+    line-height:1.28;letter-spacing:-.01em;color:var(--ink);margin:0 0 4px}
+  /* "what it does" — the statement, secondary serif prose under the name */
+  body.nav-profiled #outline .item .ci-does{font-size:13px;line-height:1.5;color:var(--ink2);
+    font-family:var(--serif);margin:4px 0 0}
   /* "what it does" — prose reads better in the serif body than cramped mono */
   body.nav-profiled #outline .item .det{font-family:var(--serif);font-size:13.5px;line-height:1.5;
     color:var(--ink);margin:8px 0 0}
@@ -266,10 +271,6 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.nav-profiled #outline .item .ci-cap{display:block;font-family:var(--mono);font-size:9.5px;
     font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin-bottom:2px}
   body.nav-profiled #outline .item .ci-why .ci-cap{color:var(--accent)}
-  /* DIDL deterministic name — the semantic identity, shown up top in serif italic */
-  body.nav-profiled #outline .item .ci-row.ci-name{border-left-color:var(--accent2);
-    font-family:var(--serif);font-style:italic;font-size:13px;color:var(--ink);margin-top:7px}
-  body.nav-profiled #outline .item .ci-name .ci-cap{color:var(--accent2);font-style:normal}
   body.nav-profiled #outline .item .ci-meta{margin-top:8px}
   body.nav-profiled #outline .item .ci-conf,
   body.nav-profiled #outline .item .ci-hd{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
@@ -703,11 +704,9 @@ __PLAN_DATA__
               "DEPENDS-ON: ":{cap:"Depends on",cls:"ci-dep"}, "SHIPS-WHEN: ":{cap:"Ships when",cls:"ci-dep"} };
   function structuredDet(detail){
     var name="", rows="", stmt="", metaParts=[];
-    detail.split("\n").forEach(function(ln){
+    (detail||"").split("\n").forEach(function(ln){
       ln=ln.replace(/\s+$/,""); if(!ln) return;
-      // DIDL: the deterministic semantic NAME (identify by meaning) is shown up top; the readable HANDLE
-      // rides in the quiet id line with confidence.
-      if(ln.indexOf("NAME → ")===0){ name='<div class="ci-row ci-name"><span class="ci-cap">Name · deterministic identity</span>'+esc(ln.slice(7))+'</div>'; return; }
+      if(ln.indexOf("NAME → ")===0){ name=ln.slice(7); return; }   // the DIDL deterministic name (heading)
       if(ln.indexOf("HANDLE: ")===0){ metaParts.push('<span class="ci-hd">'+esc(ln.slice(8))+'</span>'); return; }
       if(ln.indexOf("FR-HEALTH: ")===0) return;
       if(ln.indexOf("confidence: ")===0){ metaParts.unshift('<span class="ci-conf">conf '+esc(ln.slice(12))+'</span>'); return; }
@@ -716,8 +715,8 @@ __PLAN_DATA__
         rows+='<div class="ci-row '+s.cls+'"><span class="ci-cap">'+s.cap+'</span>'+esc(ln.slice(hit.length))+'</div>'; }
       else { stmt+=(stmt?" ":"")+ln; }
     });
-    var metaHtml=metaParts.length?'<div class="ci-meta">'+metaParts.join(" · ")+'</div>':'';
-    return name+(stmt?'<div class="det">'+esc(stmt)+'</div>':'')+rows+metaHtml;
+    return { name:name, stmt:stmt, rows:rows,
+             meta:(metaParts.length?'<div class="ci-meta">'+metaParts.join(" · ")+'</div>':'') };
   }
   function renderItem(k,item,nav){
     var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
@@ -733,10 +732,9 @@ __PLAN_DATA__
     // Profiled requirement card: parse the node-detail blob into labelled WHAT/HOW/WHY slots so a reader
     // sees what it does, how it's verified, and WHY it matters (the served objective). App path (no
     // profile) keeps the plain .det blob → byte-identical.
-    var det=(item.detail&&!EU)?(payload.profile?structuredDet(item.detail):'<div class="det">'+esc(item.detail)+'</div>'):'';
     var livesHtml="";
     if(item.lives&&item.lives.length&&!EU){
-      livesHtml='<div class="lives"><span class="lk">Lives</span>'+
+      livesHtml='<div class="lives"><span class="lk">Lives · evidence</span>'+
         item.lives.map(function(e){
           var t=(e.type||"ref"), r=(e.ref||"");
           return esc(t)+": "+esc(r);
@@ -747,9 +745,24 @@ __PLAN_DATA__
       wasHtml='<div class="was"><span class="lk">Was</span>'+esc(item.was.join(" · "))+'</div>';
     }
     var metaHtml=(item.meta&&!EU)?'<div class="node-meta">'+esc(item.meta)+'</div>':'';  // revealed by "Show node metadata"
-    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
-      (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // bare node key (kept in DOM, hidden)
-      badge(item.status)+'</div>'+det+livesHtml+wasHtml+metaHtml;
+    if(payload.profile && !EU){
+      // VALUE-FIRST requirement card: the DIDL deterministic NAME leads (largest); a small id/status
+      // eyebrow; then what it does, why it matters (Serves+objective), how you'll know (Verify), evidence.
+      var sd=structuredDet(item.detail);
+      var kk=item.key||"";
+      var does=kk ? item.label.replace(new RegExp("^"+kk.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&")+"\\s*—\\s*"),"") : item.label;
+      w.innerHTML=
+        '<div class="ci-top"><span class="lbl-key">'+esc(kk)+'</span>'+badge(item.status)+'</div>'+
+        (sd.name?'<div class="ci-name-h">'+esc(sd.name)+'</div>':'')+
+        ((does&&does!==item.label)?'<div class="det ci-does">'+esc(does)+'</div>':'')+
+        (sd.stmt?'<div class="det">'+esc(sd.stmt)+'</div>':'')+
+        sd.rows+livesHtml+wasHtml+sd.meta+metaHtml;
+    } else {
+      var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
+      w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
+        (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // bare node key (kept in DOM, hidden)
+        badge(item.status)+'</div>'+det+livesHtml+wasHtml+metaHtml;
+    }
     if(mock||k==="pages"){
       var d=document.createElement("details");
       var sm=document.createElement("summary"); sm.className="drill"; sm.textContent="show a sketch";
