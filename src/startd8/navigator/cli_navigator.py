@@ -681,6 +681,57 @@ def govern(
     raise typer.Exit(_EXIT_DRIFT if not report.clean else _EXIT_OK)
 
 
+@navigator_app.command("retrospective")
+def retrospective(
+    directory: Path = typer.Option(..., "--dir", help="Directory of requirement docs (REQ-*.md)"),
+    realization_provenance: Path = typer.Option(
+        ..., "--realization-provenance",
+        help="An emitted realization-provenance JSON artifact — its measured regimes surface the "
+        "determinism regressions each Lesson derives from (REQ-19 FR-6 → REQ-20).",
+    ),
+    fmt: str = typer.Option("json", "--format", help="Output format: json | html (graph)"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
+) -> None:
+    """Close the retrospective loop (REQ-20): build a grounded, human-gated Lesson per determinism
+    regression, each proposing a `revises` to its offending contract. Read-only, never auto-applies a
+    revise — the Lessons are `proposed` for a human to accept/reject."""
+    from .realization import MeasuredProvenanceSource
+    from .realization_provenance import load_provenance
+    from .sources_retrospective import nodes_from_retrospective
+
+    directory = Path(directory)
+    if not directory.is_dir():
+        console.print(f"[red]error:[/red] --dir {directory} is not a directory")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+    fmt = fmt.strip().lower()
+    try:
+        prov = MeasuredProvenanceSource(load_provenance(realization_provenance))
+        lessons = nodes_from_retrospective(directory, prov)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+
+    if fmt == "json":
+        payload = {"source": "retrospective", "lessons": nodes_to_json(lessons)}
+        text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+        if out is None:
+            sys.stdout.write(text)                       # stdout carries ONLY the JSON (pipeable)
+        else:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8")
+            console.print(f"built {len(lessons)} proposed lesson(s) → {out}")
+        raise typer.Exit(_EXIT_OK)
+    if fmt == "html":
+        if out is None:
+            console.print("[red]error:[/red] --out is required for --format html")
+            raise typer.Exit(_EXIT_ERR)
+        render_navigator_graph_html(list(lessons), out, title="Retrospective — proposed lessons")
+        console.print(f"wrote {out} ({len(lessons)} lessons)")
+        raise typer.Exit(_EXIT_OK)
+    console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)")
+    raise typer.Exit(_EXIT_ERR)
+
+
 @navigator_app.command("view-definition")
 def view_definition(
     name: Optional[str] = typer.Option(

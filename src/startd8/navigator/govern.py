@@ -479,6 +479,25 @@ def check_determinism_regression(nodes, provenance, doc: str = "") -> List[Findi
     return findings
 
 
+def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
+    """REQ-20 FR-2 — a Lesson (``category=="lesson"``) that is not grounded (no ``derived-from`` edge or
+    no ``lives`` evidence citing its outcome) is an **ungrounded belief** (cruft, invariant 4) — a named
+    finding. A grounded Lesson yields none. Never a crash."""
+    from .sources_retrospective import LESSON_CATEGORY, is_grounded
+
+    findings: List[Finding] = []
+    for n in nodes:
+        if getattr(n, "category", "") == LESSON_CATEGORY and not is_grounded(n):
+            findings.append(Finding(
+                "FR-2", _SEVERITY_FAIL, doc or n.key,
+                f"{doc or n.key}: Lesson {n.key!r} is ungrounded — it proposes a revision without a "
+                f"`derived-from` edge + `lives` citing its outcome. A belief is cruft until grounded; "
+                f"add its grounding or drop it.",
+                fr=n.key,
+            ))
+    return findings
+
+
 def check_realization_invariant(nodes, doc: str = "") -> List[Finding]:
     """REQ-18 FR-5 — invariant 9: an ``llm``-regime derivation edge obligates its target node's
     ``verify`` (the acceptance oracle) to be non-empty, firing **only once the node's ``lives`` evidence

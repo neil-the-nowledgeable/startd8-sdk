@@ -100,6 +100,20 @@ class DerivationEdge:
     regime: Optional[str] = None  # reserved (unset) — the realization REQ fills this
 
 
+class EdgeRelation:
+    """The relation values a :class:`DerivationEdge` may carry (no new edge *structure* — REQ-20 NR-3).
+
+    ``DERIVED_FROM`` = the forward compilation relation (REQ-16). ``REVISES`` = a **backward** feedback
+    relation (REQ-20): a Lesson node proposing a revision to the upstream node named by ``from_key`` —
+    distinct from ``derived-from`` and from containment ``children``, and inert until human-accepted.
+    """
+
+    DERIVED_FROM = "derived-from"
+    REVISES = "revises"
+
+    ALL = (DERIVED_FROM, REVISES)
+
+
 @dataclass(frozen=True)
 class Node:
     """A single NODE-SCHEMA node."""

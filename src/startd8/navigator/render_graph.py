@@ -53,6 +53,9 @@ _EDGE_STYLE: Dict[str, Tuple[str, str]] = {
     "built-by": ("#58a6ff", "2 3"),         # built-by — dotted blue
     "delivers": ("#d29922", "7 3"),         # delivers — long-dash amber
     "contains-child": ("#9aa4b2", "1 4"),   # containment — faint grey
+    # REQ-16/REQ-20 typed derivation edges — the compilation + feedback loop, visibly distinguished:
+    "derived-from": ("#39c5cf", ""),        # forward grounding — solid cyan
+    "revises": ("#bc8cff", "6 3"),          # backward FEEDBACK proposal (REQ-20) — dashed violet
     # presentation-only view markers (only reachable under --full-graph)
     "has-section": ("#3a4150", "2 6"),
     "contains": ("#3a4150", "2 6"),

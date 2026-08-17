@@ -422,3 +422,20 @@ def test_govern_accepts_realization_provenance_flag(tmp_path):
     res = RUNNER.invoke(app, ["navigator", "govern", "--dir", str(tmp_path),
                              "--realization-provenance", str(prov), "--format", "json"])
     assert res.exit_code in (0, 1), res.output          # runs; 0 clean / 1 drift — never a flag error
+
+
+# ── REQ-20 — the retrospective CLI closes the loop live ────────────────────────────────────────────
+
+def test_retrospective_cli_builds_lessons(tmp_path):
+    """REQ-20 wired: `navigator retrospective` runs the regression→Lesson loop over a corpus + measured
+    provenance. A clean corpus (no regression fires) yields 0 lessons, exit 0 — honest, never a crash."""
+    import json as _json
+    (tmp_path / "REQ-01-x.md").write_text(
+        "# X — Requirements\n\n**Format:** det-req/0.1\n\n"
+        "- **FR-1 — Do.** A thing. Name: a thing. Verify: it works. Serves: O-1\n", encoding="utf-8")
+    prov = tmp_path / "prov.json"
+    prov.write_text(_json.dumps({"records": []}))
+    res = RUNNER.invoke(app, ["navigator", "retrospective", "--dir", str(tmp_path),
+                             "--realization-provenance", str(prov), "--format", "json"])
+    assert res.exit_code == 0, res.output
+    assert _json.loads(res.stdout)["source"] == "retrospective"

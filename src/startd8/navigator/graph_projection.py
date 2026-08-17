@@ -184,6 +184,11 @@ def nodes_to_graph(nodes: Sequence[Node]) -> dict:
             add_semantic(node.key, target, "built-by")
         for target in _split_ids(node.attributes.get("delivers", "")):
             add_semantic(node.key, target, "delivers")
+        # REQ-20 FR-6: the typed derivation edges — forward `derived-from` (REQ-16) and the backward
+        # `revises` feedback edge (REQ-20), each carried as its own labelled edge so the renderer
+        # distinguishes the feedback loop visually (no new HTML shell).
+        for e in getattr(node, "derivation", ()) or ():
+            add_semantic(node.key, e.from_key, e.relation)
 
     return {
         "schema": "visual-editor.graph-model/21",

@@ -334,3 +334,20 @@ def test_fr6_determinism_regression_finding():
     assert check_determinism_regression([node], measured_det) == []
     # no provenance → planned==measured (both declared) → no finding
     assert check_determinism_regression([node], None) == []
+
+
+# ── REQ-20 FR-2 — ungrounded Lesson flagged by govern ──────────────────────────────────────────────
+
+def test_fr2_ungrounded_lesson_flagged():
+    from startd8.navigator.govern import Finding, check_lesson_grounding
+    from startd8.navigator.models import Node
+    from startd8.navigator.sources_retrospective import build_lesson_from_regression
+
+    ungrounded = Node(key="lesson:x", does="", category="lesson")   # no derived-from, no lives
+    f = check_lesson_grounding([ungrounded], "REQ-x.md")
+    assert len(f) == 1 and f[0].check == "FR-2" and "ungrounded" in f[0].message
+    # a grounded Lesson (built from a regression) yields none
+    grounded = build_lesson_from_regression(Finding("FR-6", "fail", "d", "node 'FR-1' ... regression.", fr="FR-1"))
+    assert check_lesson_grounding([grounded]) == []
+    # a non-lesson node is never flagged
+    assert check_lesson_grounding([Node(key="FR-1", does="", category="functional-requirements")]) == []
