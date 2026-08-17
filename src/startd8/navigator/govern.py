@@ -563,6 +563,69 @@ def recheck_verify_liveness_on_drift(nodes, changed_impl_keys, doc: str = "") ->
     return check_verify_liveness([n for n in nodes if _depends_on_changed(n)], doc)
 
 
+def check_target_unmeasured(outcome_nodes, doc: str = "") -> List[Finding]:
+    """REQ-23 FR-2 — a fact cell of the liveness layer: an outcome (``category=="objective"``) that carries
+    a ``target`` (a measurable goal) but has NO bound live signal (``target_signal`` empty) is a structural
+    GAP — a claim with no attestation (the authoring-time twin of Feature-Observability's loud-gap-for-a-
+    goal-with-no-live-signal). A bound signal → clean. Advisory (NR-1)."""
+    findings: List[Finding] = []
+    for n in outcome_nodes:
+        if getattr(n, "category", "") != "objective":
+            continue
+        attrs = getattr(n, "attributes", {}) or {}
+        if attrs.get("target", "").strip() and not attrs.get("target_signal", "").strip():
+            findings.append(Finding(
+                "FR-2", _SEVERITY_FAIL, doc or n.key,
+                f"{doc or n.key}: objective {n.key!r} carries a target but NO bound live signal — an "
+                f"unmeasured target is a claim with no attestation. Bind a `Signal:` to a live measurement "
+                f"or route to a retrospective revision.",
+                fr=n.key, ref="liveness:target-unmeasured"))
+    return findings
+
+
+def _fr_verify_is_dead(fr) -> bool:
+    """An FR fails verify-liveness when its gate is structurally dead (REQ-22). A prose-only FR (no gate)
+    is UNAUTOMATED, not dead — it doesn't count against a served outcome's roll-up."""
+    return _gate_liveness(fr)[0] == "dead-structural"
+
+
+def check_served_by_dead_fr(fr_nodes, doc: str = "") -> List[Finding]:
+    """REQ-23 FR-3 — verify-liveness (REQ-22) rolled up the serves-edge: an outcome that is SERVED (≥1 FR
+    names it in ``Serves:``) but ALL of whose realized serving FRs fail verify-liveness is a GAP — served-
+    on-paper while its guarantee is dead. Min-rolls-up: ≥1 live serving FR ⇒ clean. Reuses REQ-22 (NR-2)."""
+    by_objective: Dict[str, List] = {}
+    for fr in fr_nodes:
+        for served in (getattr(fr, "attributes", {}) or {}).get("serves", "").split(","):
+            served = served.strip()
+            if served:
+                by_objective.setdefault(served, []).append(fr)
+    findings: List[Finding] = []
+    for objective, frs in sorted(by_objective.items()):
+        realized = [f for f in frs if getattr(f, "lives", None)]
+        if realized and all(_fr_verify_is_dead(f) for f in realized):
+            findings.append(Finding(
+                "FR-3", _SEVERITY_FAIL, doc or objective,
+                f"{doc or objective}: outcome {objective!r} is served by {len(realized)} realized FR(s) but "
+                f"ALL of them fail verify-liveness (dead gates) — served-on-paper while its guarantee is "
+                f"dead. Repair a serving FR's verify or route to a retrospective revision.",
+                fr=objective, ref="liveness:served-by-a-dead-fr"))
+    return findings
+
+
+def check_liveness_layer(fr_nodes, outcome_nodes=(), doc: str = "") -> List[Finding]:
+    """REQ-23 FR-5 — the single ``liveness`` govern layer: run all present-but-dead cells (REQ-22 verify-
+    liveness + REQ-23 target-unmeasured + served-by-a-dead-FR) and report them under ONE heading — each
+    finding's ``ref`` carries a ``liveness:<cell>`` tag — so the column is enforced as one layer, not a
+    scatter. A corpus clean on all three → the layer is clean (empty)."""
+    layer: List[Finding] = [
+        Finding(f.check, f.severity, f.doc, f.message, f.fr, ref="liveness:verify-liveness")
+        for f in check_verify_liveness(fr_nodes, doc)
+    ]
+    layer += check_target_unmeasured(outcome_nodes, doc)
+    layer += check_served_by_dead_fr(fr_nodes, doc)
+    return layer
+
+
 def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
     """REQ-20 FR-2 — a Lesson (``category=="lesson"``) that is not grounded (no ``derived-from`` edge or
     no ``lives`` evidence citing its outcome) is an **ungrounded belief** (cruft, invariant 4) — a named

@@ -44,6 +44,32 @@ def _parse_objectives(text: str) -> dict:
     return {m.group(1): m.group(2).strip() for m in _OBJECTIVE_RE.finditer(text)}
 
 
+# REQ-23 FR-1: an objective often carries a measurable ``target:`` goal; an optional ``Signal:`` binds it
+# to a LIVE measurement handle (a metric name / live query). Both parsed off the objective's own line.
+_TARGET_RE = re.compile(r"(?:—|-|:)?\s*target:\s*(?P<t>.+?)(?:\.\s*Signal:|$)", re.IGNORECASE)
+_SIGNAL_RE = re.compile(r"\bSignal:\s*(?P<s>.+?)\s*$", re.IGNORECASE)
+
+
+def outcome_nodes_from_requirements(path: Path, *, text: Optional[str] = None) -> List[Node]:
+    """REQ-23 FR-1 — project each objective (``O-N``) as an **outcome** Node (``category="objective"``)
+    carrying its ``target`` (the measurable goal) and an optional ``target_signal`` (the live-measurement
+    binding) in ``attributes``. A plain projection, NOT a metric framework (NR-4). Empty target_signal →
+    the target is unmeasured (a fact the ``target-unmeasured`` check surfaces)."""
+    path = Path(path)
+    text = text if text is not None else path.read_text(encoding="utf-8")
+    out: List[Node] = []
+    for key, body in _parse_objectives(text).items():
+        tm = _TARGET_RE.search(body)
+        target = (tm.group("t").strip().rstrip(".") if tm else "")
+        sm = _SIGNAL_RE.search(body)
+        signal = (sm.group("s").strip().rstrip(".") if sm else "")
+        attrs = {"kind": "objective", "title": key, "target": target, "target_signal": signal,
+                 "section_order": "10", "provenance": "authored"}
+        out.append(Node(key=key, does=body, category="objective", orientation="outcome",
+                        lives=(NodeEvidence(type="doc", ref=f"{path.name}#{key}"),), attributes=attrs))
+    return out
+
+
 # Functional archetype — the 'what kind of requirement' a reader grasps at a glance. DERIVED lexically
 # for now (a hint, provenance=derived); an authored ``Type:`` FR field can override it later (the writer
 # spec already reserves the seam). Each → (plain label for the broadest audience, one-line gloss).
