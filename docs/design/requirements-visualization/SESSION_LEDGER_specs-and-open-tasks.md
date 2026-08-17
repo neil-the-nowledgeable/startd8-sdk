@@ -134,3 +134,5 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 > byte-identity held unedited. Build-time discovery: the card click bailed on the `<details class="sec">`
 > **ancestor** wrapper (`closest("details")`), swallowing every click — fixed to `w.contains(hit)` (inside-
 > card only) with a regression pin. Landed via a double-rebase onto a hot `main` + `--ff-only`.
+
+> **Free-text card search SPEC BUILD-READY + variant inventory 2026-08-17**: an audit of the six renderers (tree/graph/a11y/index/diff/wireframe) as distinct SOURCE×TOPOLOGY×PRESENTATION×AUDIENCE cells (`VARIANT_STATUS_navigator-renderer-inventory.md`) found free-text search the top pull-in gap (tree has it, the card view had 0). Authored `REQ-freetext-search-on-navigator-card-browse.md` (reflective det-req, 7 FRs, passes the Spec Delivery Loop stage-0 gate) + a loop handoff for a separate build session. Grounding surfaced a pre-existing bug — `pagedCards()` ignores `pf-hidden`, so status filter and paging don't intersect on the paged count today — folded into FR-5. Deprecation list stays narrow: only the ur-form hand-markdown navigators + the removed REQ-14-schema spec.
