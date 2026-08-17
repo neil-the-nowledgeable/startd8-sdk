@@ -292,6 +292,7 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
                 verify=str(fr.get("verify") or ""),
                 approve=prompts,
                 was=was,
+                verify_gate=str(fr.get("gate") or ""),   # REQ-22 FR-1: the runnable gate handle (liveness)
             )
         )
     return nodes

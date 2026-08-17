@@ -130,7 +130,7 @@ def test_fr6_construction_coupling_quarantined_to_applier():
 # ── FR-7 — additive, no new Node field ─────────────────────────────────────────────────────────────
 
 def test_fr7_no_new_node_field():
-    assert "verify" in node_field_names() and len(node_field_names()) == 19   # unchanged by REQ-24
+    assert "verify" in node_field_names() and len(node_field_names()) == 20   # +REQ-22 verify_gate; REQ-24 adds none
 
 
 # ── FR-5 — the CLI applier (dry-run default) ───────────────────────────────────────────────────────

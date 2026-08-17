@@ -131,12 +131,30 @@ def parse_was_aliases(rest: str) -> Tuple[str, Tuple[str, ...]]:
     return cleaned, aliases
 
 
-def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dict[str, str]], Optional[str], Tuple[str, ...], Tuple[str, ...], str]:
+# REQ-22 FR-1: the OPTIONAL runnable gate handle beside the prose Verify — a command / test id / named
+# fitness function. A plain field (no dispatch framework, NR-4); absent → verify is prose-only.
+_GATE = re.compile(r"(?:\*\*)?\bGate:(?:\*\*)?\s*(?P<g>.+?)(?:\.(?=\s|$)|$)", re.IGNORECASE)
+
+
+def parse_gate(rest: str) -> Tuple[str, str]:
+    """Pull an optional ``Gate: <runnable handle>`` out of an FR rest (REQ-22 FR-1)."""
+    m = _GATE.search(rest)
+    if not m:
+        return rest, ""
+    gate = m.group("g").strip().rstrip(".")
+    cleaned = (rest[: m.start()] + rest[m.end() :]).strip()
+    return cleaned, gate
+
+
+def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dict[str, str]], Optional[str], Tuple[str, ...], Tuple[str, ...], str, str]:
     sm = _SERVES.search(rest)
     serves = [s.strip() for s in sm.group(1).split(",") if s.strip()] if sm else []
     rest = _SERVES.sub("", rest).strip()
     rest, approve_prompts = parse_approve_prompts(rest)
     rest, was_aliases = parse_was_aliases(rest)
+    # REQ-22 FR-1: extract the optional Gate handle before the Lives/Verify split (same class as
+    # approve/was/name — an un-extracted label would be swallowed into a Lives ref).
+    rest, gate = parse_gate(rest)
     # Extract the semantic name BEFORE the Lives/Verify split (Name is not a Lives stop-word, so an
     # un-extracted `Name:` would be swallowed into a Lives ref — same class as approve/was).
     rest, name = parse_name(rest)
@@ -160,7 +178,7 @@ def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dic
     else:
         behavior = rest[:verify_start].strip()
         touches = []
-    return behavior, touches, verify, serves, lives, verify_ann, approve_prompts, was_aliases, name
+    return behavior, touches, verify, serves, lives, verify_ann, approve_prompts, was_aliases, name, gate
 
 
 def fr_health(fr: Dict[str, Any]) -> str:
@@ -201,6 +219,7 @@ def parse_fr_lines(text: str) -> List[Dict[str, Any]]:
             approve_prompts,
             was_aliases,
             name,
+            gate,
         ) = split_fr_fields(rest)
         fr: Dict[str, Any] = {
             "id": fid,
@@ -209,6 +228,7 @@ def parse_fr_lines(text: str) -> List[Dict[str, Any]]:
             "behavior": behavior or title,
             "touches": touches,
             "verify": verify,
+            "gate": gate,
             "serves": serves,
             "lives": lives,
             "_verify_ann": verify_ann,
@@ -239,6 +259,7 @@ def _frs_from_kit_doc(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
             "behavior": str(raw.get("behavior") or raw.get("title") or ""),
             "touches": list(raw.get("touches") or []),
             "verify": str(raw.get("verify") or ""),
+            "gate": str(raw.get("gate") or ""),
             "serves": list(raw.get("serves") or []),
             "lives": list(raw.get("lives") or []),
             "_verify_ann": raw.get("_verify_ann"),

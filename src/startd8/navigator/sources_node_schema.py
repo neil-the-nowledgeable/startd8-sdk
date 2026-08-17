@@ -53,6 +53,7 @@ _FIELD_META = {
     "approve":      ("descriptive", "authored", "REQ-17 — the human-approval gate (the FR's Approve? prompt(s))"),
     "was":          ("descriptive", "authored", "REQ-17 — the change-history alias (the FR's Was value(s))"),
     "derivation":   ("hierarchy",   "computed", "REQ-16 — the typed derivation edge (distinct from containment; regime reserved/unset)"),
+    "verify_gate":  ("descriptive", "authored", "REQ-22 — the optional runnable gate handle beside the prose verify (liveness)"),
 }
 
 

@@ -37,7 +37,7 @@ def test_lesson_is_a_node_projection_no_field_change():
     assert set(node_field_names()) == {
         "key", "does", "status", "wont", "lives", "ships_when", "confidence", "triggers",
         "children", "child_keys", "category", "orientation", "route_state", "status_facets",
-        "attributes", "verify", "approve", "was", "derivation",
+        "attributes", "verify", "approve", "was", "derivation", "verify_gate",
     }
 
 

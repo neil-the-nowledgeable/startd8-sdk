@@ -139,6 +139,10 @@ class Node:
     was: Tuple[str, ...] = ()               # the change-history alias — the FR's Was value(s)
     # REQ-16 FR-1 — the typed derivation edge (distinct from containment ``children``); regime unset.
     derivation: Tuple[DerivationEdge, ...] = ()
+    # REQ-22 FR-1 — the OPTIONAL runnable gate handle beside the prose ``verify`` (a command / test id /
+    # named fitness function). A plain field, NOT a dispatch framework; empty → the verify is prose-only
+    # and its liveness is unknown. Makes verification *live*, not merely present.
+    verify_gate: str = ""
 
     @property
     def glyph(self) -> str:
@@ -213,6 +217,7 @@ NODE_FIELD_MANIFEST: Tuple[Tuple[str, str], ...] = (
     ("approve", "REQ-17 — the human-approval gate (the FR's Approve? prompt(s))"),
     ("was", "REQ-17 — the change-history alias (the FR's Was value(s))"),
     ("derivation", "REQ-16 — the typed derivation edge (distinct from containment; regime reserved/unset)"),
+    ("verify_gate", "REQ-22 — the optional runnable gate handle beside the prose verify (liveness)"),
 )
 
 

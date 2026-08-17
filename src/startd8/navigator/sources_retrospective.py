@@ -62,6 +62,34 @@ def build_lesson_from_regression(finding, *, confidence=None) -> Node:
     )
 
 
+def build_lesson_from_liveness_gap(finding, *, confidence=None) -> Node:
+    """REQ-22 FR-6 — route a verify-liveness GAP (a present-but-dead gate) to a grounded, human-gated
+    retrospective Lesson: it ``derives-from`` the liveness finding and ``revises`` the requirement whose
+    verify went dead, proposing a fix. Same structure as :func:`build_lesson_from_regression` (propose,
+    don't dispose) — retiring/repairing the invariant requires an explicit human accept (REQ-20)."""
+    req_key = (getattr(finding, "fr", "") or getattr(finding, "check", "")).strip() or "unknown"
+    outcome_key = f"verify-liveness:{req_key}"
+    return Node(
+        key=f"lesson:{req_key}",
+        does=(f"Verify-liveness gap on {req_key!r}: its verify gate is present but DEAD (a durable green "
+              f"carrying no truth) — propose revising the requirement's verify to a live gate."),
+        category=LESSON_CATEGORY,
+        confidence=confidence,
+        lives=(NodeEvidence(type="link", ref=outcome_key, note="verify-liveness gap outcome"),),
+        derivation=(
+            DerivationEdge(from_key=outcome_key, relation=EdgeRelation.DERIVED_FROM),
+            DerivationEdge(from_key=req_key, relation=EdgeRelation.REVISES),
+        ),
+        attributes={
+            "kind": "lesson",
+            "status": LessonStatus.PROPOSED,
+            "outcome": getattr(finding, "message", ""),
+            "proposes": f"revise {req_key}: repair or retire the dead verify gate (human sign-off required)",
+            "section_order": "90",
+        },
+    )
+
+
 def _measured_confidence(node: Node, provenance) -> Optional[float]:
     """REQ-21 FR-4 — the measured join confidence for a node's regime (its Lesson's grounding
     confidence): the provenance match on the node's derivation edges, else its lives; ``None`` when no

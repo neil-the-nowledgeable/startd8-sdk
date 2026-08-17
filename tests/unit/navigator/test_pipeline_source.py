@@ -65,7 +65,7 @@ def test_no_node_field_added_by_pipeline_source():
         "key", "does", "status", "wont", "lives", "ships_when", "confidence", "triggers",
         "children", "child_keys", "category", "orientation", "route_state", "status_facets",
         "attributes",
-        "verify", "approve", "was", "derivation",
+        "verify", "approve", "was", "derivation", "verify_gate",
     }
 
 

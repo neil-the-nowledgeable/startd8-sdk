@@ -21,19 +21,19 @@ def test_lives_inside_verify_prose_is_not_evidence():
         "Touches: x. "
         "Verify: fixture REQ with `Lives: code git:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:src/x.py` builds."
     )
-    _b, _t, _v, _s, lives, _ann, _ap, _was, _n = split_fr_fields(rest)
+    _b, _t, _v, _s, lives, _ann, _ap, _was, _n, _g = split_fr_fields(rest)
     assert lives == []
 
 
 def test_approve_prompts_parsed():
     rest = "Touches: x. Approve?: does DOES match · is WON'T right?. Verify: ok."
-    _b, _t, _v, _s, _lives, _ann, prompts, _was, _n = split_fr_fields(rest)
+    _b, _t, _v, _s, _lives, _ann, prompts, _was, _n, _g = split_fr_fields(rest)
     assert prompts == ("does DOES match", "is WON'T right?")
 
 
 def test_was_aliases_parsed_and_projected():
     rest = "Touches: x. Was: old-name · prior-label. Verify: ok."
-    _b, _t, _v, _s, _lives, _ann, _ap, was, _n = split_fr_fields(rest)
+    _b, _t, _v, _s, _lives, _ann, _ap, was, _n, _g = split_fr_fields(rest)
     assert was == ("old-name", "prior-label")
 
 
@@ -41,7 +41,7 @@ def test_deterministic_name_parsed_and_not_swallowed_by_lives():
     # `Name:` is extracted before the Lives split, so it does not leak into a Lives ref.
     rest = ("Name: SDK exposes a Node surface. Touches: `src/x.py`. "
             "Lives: code src/x.py. Verify: ok.")
-    _b, _t, _v, _s, lives, _ann, _ap, _was, name = split_fr_fields(rest)
+    _b, _t, _v, _s, lives, _ann, _ap, _was, name, _g = split_fr_fields(rest)
     assert name == "SDK exposes a Node surface"
     assert [e["ref"] for e in lives] == ["src/x.py"]  # Name did not contaminate the Lives ref
 

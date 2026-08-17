@@ -500,6 +500,69 @@ def check_auto_revise_audit(audits, doc: str = "") -> List[Finding]:
     return findings
 
 
+def _gate_liveness(node) -> tuple:
+    """REQ-22 — resolve a node's verify GATE liveness WITHOUT executing (structural, NR-2/NR-3), reusing
+    ``verify_oracle``'s classifier. Returns ``(state, gate, reason)`` where state is ``live`` /
+    ``dead-structural`` (gap — doesn't resolve to a runnable command) / ``unrunnable-provenance``
+    (candidate — resolves but references a missing input) / ``no-gate``."""
+    from .verify_oracle import KIND_COMMAND, _classify_clause, _referenced_missing_path
+
+    gate = str(getattr(node, "verify_gate", "") or "").strip()
+    if not gate:
+        return ("no-gate", "", "")
+    kind, argv, reason = _classify_clause(gate)
+    if kind != KIND_COMMAND or argv is None:
+        return ("dead-structural", gate, reason)          # present but does not resolve → a FACT (gap)
+    missing = _referenced_missing_path(argv)
+    if missing:
+        return ("unrunnable-provenance", gate, f"missing input {missing}")  # a provenance CANDIDATE
+    return ("live", gate, "")
+
+
+def check_verify_liveness(nodes, doc: str = "") -> List[Finding]:
+    """REQ-22 FR-2/3/4 — flag a REALIZED node whose verify GATE is present-but-dead (a durable green
+    carrying no truth). Reuses ``verify_oracle`` (no new engine, NR-2). STRUCTURAL death (the gate no
+    longer resolves to a runnable command) ships as a **GAP** (a fact, ``_SEVERITY_FAIL``); a gate that
+    resolves but can't run for a provenance reason ships as a precision-governed **candidate**
+    (``_SEVERITY_ADVISORY``) — the absence-vs-error move (FR-4). Only realized nodes (``lives`` present)
+    are checked — an un-built node's liveness is unknown (the invariant-9 activation gate). Advisory (NR-1)."""
+    findings: List[Finding] = []
+    for n in nodes:
+        if not getattr(n, "lives", None):
+            continue
+        state, gate, reason = _gate_liveness(n)
+        if state == "dead-structural":
+            findings.append(Finding(
+                "FR-2", _SEVERITY_FAIL, doc or n.key,
+                f"{doc or n.key}: node {n.key!r} claims a verify gate {gate!r} that does NOT resolve to a "
+                f"runnable command ({reason}) — present but DEAD (a durable green carrying no truth). Fix "
+                f"the gate or route to a retrospective revision.",
+                fr=n.key, ref="gap:structural"))
+        elif state == "unrunnable-provenance":
+            findings.append(Finding(
+                "FR-2", _SEVERITY_ADVISORY, doc or n.key,
+                f"{doc or n.key}: node {n.key!r} gate {gate!r} resolves but can't run ({reason}) — "
+                f"unrunnable-here for a provenance reason (not a territory failure). A precision candidate.",
+                fr=n.key, ref="candidate:provenance"))
+    return findings
+
+
+def recheck_verify_liveness_on_drift(nodes, changed_impl_keys, doc: str = "") -> List[Finding]:
+    """REQ-22 FR-5 (the drift move) — when the implementation a gate depends on changes provenance
+    (``changed_impl_keys`` = the impl node keys whose provenance moved), re-check the liveness of gates
+    that depend on it (via a derivation edge or a lives ref to that impl), catching a gate-voiding refactor
+    at the fracture. Returns the re-check findings for exactly the affected nodes."""
+    changed = set(changed_impl_keys or ())
+
+    def _depends_on_changed(n) -> bool:
+        if any(e.from_key in changed for e in getattr(n, "derivation", ()) or ()):
+            return True
+        return any(ev.ref in changed or ev.ref.split(":")[-1] in changed
+                   for ev in getattr(n, "lives", ()) or ())
+
+    return check_verify_liveness([n for n in nodes if _depends_on_changed(n)], doc)
+
+
 def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
     """REQ-20 FR-2 — a Lesson (``category=="lesson"``) that is not grounded (no ``derived-from`` edge or
     no ``lives`` evidence citing its outcome) is an **ungrounded belief** (cruft, invariant 4) — a named
@@ -520,27 +583,34 @@ def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
 
 
 def check_realization_invariant(nodes, doc: str = "") -> List[Finding]:
-    """REQ-18 FR-5 — invariant 9: an ``llm``-regime derivation edge obligates its target node's
-    ``verify`` (the acceptance oracle) to be non-empty, firing **only once the node's ``lives`` evidence
-    is present** (mirroring the ships_when⟺lives gate) so unbuilt/spec nodes never fail. A ``deterministic``
-    or ``human`` edge imposes no such obligation. Each violation is a named finding — never a crash.
+    """REQ-18 FR-5 — invariant 9: an ``llm``-regime derivation edge obligates its target node's ``verify``
+    (the acceptance oracle) — **strengthened by REQ-22 FR-7 from *presence* to *liveness***: an obligated
+    node whose verify is EMPTY *or* whose gate is present-but-**dead** (doesn't resolve to a runnable
+    command) both violate. Fires only once ``lives`` is present (activation gate) so unbuilt nodes never
+    fail. A ``deterministic``/``human`` edge imposes no obligation. Each violation is a named finding.
     """
     from .models import RealizationRegime
     from .realization import resolve_edge_regime
 
     findings: List[Finding] = []
     for n in nodes:
-        # activation gate: an un-realized node (no lives) is never obligated; a satisfied one (verify set)
-        # passes. Only a REALIZED node with an empty oracle can violate.
-        if not getattr(n, "lives", None) or getattr(n, "verify", ""):
+        if not getattr(n, "lives", None):
+            continue  # un-realized → not obligated (activation gate)
+        verify = getattr(n, "verify", "")
+        # REQ-22 FR-7 — a verify is *satisfied* only when present AND its gate is not structurally dead;
+        # a present-but-dead verify (a durable green carrying no truth) no longer passes invariant 9.
+        satisfied = bool(verify) and _gate_liveness(n)[0] != "dead-structural"
+        if satisfied:
             continue
         for e in getattr(n, "derivation", ()):
             if resolve_edge_regime(n, e) == RealizationRegime.LLM:
+                why = ("is empty" if not verify
+                       else "is present but DEAD (its gate does not resolve to a runnable command)")
                 findings.append(Finding(
                     "FR-5", _SEVERITY_FAIL, doc or n.key,
                     f"{doc or n.key}: node {n.key!r} is realized by an llm-regime edge "
-                    f"(from {e.from_key!r}) but its verify (acceptance oracle) is empty — invariant 9 "
-                    f"requires a stochastic edge's target to carry a verify. Add a Verify: clause.",
+                    f"(from {e.from_key!r}) but its verify (acceptance oracle) {why} — invariant 9 "
+                    f"(REQ-22-strengthened) requires a stochastic edge's target to carry a LIVE verify.",
                     fr=n.key,
                 ))
                 break  # one finding per node
