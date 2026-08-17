@@ -254,6 +254,16 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   /* "what it does" — the statement, secondary serif prose under the name */
   body.nav-profiled #outline .item .ci-does{font-size:13px;line-height:1.5;color:var(--ink2);
     font-family:var(--serif);margin:4px 0 0}
+  /* at-a-glance SIGNAL STRIP — plain-label pill chips (technical detail on hover) */
+  body.nav-profiled #outline .item .sigstrip{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0 3px}
+  body.nav-profiled #outline .item .sig{font-family:var(--mono);font-size:10px;font-weight:700;
+    text-transform:uppercase;letter-spacing:.05em;padding:2px 9px;border-radius:20px;white-space:nowrap;
+    border:1px solid var(--line2);color:var(--ink2);background:var(--card);cursor:default}
+  body.nav-profiled #outline .item .sig-arch{color:var(--accent2);border-color:var(--accent2)}
+  body.nav-profiled #outline .item .sig-ground.sig-grounded{color:var(--planned);border-color:var(--planned)}
+  body.nav-profiled #outline .item .sig-ground.sig-spec{color:var(--ochre-ink);border-color:var(--ochre)}
+  body.nav-profiled #outline .item .sig-serves{color:var(--accent);border-color:var(--accent)}
+  body.nav-profiled #outline .item .sig-scope{color:var(--faint);border-color:var(--line)}
   /* "what it does" — prose reads better in the serif body than cramped mono */
   body.nav-profiled #outline .item .det{font-family:var(--serif);font-size:13.5px;line-height:1.5;
     color:var(--ink);margin:8px 0 0}
@@ -703,20 +713,36 @@ __PLAN_DATA__
               "WON’T: ":{cap:"Won’t",cls:"ci-wont"}, "WON'T: ":{cap:"Won’t",cls:"ci-wont"},
               "DEPENDS-ON: ":{cap:"Depends on",cls:"ci-dep"}, "SHIPS-WHEN: ":{cap:"Ships when",cls:"ci-dep"} };
   function structuredDet(detail){
-    var name="", rows="", stmt="", metaParts=[];
+    var name="", arch="", scope="", serves="", rows="", stmt="", metaParts=[];
     (detail||"").split("\n").forEach(function(ln){
       ln=ln.replace(/\s+$/,""); if(!ln) return;
       if(ln.indexOf("NAME → ")===0){ name=ln.slice(7); return; }   // the DIDL deterministic name (heading)
+      if(ln.indexOf("TYPE → ")===0){ arch=ln.slice(7); return; }   // archetype "label · gloss" (signal chip)
+      if(ln.indexOf("SCOPE → ")===0){ scope=ln.slice(8); return; } // "2 files"
       if(ln.indexOf("HANDLE: ")===0){ metaParts.push('<span class="ci-hd">'+esc(ln.slice(8))+'</span>'); return; }
       if(ln.indexOf("FR-HEALTH: ")===0) return;
       if(ln.indexOf("confidence: ")===0){ metaParts.unshift('<span class="ci-conf">conf '+esc(ln.slice(12))+'</span>'); return; }
       var hit=null; for(var p in _SLOT){ if(ln.indexOf(p)===0){ hit=p; break; } }
       if(hit){ var s=_SLOT[hit];
+        if(hit==="SERVES → "){ var m=ln.slice(hit.length).match(/^(O-\d+)/); if(m) serves=m[1]; }
         rows+='<div class="ci-row '+s.cls+'"><span class="ci-cap">'+s.cap+'</span>'+esc(ln.slice(hit.length))+'</div>'; }
       else { stmt+=(stmt?" ":"")+ln; }
     });
-    return { name:name, stmt:stmt, rows:rows,
+    return { name:name, arch:arch, scope:scope, serves:serves, stmt:stmt, rows:rows,
              meta:(metaParts.length?'<div class="ci-meta">'+metaParts.join(" · ")+'</div>':'') };
+  }
+  // At-a-glance SIGNAL STRIP — plain-labelled chips (technical detail on hover) for the broadest audience:
+  // archetype (what kind) · grounding (how proven, status + evidence types) · serves (purpose) · scope (size).
+  function signalStrip(item, sd){
+    var chips="";
+    if(sd.arch){ chips+='<span class="sig sig-arch" title="'+esc(sd.arch)+'">'+esc(sd.arch.split(" · ")[0])+'</span>'; }
+    var evt={}; (item.lives||[]).forEach(function(e){ if(e.type) evt[e.type]=1; });
+    var evs=Object.keys(evt).sort().join("+");
+    var gl=item.status==="grounded"?"proven":(item.status==="spec"?"drafted":(item.status||""));
+    if(gl){ chips+='<span class="sig sig-ground sig-'+esc(item.status||"")+'" title="'+esc((item.status||"")+(evs?" · "+evs:""))+'">'+esc(gl)+(evs?' · '+esc(evs):'')+'</span>'; }
+    if(sd.serves){ chips+='<span class="sig sig-serves" title="objective it serves">'+esc(sd.serves)+'</span>'; }
+    if(sd.scope){ chips+='<span class="sig sig-scope" title="files it touches">'+esc(sd.scope)+'</span>'; }
+    return chips?'<div class="sigstrip">'+chips+'</div>':'';
   }
   function renderItem(k,item,nav){
     var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
@@ -755,6 +781,7 @@ __PLAN_DATA__
         '<div class="ci-top"><span class="lbl-key">'+esc(kk)+'</span>'+badge(item.status)+'</div>'+
         (sd.name?'<div class="ci-name-h">'+esc(sd.name)+'</div>':'')+
         ((does&&does!==item.label)?'<div class="det ci-does">'+esc(does)+'</div>':'')+
+        signalStrip(item,sd)+
         (sd.stmt?'<div class="det">'+esc(sd.stmt)+'</div>':'')+
         sd.rows+livesHtml+wasHtml+sd.meta+metaHtml;
     } else {

@@ -176,6 +176,9 @@ def test_requirement_card_shows_structured_what_how_why_and_is_byte_safe():
     assert "Verify · how you’ll know" in profiled and "Serves · why it matters" in profiled  # captions
     # value-first hierarchy: the DIDL deterministic NAME leads as the large heading, above an id/status eyebrow
     assert 'class="ci-name-h"' in profiled and 'class="ci-top"' in profiled
+    # at-a-glance SIGNAL STRIP: archetype + grounding (status+evidence) + serves + scope chips
+    assert "function signalStrip" in profiled and 'class="sigstrip"' in profiled
+    assert 'class="sig sig-arch"' in profiled and "sig-ground" in profiled
     assert ".ci-name-h{font-family:var(--serif);font-size:19px" in profiled   # first + largest
     assert "body.nav-profiled #outline .item .ci-row.ci-why{border-left-color:var(--accent)" in profiled
     # app path byte-identical (structuredDet only runs when a profile is present)
