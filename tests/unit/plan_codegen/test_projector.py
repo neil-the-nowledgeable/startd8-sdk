@@ -143,6 +143,20 @@ def test_cyclic_depends_rejected_with_named_error():
         project_plan(REQ_CYCLIC)
 
 
+def test_unterminated_depends_does_not_pollute_touches():
+    # HTH hardening regression: an authored `Depends: FR-1` with NO trailing period before the next
+    # field must not leak into the Touches capture — it stops at the next field label.
+    req = REQ_PLAN_OWED.replace(
+        "Depends: FR-1. Verify: the widget passes its self-check",
+        "Depends: FR-1 Verify: the widget passes its self-check",
+    )
+    plan = project_plan(req)
+    # FR-2's edge still resolves (F-1) AND its targetFiles are clean (no "Depends"/"FR-1" token).
+    assert plan.iterations[1].depends_on == ("F-1",)
+    for f in plan.iterations[1].target_files:
+        assert "Depends" not in f and "FR-1" not in f
+
+
 def test_projector_makes_no_network_or_llm_call(monkeypatch):
     # $0 guard: any socket use inside the projector is a bug. We forbid socket.socket entirely.
     import socket

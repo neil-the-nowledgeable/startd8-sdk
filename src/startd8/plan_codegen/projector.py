@@ -71,15 +71,27 @@ _DET_CODEGEN_MARKERS = (
     "plan_codegen",
 )
 
+# The other single-line FR field labels — the boundary an authored ``Depends:`` body stops at, so
+# the span is bounded WITHOUT relying on a trailing period (HTH code-review hardening: an authored
+# ``Depends: FR-1`` immediately followed by ``Verify:`` with no period would otherwise over-capture).
+_FR_FIELD_STOP = r"(?:\*\*)?\b(?:Verify|Serves|Touches|Lives|Approve|Was|Gate|Name)\b"
+
 # A ``Depends: FR-x, FR-y`` field authored on an FR bullet — the ONLY source of a dependency edge
 # (FR-2 never-inferred). ``det_req`` recognizes ``Depends`` as a Lives-stop label but does not
-# extract it, so the projector reads it from the raw FR line.
-_DEPENDS = re.compile(r"(?:\*\*)?\bDepends:(?:\*\*)?\s*(?P<body>[^.]*)", re.IGNORECASE)
-# The whole authored ``Depends: …`` span (period-terminated) — stripped before ``parse_fr_lines`` so
-# it does not pollute the ``Touches`` capture (det-req's parser has no ``Depends`` field slot: Touches
-# runs up to Verify, and Verify swallows to EOL, so an authored Depends between them leaks into
-# Touches — a grammar gap the pilot records, FR-7).
-_DEPENDS_SPAN = re.compile(r"\s*(?:\*\*)?\bDepends:(?:\*\*)?\s*[^.]*\.?", re.IGNORECASE)
+# extract it, so the projector reads it from the raw FR line. The body stops at the next field
+# label, a period, or end-of-line (never the whole line).
+_DEPENDS = re.compile(
+    rf"(?:\*\*)?\bDepends:(?:\*\*)?\s*(?P<body>[^.\n]*?)(?=\s*{_FR_FIELD_STOP}|\.|\n|$)",
+    re.IGNORECASE,
+)
+# The whole authored ``Depends: …`` span — stripped before ``parse_fr_lines`` so it does not pollute
+# the ``Touches`` capture (det-req's parser has no ``Depends`` field slot: Touches runs up to Verify,
+# and Verify swallows to EOL, so an authored Depends between them leaks into Touches — a grammar gap
+# the pilot records, FR-7). Bounded by the next field label / period / newline (not a bare period).
+_DEPENDS_SPAN = re.compile(
+    rf"\s*(?:\*\*)?\bDepends:(?:\*\*)?\s*[^.\n]*?(?=\s*{_FR_FIELD_STOP}|\.|\n|$)\.?",
+    re.IGNORECASE,
+)
 _FR_ID = re.compile(r"FR-[\w-]+")
 _FR_LINE = re.compile(r"^- \*\*(FR-[\w-]+)\s*[—-]")
 
