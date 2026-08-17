@@ -103,6 +103,14 @@ def _node_detail(node: Node) -> str:
     # Deterministic semantic name first (identify by meaning, not the integer key alone).
     if a.get("name"):
         lines.append("NAME → " + a["name"])
+    if a.get("archetype"):   # the functional archetype (what kind of requirement) + its plain gloss
+        line = "TYPE → " + a["archetype"]
+        if a.get("archetype_gloss"):
+            line += " · " + a["archetype_gloss"]
+        lines.append(line)
+    if a.get("touches_count"):   # scope / blast-radius — how many files it touches
+        n = a["touches_count"]
+        lines.append("SCOPE → " + n + (" file" if n == "1" else " files"))
     if a.get("handle"):
         lines.append("HANDLE: " + a["handle"])
     desc = a.get("description") or node.does
@@ -111,7 +119,10 @@ def _node_detail(node: Node) -> str:
     if a.get("verify"):
         lines.append("VERIFY → " + a["verify"])
     if a.get("serves"):
-        lines.append("SERVES → " + a["serves"])
+        line = "SERVES → " + a["serves"]
+        if a.get("serves_objective"):   # the joined objective text — the 'why / system benefit'
+            line += " · " + a["serves_objective"]
+        lines.append(line)
     if a.get("fr_health"):
         lines.append("FR-HEALTH: " + a["fr_health"])
     if node.wont:

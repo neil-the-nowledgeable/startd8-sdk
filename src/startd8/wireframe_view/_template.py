@@ -233,6 +233,57 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .item .lives .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin-right:6px}
   .item .was{color:var(--faint);font-size:12px;font-family:var(--mono);margin:2px 0 0 1px}
   .item .was .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-right:6px}
+  /* ── Requirement-card readability (PROFILED NAVIGATOR ONLY — body.nav-profiled; a generated-app
+     preview has no profile → plain .item card above, byte-identical). Each requirement reads as an
+     editorial reference-card: a status-coloured spine to scan by, a FR-id tag + title, "what it does"
+     in readable serif prose, and evidence/metadata set apart as a quiet indented technical block. ── */
+  body.nav-profiled #outline .item{border-top:none;margin:11px 0;padding:12px 16px 13px 16px;
+    background:var(--card);border:1px solid var(--line);border-left:3px solid var(--st,var(--line2));
+    border-radius:9px;transition:box-shadow .16s ease,border-left-color .16s}
+  body.nav-profiled #outline .item:first-child{border-top:none}
+  body.nav-profiled #outline .item:hover{box-shadow:0 3px 15px rgba(45,33,16,.08)}
+  /* value-first hierarchy: a small id/status EYEBROW, then the DIDL NAME as the large heading */
+  body.nav-profiled #outline .item .ci-top{display:flex;align-items:center;gap:9px;margin-bottom:6px}
+  body.nav-profiled #outline .item .ci-top .lbl-key{display:inline-block;font-family:var(--mono);
+    font-size:10.5px;font-weight:700;letter-spacing:.02em;color:var(--accent);background:rgba(27,84,95,.08);
+    padding:2px 7px;border-radius:5px;flex:none}
+  body.nav-profiled #outline .item .ci-top .badge{margin-left:auto}   /* status to the right edge */
+  /* the DIDL deterministic NAME — FIRST + LARGEST: the requirement's meaning at a glance */
+  body.nav-profiled #outline .item .ci-name-h{font-family:var(--serif);font-size:19px;font-weight:600;
+    line-height:1.28;letter-spacing:-.01em;color:var(--ink);margin:0 0 4px}
+  /* "what it does" — the statement, secondary serif prose under the name */
+  body.nav-profiled #outline .item .ci-does{font-size:13px;line-height:1.5;color:var(--ink2);
+    font-family:var(--serif);margin:4px 0 0}
+  /* at-a-glance SIGNAL STRIP — plain-label pill chips (technical detail on hover) */
+  body.nav-profiled #outline .item .sigstrip{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0 3px}
+  body.nav-profiled #outline .item .sig{font-family:var(--mono);font-size:10px;font-weight:700;
+    text-transform:uppercase;letter-spacing:.05em;padding:2px 9px;border-radius:20px;white-space:nowrap;
+    border:1px solid var(--line2);color:var(--ink2);background:var(--card);cursor:default}
+  body.nav-profiled #outline .item .sig-arch{color:var(--accent2);border-color:var(--accent2)}
+  body.nav-profiled #outline .item .sig-ground.sig-grounded{color:var(--planned);border-color:var(--planned)}
+  body.nav-profiled #outline .item .sig-ground.sig-spec{color:var(--ochre-ink);border-color:var(--ochre)}
+  body.nav-profiled #outline .item .sig-serves{color:var(--accent);border-color:var(--accent)}
+  body.nav-profiled #outline .item .sig-scope{color:var(--faint);border-color:var(--line)}
+  /* "what it does" — prose reads better in the serif body than cramped mono */
+  body.nav-profiled #outline .item .det{font-family:var(--serif);font-size:13.5px;line-height:1.5;
+    color:var(--ink);margin:8px 0 0}
+  /* evidence + metadata — a quiet indented technical block set apart from the prose */
+  body.nav-profiled #outline .item .lives,
+  body.nav-profiled #outline .item .was,
+  body.nav-profiled #outline .item .node-meta{margin:8px 0 0;padding-left:11px;
+    border-left:2px solid var(--line);font-size:11.5px}
+  body.nav-profiled #outline .item .lives{color:var(--ink2)}
+  /* what/how/why captioned rows — HOW (verify) neutral, WHY (serves+objective) accented, quiet context */
+  body.nav-profiled #outline .item .ci-row{font-size:12.5px;line-height:1.5;color:var(--ink2);
+    margin:8px 0 0;padding-left:11px;border-left:2px solid var(--line)}
+  body.nav-profiled #outline .item .ci-row.ci-why{border-left-color:var(--accent);color:var(--ink)}
+  body.nav-profiled #outline .item .ci-row.ci-wont{color:var(--faint)}
+  body.nav-profiled #outline .item .ci-cap{display:block;font-family:var(--mono);font-size:9.5px;
+    font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin-bottom:2px}
+  body.nav-profiled #outline .item .ci-why .ci-cap{color:var(--accent)}
+  body.nav-profiled #outline .item .ci-meta{margin-top:8px}
+  body.nav-profiled #outline .item .ci-conf,
+  body.nav-profiled #outline .item .ci-hd{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
   .badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;
     border-radius:20px;color:#fff;white-space:nowrap}
   .b-planned{background:var(--planned)}.b-defaults{background:var(--defaults)}
@@ -654,16 +705,62 @@ __PLAN_DATA__
   }
 
   // ---------- items ----------
+  // Turn the node-detail blob (NAME →/VERIFY →/SERVES →/WON'T:/DEPENDS-ON:/confidence:) into captioned
+  // WHAT/HOW/WHY rows for the profiled requirement card. Recognised prefixes become a labelled row; the
+  // served objective (joined onto SERVES) carries the 'why it matters'; any bare line is the statement.
+  var _SLOT={ "VERIFY → ":{cap:"Verify · how you’ll know",cls:"ci-how"},
+              "SERVES → ":{cap:"Serves · why it matters",cls:"ci-why"},
+              "WON’T: ":{cap:"Won’t",cls:"ci-wont"}, "WON'T: ":{cap:"Won’t",cls:"ci-wont"},
+              "DEPENDS-ON: ":{cap:"Depends on",cls:"ci-dep"}, "SHIPS-WHEN: ":{cap:"Ships when",cls:"ci-dep"} };
+  function structuredDet(detail){
+    var name="", arch="", scope="", serves="", rows="", stmt="", metaParts=[];
+    (detail||"").split("\n").forEach(function(ln){
+      ln=ln.replace(/\s+$/,""); if(!ln) return;
+      if(ln.indexOf("NAME → ")===0){ name=ln.slice(7); return; }   // the DIDL deterministic name (heading)
+      if(ln.indexOf("TYPE → ")===0){ arch=ln.slice(7); return; }   // archetype "label · gloss" (signal chip)
+      if(ln.indexOf("SCOPE → ")===0){ scope=ln.slice(8); return; } // "2 files"
+      if(ln.indexOf("HANDLE: ")===0){ metaParts.push('<span class="ci-hd">'+esc(ln.slice(8))+'</span>'); return; }
+      if(ln.indexOf("FR-HEALTH: ")===0) return;
+      if(ln.indexOf("confidence: ")===0){ metaParts.unshift('<span class="ci-conf">conf '+esc(ln.slice(12))+'</span>'); return; }
+      var hit=null; for(var p in _SLOT){ if(ln.indexOf(p)===0){ hit=p; break; } }
+      if(hit){ var s=_SLOT[hit];
+        if(hit==="SERVES → "){ var m=ln.slice(hit.length).match(/^(O-\d+)/); if(m) serves=m[1]; }
+        rows+='<div class="ci-row '+s.cls+'"><span class="ci-cap">'+s.cap+'</span>'+esc(ln.slice(hit.length))+'</div>'; }
+      else { stmt+=(stmt?" ":"")+ln; }
+    });
+    return { name:name, arch:arch, scope:scope, serves:serves, stmt:stmt, rows:rows,
+             meta:(metaParts.length?'<div class="ci-meta">'+metaParts.join(" · ")+'</div>':'') };
+  }
+  // At-a-glance SIGNAL STRIP — plain-labelled chips (technical detail on hover) for the broadest audience:
+  // archetype (what kind) · grounding (how proven, status + evidence types) · serves (purpose) · scope (size).
+  function signalStrip(item, sd){
+    var chips="";
+    if(sd.arch){ chips+='<span class="sig sig-arch" title="'+esc(sd.arch)+'">'+esc(sd.arch.split(" · ")[0])+'</span>'; }
+    var evt={}; (item.lives||[]).forEach(function(e){ if(e.type) evt[e.type]=1; });
+    var evs=Object.keys(evt).sort().join("+");
+    var gl=item.status==="grounded"?"proven":(item.status==="spec"?"drafted":(item.status||""));
+    if(gl){ chips+='<span class="sig sig-ground sig-'+esc(item.status||"")+'" title="'+esc((item.status||"")+(evs?" · "+evs:""))+'">'+esc(gl)+(evs?' · '+esc(evs):'')+'</span>'; }
+    if(sd.serves){ chips+='<span class="sig sig-serves" title="objective it serves">'+esc(sd.serves)+'</span>'; }
+    if(sd.scope){ chips+='<span class="sig sig-scope" title="files it touches">'+esc(sd.scope)+'</span>'; }
+    return chips?'<div class="sigstrip">'+chips+'</div>':'';
+  }
   function renderItem(k,item,nav){
     var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
     // PF-1: expose the item's status as a data attribute when a domain profile is active so the
     // filter machinery (data-status selectors) can show/hide items without touching the app path.
-    if(payload.profile && item.status) w.setAttribute("data-status", item.status);
+    if(payload.profile && item.status){
+      w.setAttribute("data-status", item.status);
+      // readability: stamp the status colour as a CSS var so the card's status spine renders it
+      // (profiled-navigator only — the app path sets nothing → byte-identical).
+      var _ps=profStatus(item.status); if(_ps&&_ps.color) w.style.setProperty("--st", _ps.color);
+    }
     var mock=mockFor(k,item);
-    var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
+    // Profiled requirement card: parse the node-detail blob into labelled WHAT/HOW/WHY slots so a reader
+    // sees what it does, how it's verified, and WHY it matters (the served objective). App path (no
+    // profile) keeps the plain .det blob → byte-identical.
     var livesHtml="";
     if(item.lives&&item.lives.length&&!EU){
-      livesHtml='<div class="lives"><span class="lk">Lives</span>'+
+      livesHtml='<div class="lives"><span class="lk">Lives · evidence</span>'+
         item.lives.map(function(e){
           var t=(e.type||"ref"), r=(e.ref||"");
           return esc(t)+": "+esc(r);
@@ -674,9 +771,25 @@ __PLAN_DATA__
       wasHtml='<div class="was"><span class="lk">Was</span>'+esc(item.was.join(" · "))+'</div>';
     }
     var metaHtml=(item.meta&&!EU)?'<div class="node-meta">'+esc(item.meta)+'</div>':'';  // revealed by "Show node metadata"
-    w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
-      (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // bare node key (kept in DOM, hidden)
-      badge(item.status)+'</div>'+det+livesHtml+wasHtml+metaHtml;
+    if(payload.profile && !EU){
+      // VALUE-FIRST requirement card: the DIDL deterministic NAME leads (largest); a small id/status
+      // eyebrow; then what it does, why it matters (Serves+objective), how you'll know (Verify), evidence.
+      var sd=structuredDet(item.detail);
+      var kk=item.key||"";
+      var does=kk ? item.label.replace(new RegExp("^"+kk.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\\\$&")+"\\s*—\\s*"),"") : item.label;
+      w.innerHTML=
+        '<div class="ci-top"><span class="lbl-key">'+esc(kk)+'</span>'+badge(item.status)+'</div>'+
+        (sd.name?'<div class="ci-name-h">'+esc(sd.name)+'</div>':'')+
+        ((does&&does!==item.label)?'<div class="det ci-does">'+esc(does)+'</div>':'')+
+        signalStrip(item,sd)+
+        (sd.stmt?'<div class="det">'+esc(sd.stmt)+'</div>':'')+
+        sd.rows+livesHtml+wasHtml+sd.meta+metaHtml;
+    } else {
+      var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
+      w.innerHTML='<div class="row"><span class="lbl">'+esc(item.label)+'</span>'+
+        (item.key?'<span class="lbl-key">'+esc(item.key)+'</span>':'')+  // bare node key (kept in DOM, hidden)
+        badge(item.status)+'</div>'+det+livesHtml+wasHtml+metaHtml;
+    }
     if(mock||k==="pages"){
       var d=document.createElement("details");
       var sm=document.createElement("summary"); sm.className="drill"; sm.textContent="show a sketch";
@@ -758,6 +871,9 @@ __PLAN_DATA__
   // ---------- render the whole document from the current variant (re-run on toggle, QW-1) ----------
   function renderAll(){
     _activeFilter = null;   // PF-1: reset status filter on each full re-render (voice/depth toggle)
+    // readability: mark the body so the enhanced requirement-card styling applies to the PROFILED
+    // navigator only — a generated-app preview (no profile) keeps the plain .item card, byte-identical.
+    document.body.classList.toggle("nav-profiled", !!payload.profile);
     data=resolveVM(cur);                                       // EC-4: kit → its base voice's variant
     EU=((data.audience&&data.audience.voice)==="end_user"); s=data.summary||{};
     renderLens();                                              // EC-4: the delivery-role focus lens
