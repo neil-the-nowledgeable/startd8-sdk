@@ -57,6 +57,16 @@ Formalizing a bookend doc is **false precision** — do not do it.
    absent." The projector fires **only on the gap** — *never invent ceremony* (reflective-pairs G-5).
 5. **DIDL naming** — every kit-governed artifact carries a semantic name + readable handle + canonical ref; no
    integer-only names.
+6. **Findings interchange = SARIF (the second IR)** — a kit's `extract.py` liveness/conformance gate emits its
+   findings as **SARIF 2.1.0** (the shared finding-bus — `det-req-kit/sarif.py` already does this, reusing
+   `startd8-sdk/coverage_map/findings_sarif.py`), so a doc defect annotates a PR / IDE exactly like a code
+   finding. This is the family's tie to the NLPS's *other* IR: the **Node** is the wire-format of the document
+   half; **SARIF** is the wire-format of the **findings** half. The interchange is bidirectional and closes the
+   loop: inbound SARIF **seeds a source-doc stub** (`det-req-kit/sarif_to_req_stub.py` — the finding→REQ-stub
+   generative role), which is deliberately a **scaffold, not a factory** (loud UNFINISHED banner; the CRP /
+   human completes it — propose-don't-dispose). So `check/review/retrospect → SARIF → stub → forward loop` is
+   the machine-readable, human-gated PDCA edge. *(A `Lesson` node (REQ-20) and a SARIF result are findings-half
+   twins; a CRP review-log (Appendix A/B/C) and SARIF are its human/machine twins — reconcile, don't fork.)*
 
 ## 7. The roster
 
