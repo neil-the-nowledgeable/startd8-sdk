@@ -14,8 +14,11 @@ from pathlib import Path
 from typing import Optional
 
 from ..contractors.deterministic_providers import ProviderContext
+from ..logging_config import get_logger
 from .projector import NotPlanOwedError, project_plan
 from .render import GENERATED_MARKER, render_plan
+
+logger = get_logger(__name__)
 
 _PAIRS_WITH_LINE = re.compile(
     r"^-\s*\*\*pairsWith:\*\*\s*`?(?P<p>[^`\n]+?)`?\s*$", re.MULTILINE
@@ -35,15 +38,29 @@ class DetPlanProjectorProvider:
         req_path = self._resolve_req(content, context)
         if req_path is None or not req_path.is_file():
             # Owned plan present but the paired req can't be resolved → cannot verify → not in-sync
-            # (safe: the caller falls through rather than skipping a stale file).
+            # (safe: the caller falls through rather than skipping a stale file). Logged at DEBUG so
+            # "why wasn't my clean plan $0-skipped?" is diagnosable in Loki (the caller only logs on
+            # a raised exception; a silent-False return would otherwise be invisible).
+            logger.debug(
+                "det-plan %s: paired req unresolved (%s) — not in-sync", path, req_path
+            )
             return False
         try:
             req_text = req_path.read_text(encoding="utf-8")
-        except OSError:
+        except OSError as exc:
+            logger.debug(
+                "det-plan %s: cannot read paired req %s: %s", path, req_path, exc
+            )
             return False
         try:
             plan = project_plan(req_text, req_path=req_path)
-        except (NotPlanOwedError, ValueError):
+        except (NotPlanOwedError, ValueError) as exc:
+            logger.debug(
+                "det-plan %s: paired req %s no longer projects (%s) — not in-sync",
+                path,
+                req_path,
+                exc,
+            )
             return False
         return render_plan(plan) == content
 
