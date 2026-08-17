@@ -807,6 +807,63 @@ def run_judgment_rung(rung: JudgmentRung, candidates=(), doc: str = "") -> List[
     return out
 
 
+# ── REQ-25 FR-4 — the LABELED FIXTURE SET that grounds the precision gate ────────────────────────────
+#
+# A judgment-rung's ``precision`` is not a hand-passed magic float — it is MEASURED by running a candidate
+# judge over a labeled fixture set and computing precision (the NR-4 metric: a false GAP is the enemy, so
+# precision, not recall). Only a measured precision at/above the threshold — AND a verify-live judge (FR-6)
+# — un-parks the rung. The fixtures are the residual SEMANTIC cases the deterministic fact-rung can't catch.
+
+@dataclass(frozen=True)
+class JudgmentFixture:
+    """One labeled evaluation case for a hypothesis cell's judgment-rung. ``label`` is the ground truth for
+    the POSITIVE class (``True`` = inert / violated / dead). ``input`` is the case a candidate judge sees."""
+
+    cell: str
+    id: str
+    label: bool
+    input: Dict[str, Any] = field(default_factory=dict)
+    name: str = ""
+    rationale: str = ""
+
+
+def load_judgment_fixtures(path) -> List["JudgmentFixture"]:
+    """Load the labeled fixture set (a ``{"fixtures": [...]}`` JSON doc). Each entry → a
+    :class:`JudgmentFixture`. A missing/malformed file raises (the caller decides — an absent fixture set
+    keeps every rung parked, which is the safe default)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    rows = data.get("fixtures", data) if isinstance(data, dict) else data
+    return [JudgmentFixture(cell=str(d["cell"]), id=str(d["id"]), label=bool(d["label"]),
+                            input=dict(d.get("input", {})), name=str(d.get("name", "")),
+                            rationale=str(d.get("rationale", ""))) for d in rows]
+
+
+def measure_precision(fixtures, judge) -> "float | None":
+    """Precision — ``TP / (TP + FP)`` — of a candidate ``judge`` (``input -> bool``, ``True`` = predicts the
+    positive class) over labeled ``fixtures``. NR-4 gates on PRECISION, not recall: a false positive is a
+    durable-red-carrying-no-truth, so a judge that cries wolf scores low and stays parked. Returns ``None``
+    when the judge predicts NO positives (precision undefined → un-provable → parked)."""
+    tp = fp = 0
+    for fx in fixtures:
+        if judge(getattr(fx, "input", {})):
+            if fx.label:
+                tp += 1
+            else:
+                fp += 1
+    return (tp / (tp + fp)) if (tp + fp) else None
+
+
+def measured_judgment_rung(cell: str, fixtures, judge, *, judge_node=None) -> "JudgmentRung":
+    """FR-4 grounding — build a :class:`JudgmentRung` whose ``precision`` is MEASURED over the ``cell``'s
+    labeled fixtures (not a hand-passed float), with ``judge_verify_live`` derived from ``judge_node``'s own
+    verify gate (FR-6 dogfood). The rung un-parks (via :func:`is_unparked`) iff that measured precision
+    clears :data:`PRECISION_THRESHOLD` AND the judge is verify-live — so un-parking is grounded in data."""
+    cell_fx = [f for f in fixtures if f.cell == cell]
+    precision = measure_precision(cell_fx, judge)
+    live = bool(judge_node is not None and _gate_liveness(judge_node)[0] == "live")
+    return JudgmentRung(cell=cell, precision=precision, judge_verify_live=live)
+
+
 def check_liveness_layer(
     fr_nodes, outcome_nodes=(), doc: str = "", *,
     repo_root=None, changed_provenance_keys=(), judgment_rungs=(),
