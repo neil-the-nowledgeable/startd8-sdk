@@ -22,6 +22,23 @@ from startd8.navigator.sources_requirements import (
 )
 
 
+def test_served_objective_text_is_joined_onto_the_fr_for_the_why(tmp_path):
+    # The card conveys 'why it matters' by joining Serves: O-N to the objective's value statement (the
+    # objective text lives in the Objectives section; the FR only names the id).
+    doc = tmp_path / "REQ-fx.md"
+    doc.write_text(
+        "# Fx — Requirements\n\n## Objectives\n"
+        "- **O-1:** Make the thing observable — target: a reader sees the value.\n\n"
+        "## Functional requirements\n"
+        "- **FR-1 — Do it.** The thing happens. Name: Do the thing. Verify: it happened. Serves: O-1\n",
+        encoding="utf-8",
+    )
+    nodes = nodes_from_requirements(doc)
+    a = nodes[0].attributes
+    assert a["serves"] == "O-1"
+    assert a["serves_objective"] == "Make the thing observable — target: a reader sees the value."
+
+
 def test_initiative_slug_strips_the_req_plan_brand_for_didl_canonical():
     # DIDL: the canonical initiative must NOT carry the REQ-/PLAN- content-type brand — strip both the
     # integer-led (REQ-01-) and the semantic (REQ-<slug>) filename forms.

@@ -35,6 +35,15 @@ def _initiative_slug(path: Path) -> str:
     return re.sub(r"^(?:REQ|PLAN)-(?:\d+-)?", "", Path(path).stem, flags=re.IGNORECASE) or "requirements"
 
 
+_OBJECTIVE_RE = re.compile(r"^- \*\*(O-\d+):\*\*\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _parse_objectives(text: str) -> dict:
+    """Map each objective id (``O-1``) → its text, so an FR's ``Serves: O-1`` can carry the objective's
+    value statement (the 'why / system benefit' a reader otherwise can't see on the card)."""
+    return {m.group(1): m.group(2).strip() for m in _OBJECTIVE_RE.finditer(text)}
+
+
 def _lives_from_touches(
     touches: List[str],
     existing_refs: set,
@@ -143,6 +152,7 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
     text = path.read_text(encoding="utf-8")
     frs = parse_fr_lines_prefer_kit(text)
     repo_root = Path(repo) if repo else _guess_repo(path)
+    objectives = _parse_objectives(text)   # O-N → its value statement, for the Serves join (the 'why')
     nodes: List[Node] = []
     for fr in frs:
         explicit = tuple(
@@ -211,6 +221,11 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
             "section_order": "30",
             "provenance": "authored",
         }
+        # Join the served objective's text so the card can show the 'why / system benefit' (the FR only
+        # names Serves: O-N; the objective's value statement lives in the Objectives section).
+        served = [objectives[s] for s in (fr.get("serves") or []) if s in objectives]
+        if served:
+            attrs["serves_objective"] = " · ".join(served)
         if prompts:
             attrs["approve_prompts"] = " · ".join(prompts)
         if was:

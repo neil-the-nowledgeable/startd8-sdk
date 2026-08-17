@@ -165,6 +165,19 @@ def test_view_definition_shows_every_region_display_logic_template():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+def test_requirement_card_shows_structured_what_how_why_and_is_byte_safe():
+    # The profiled card parses the node-detail blob into captioned WHAT/HOW/WHY slots (Verify = how you'll
+    # know, Serves = why it matters). Client-side machinery ships; the app path keeps the plain .det blob.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert "function structuredDet" in profiled                       # the blob→slots parser
+    assert "payload.profile?structuredDet(item.detail)" in profiled   # profiled card uses it; app path does not
+    assert "Verify · how you’ll know" in profiled and "Serves · why it matters" in profiled  # captions
+    assert "body.nav-profiled #outline .item .ci-row.ci-why{border-left-color:var(--accent)" in profiled
+    # app path byte-identical (structuredDet only runs when a profile is present)
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
 def test_requirement_card_readability_is_profiled_navigator_only_and_byte_safe():
     # frontend-design: the editorial requirement-card styling (status spine, FR-id tag, serif prose,
     # evidence block) is scoped to body.nav-profiled so a generated-app preview (no profile) keeps the
