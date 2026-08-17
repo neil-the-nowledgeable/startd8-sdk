@@ -1,19 +1,40 @@
 # Standard — the det-doc-kit `$0` PROJECTOR pattern
 
-**Date:** 2026-08-17 · **Type:** extracted standard (Hansei / `/reflective-retrospective`) · **Status:** proved-once
+**Date:** 2026-08-17 · **Type:** extracted standard (Hansei / `/reflective-retrospective`) · **Status:** proved-once + cold-adopter-hardened (simulated; not yet independently adopted)
 **Proved by:** REQ-29 — `src/startd8/plan_codegen/` (the det-plan projector), shipped `35e75c89`, hardened `33606c12`.
+**Hardened by:** a `/reflective-adoption` **cold-adopter dry-run** (2026-08-17) that tried to build the det-crp projector
+from this doc alone and found the gaps §0/§Part-6 below close.
 **Governs:** every future det-doc-kit **projector** (the `det-crp`, `det-handoff`, `det-howto`, `det-ledger` generators).
 **Grounded in:** the working code + `PILOT_REPORT_REQ-29-det-plan-projector.md`, not aspiration.
 
 > **One line:** a det-doc-kit projector is a `$0`, LLM-free, pure function of an upstream authored doc, shaped as a
-> **5-part mirror of `backend_codegen`**, whose "never-inferred" is only as real as the *authored fields it can trace
-> to*, accepted by the **golden-diff method**, and whose SARIF is **imported, never vendored**.
+> **5-part mirror of `backend_codegen`** + the **6th honesty part** (gate · maturity · DIDL · back-ref), whose
+> "never-inferred" is only as real as the *authored fields it can trace to*, accepted by the **golden-diff method**,
+> and whose SARIF is **imported, never vendored**.
 
 ## Why this is a standard now (Mottainai — don't re-derive it)
 
 REQ-29 built the **first** projector in the det-doc-kit family. The next four members (`det-crp`, `det-handoff`,
 `det-howto`, `det-ledger`) will each need a projector. Rather than re-derive the shape from `backend_codegen`
-each time (and re-hit the same two traps below), this codifies what the first build *actually proved*.
+each time (and re-hit the same traps below), this codifies what the first build *actually proved*.
+
+## §0. Preconditions — STEP 0 before any code (cold-adopter dry-run, GAP-A/B)
+
+A cold adopter who skipped these hit a wall immediately. Do them **first**, in order:
+
+1. **The target format grammar must already exist.** Part 3 validates against `SCHEMA_det-<doc>-0.1.md` §-conformance;
+   the kit owns that grammar (I-2). If it doesn't exist yet, **author it first** (charter §9 sequencing) — you cannot
+   project into a format that isn't specified. *(det-plan had `SCHEMA_det-plan-0.1` authored before REQ-29; det-crp does
+   **not** yet — so det-crp is format-blocked until its SCHEMA lands.)*
+2. **Name the single upstream authored source, and confirm it is authored — not generated.** The projector is a pure
+   function of ONE upstream doc (`<source>_text`). Before building, answer: *what exact doc is the source, and is it
+   human-authored?* A source that is itself an LLM/compiler output (e.g. det-crp's review-log may be produced by the
+   `new-cnvrg-rvw-prmpt` compiler, and lives embedded as an Appendix-A/B/C section inside a req/plan doc — not a
+   standalone file) **violates the "authored doc" premise** and needs resolving (extract the authored sub-part, or treat
+   the compiler as the projector). *(det-plan's source was unambiguous: one `REQ-*.md`. det-crp's is not — resolve it
+   before writing `projector.py`.)*
+3. **Locate a hand-authored golden instance** to run the acceptance golden-diff against (below), or confirm the cell is
+   demand-clearing (no golden → accept on conformance alone).
 
 ## The 5-part shape (mirror `backend_codegen`, essentials-only)
 
@@ -26,6 +47,20 @@ Each clause cites the REQ-29 file that proved it. A new projector `det-<doc>` fi
 | **3. `conformance.py`** | `plan_codegen/conformance.py` — `validate_plan` + `findings_to_sarif` | Validates the output against the format §-conformance + liveness; emits findings as SARIF **by importing** `coverage_map/findings_sarif` (`conformance.py:14`) — **never vendor a copy** (charter §5). |
 | **4. `provider.py`** | `plan_codegen/provider.py` — `DetPlanProjectorProvider` | A `DeterministicFileProvider`: `owns()` = marker present; `is_in_sync()` = re-project from source and compare bytes. Silent-degradation paths **log at DEBUG** (`get_logger(__name__)`) so a non-skip is diagnosable. |
 | **5. CLI + entry-point** | `generate plan` in `cli_generate.py`; `det-plan-projector = …` in `pyproject.toml` | `startd8 generate <doc>` drives it; the provider registers under `startd8.contractors.deterministic_providers`. A **CliRunner test** must exercise the exit-code contract (write / stdout / skip / `--check` drift / SARIF). |
+
+## Part 6 — the honesty behaviors (the charter invariants the shape must carry)
+
+> **Cold-adopter dry-run finding (GAP-C/D/E/F):** the 5-part shape above captures the *mechanics* but the first
+> draft of this standard **dropped three charter invariants that det-plan actually implemented** — a cold adopter
+> following only the shape would ship a projector missing the gate and the maturity stamp and not know it. These are
+> not optional; they are charter §6 invariants that manifest as projector *behavior*. Every projector carries them:
+
+| Behavior | REQ-29 instance | Rule (charter ref) |
+|----------|-----------------|--------------------|
+| **6a. Solo-vs-gap gate** | `is_plan_owed()` → `NotPlanOwedError`; a solo REQ projects **nothing**, reported skipped, exit 0 | Fire **only** when a companion is *owed*; never invent ceremony for a solo-by-design source (charter §6.4). |
+| **6b. Anti-inflation maturity** | render stamps `maturity: 0.1`; `validate_*` rejects an inflated stamp | A *projected* artifact starts at the lowest rung and never claims unearned hardening (charter inv-3). |
+| **6c. DIDL naming** | `naming.name_forms(...)` → the projected doc's `name`/`handle`/`ref` | Every projected artifact carries a semantic name + readable handle + canonical ref; no integer-only names (charter inv-5). |
+| **6d. Source back-reference** | the render embeds `pairsWith: <source>`; the provider re-resolves the source from it | The rendered doc MUST embed a resolvable pointer to its source, or `provider.is_in_sync` can't re-project to compare. |
 
 ## The two load-bearing invariants the pilot proved
 
@@ -77,10 +112,23 @@ cell) is accepted by **§-conformance + zero findings** instead (REQ-16/17).
 - **Spread:** this standard is the input to the next `/reflective-requirements` for `det-crp-kit` /
   `det-handoff-kit`. Each builds the same 5-part shape; each runs its own golden-diff; each audits I-1 against its
   own source grammar first.
-- **Feed the forward loop:** the `det-crp` projector's source grammar is the CRP focus + Appendix-A/B/C review-log
-  — audit *those* fields for I-1 before claiming `$0`.
+- **Feed the forward loop:** the `det-crp` projector's source is the CRP focus + Appendix-A/B/C review-log — but the
+  cold-adopter dry-run found det-crp is **blocked on §0**: (a) no `SCHEMA_det-crp-0.1.md` exists yet, and (b) its source
+  is an *embedded* review-log section possibly produced by the `new-cnvrg-rvw-prmpt` **compiler** (generated, not
+  authored). Resolve §0.1 (author the format) and §0.2 (define the authored source) **before** writing det-crp's
+  `projector.py`; then audit its fields for I-1.
 - **Convergence note:** the SDK-owns-projector / kit-owns-format split (I-2) independently matches
   `backend_codegen`'s provider pattern — cite, don't re-fork.
 
-*proved-once — one projector (det-plan) establishes the shape; it becomes a full standard when a second projector
-(det-crp/det-handoff) adopts it without friction (the `/reflective-adoption` gate).*
+## Adoption ledger
+
+| Adoption | Kind | Result | Friction folded back |
+|----------|------|--------|----------------------|
+| REQ-29 five-pilot (format, iter-1) | across req *instances* (same corpus) | format hardened | G-1/G-2/G-3 → `SCHEMA_det-plan-0.1 §2/§3` |
+| Cold-adopter dry-run → det-crp (2026-08-17) | simulated, single-agent | standard hardened | GAP-A/B → §0 preconditions; GAP-C/D/E/F → Part 6 |
+| *det-crp projector build* | **pending** — the first *real* second-consumer adoption | — | (the true `/reflective-adoption` gate) |
+
+*proved-once + cold-adopter-hardened — one projector (det-plan) establishes the shape, and a simulated cold-adopter
+closed the shape→build-spec gap. It becomes a **full** standard only when a second projector (det-crp/det-handoff) is
+actually built against it without new friction — and most honestly when an **independent** adopter does it (this
+dry-run was single-agent; I carried context the doc should hold). That independent build is the real `/reflective-adoption` gate.*
