@@ -220,11 +220,14 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
             fr.get("touches") or [], {e.ref for e in explicit}, repo_root
         )
         lives = explicit + tuple(from_touches)
-        # Recompute health after prefer_git upgrades soft→strong (EVIDENCE-1).
+        # Seat-req FR-4 (R1-F1): the evidence-gate HEALTH class must be computed from AUTHORED ``Lives:``
+        # ONLY — a mined ``Touches:`` ref is ``provenance: derived`` (note "from Touches") and MUST NOT
+        # clear the done-claim gate, or the SDK twin silently disagrees with ``req-health.mjs`` /
+        # ``extract.py`` (which see only authored lives). Recompute after prefer_git upgrades (EVIDENCE-1).
         health = fr_health(
             {
                 **fr,
-                "lives": [{"type": e.type, "ref": e.ref} for e in lives],
+                "lives": [{"type": e.type, "ref": e.ref} for e in explicit],
             }
         )
         # A code Lives grounds the FR only if it RESOLVES — a git-anchored ref (exists at a commit)

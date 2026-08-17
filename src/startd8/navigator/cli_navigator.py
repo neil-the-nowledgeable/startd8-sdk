@@ -130,6 +130,19 @@ def build(
                 console.print("[red]error:[/red] --requirements is required for source=requirements")
                 raise typer.Exit(_EXIT_ERR)
             nodes = nodes_from_requirements(requirements)
+            # Seat-req FR-6 (R1-F4): the parse-loss FLOOR — the projection must not SILENTLY drop a
+            # hard-wrapped FR. Assert the projected node count equals the source's FR-marker count; a
+            # mismatch (a dropped FR) exits non-zero with a named parse-loss (symmetry with FR-3's
+            # fail-loud round-trip gate — the same round-trip must not lose FRs on the render side).
+            import re as _re
+            _markers = len(_re.findall(r"^- \*\*FR-", requirements.read_text(encoding="utf-8"), _re.MULTILINE))
+            if _markers and len(nodes) != _markers:
+                console.print(
+                    f"[red]error:[/red] parse-loss — {len(nodes)} node(s) projected from {_markers} FR "
+                    f"marker(s) in {Path(requirements).name}: a hard-wrapped FR dropped fields the "
+                    f"per-line parser can't see. Rejoin the FR to one physical line."
+                )
+                raise typer.Exit(_EXIT_ERR)
             # FR-17: masthead identity (eyebrow=key · headline=H1 title · sub=semantic name) derived
             # from THIS requirement, not the static 'This spec' / 'A first look at this spec' copy.
             profile = requirements_profile_for(requirements)

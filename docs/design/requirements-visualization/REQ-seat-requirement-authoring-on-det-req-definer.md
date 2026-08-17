@@ -49,6 +49,20 @@
 
 ---
 
+## 0.3 Delivery split (2026-08-16 — the loop's ownership pass)
+
+> The planning pass mapped each FR to its OWNING repo. This spec spans three: only a small SDK slice is
+> navigator-internal; the bulk is the dev-os Visual Requirements Definer + the ContextCore a11y consumer,
+> **delegated to their dev teams via handoff docs** (per the operator's instruction).
+
+| FR | Owner | Status |
+|----|-------|--------|
+| **FR-4 (SDK part) — the health twin** | **startd8-sdk** | ✅ **BUILT** — `sources_requirements.py` now computes the FR-4 evidence-gate health class from **authored `Lives:` only**; a mined `Touches:` ref (`provenance: derived`) no longer clears the done-claim gate (R1-F1 fixed — the SDK twin now agrees with `req-health.mjs`/`extract.py`). |
+| **FR-6 — SDK navigator + parse-loss floor** | **startd8-sdk** | ✅ **BUILT** — `navigator build --source requirements` now exits non-zero with a named **parse-loss** when the projected node count ≠ the source's FR-marker count (R1-F4 — symmetry with FR-3's fail-loud gate). |
+| FR-1, FR-2 (Definer emit + inspector), FR-3, FR-5 (roundtrip), FR-4 (`req-health.mjs`/`extract.py` twins), FR-8 (HOWTO §6), FR-11 (cold-start) | **dev-os** | 🔵 **DELEGATED** → `dev-os/HANDOFF_seat-requirement-authoring-definer-side.md` |
+| FR-7 (CC a11y consumer) | **ContextCore** | 🔵 **DELEGATED** → `ContextCore/HANDOFF_seat-requirement-a11y-consumer.md` |
+| FR-9 (DIDL naming), FR-10 (Panel sibling) | doc-only | ✅ satisfied by this doc's DIDL header + the Panel cross-link |
+
 ## Overview
 
 Make **requirement authoring** the startd8/dev-os differentiator: an operator seats NODE-SCHEMA
