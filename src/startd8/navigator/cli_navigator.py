@@ -769,18 +769,22 @@ def revise_apply_cmd(
     commit: bool = typer.Option(False, "--commit", help="with --apply on proof, git-commit the written "
         "contract so the audit's revert_ref names a real commit (REQ-24 H3); off → the write is left "
         "uncommitted for the human to stage"),
+    kind: str = typer.Option("backend", "--kind", help="the DETERMINISTIC output kind to byte-identity-"
+        "guard against (REQ-24 H2): backend (default) | scaffold. A non-deterministic / polyglot kind "
+        "has no regenerator → the revise fails safe to `human` (byte-identity is unprovable for LLM output)"),
 ) -> None:
     """REQ-24 — apply a revise's concrete edit THROUGH a real byte-identity guard (regenerate the `$0`
     product + hash-compare). Auto-applies ONLY when the guard proves the product unchanged; any diff →
     `human` (the contract is left byte-identical). Dry-run by default — pass `--apply` to write on proof.
 
     The edit comes from `--edit`, or is DERIVED from `--lesson` when it carries a concrete `revise_edit`
-    (the Lesson→ReviseEdit producer, REQ-24 H1); a lesson without one still requires `--edit`."""
+    (the Lesson→ReviseEdit producer, REQ-24 H1); a lesson without one still requires `--edit`. `--kind`
+    selects which deterministic product is guarded (REQ-24 H2); a polyglot/LLM kind fails safe to human."""
     import subprocess
     from datetime import datetime, timezone
 
     from .project import nodes_from_json
-    from .revise_apply import apply_revise
+    from .revise_apply import apply_revise, is_deterministic_kind
     from .revise_tier import ReviseEditError, eligibility_of, parse_revise_edit, revise_edit_from_lesson
 
     try:
@@ -815,7 +819,7 @@ def revise_apply_cmd(
 
     try:
         audit = apply_revise(schema, edit_obj, lesson_node, elig,
-                             timestamp=timestamp, revert_ref=revert_ref, dry_run=not apply)
+                             timestamp=timestamp, revert_ref=revert_ref, dry_run=not apply, kind=kind)
     except OSError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)
@@ -841,7 +845,11 @@ def revise_apply_cmd(
             except Exception:
                 committed = " [yellow](commit skipped: git unavailable)[/yellow]"
         console.print(f"[green]{verb}[/green]{committed}: revise of {audit.target!r} — guard proved the "
-                      f"$0 product byte-identical. audit: lesson={audit.lesson} revert={audit.revert_ref}")
+                      f"{kind} product byte-identical. audit: lesson={audit.lesson} revert={audit.revert_ref}")
+    elif not is_deterministic_kind(kind):
+        console.print(f"[yellow]human[/yellow]: `--kind {kind}` is non-deterministic (polyglot / LLM) — "
+                      "it has no byte-identity regenerator, so the revise can't be auto-proven and stays "
+                      "human by construction. The contract is untouched.")
     else:
         console.print("[yellow]human[/yellow]: not auto-applied — the tier is not `auto` or the guard "
                       "did not prove the product unchanged. The contract is untouched; propose to a human.")

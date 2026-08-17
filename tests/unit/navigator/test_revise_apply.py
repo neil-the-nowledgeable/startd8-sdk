@@ -15,7 +15,13 @@ import pytest
 
 from startd8.navigator.govern import Finding
 from startd8.navigator.models import node_field_names
-from startd8.navigator.revise_apply import apply_revise, byte_identity_guard
+from startd8.navigator.revise_apply import (
+    _PROVENANCE_MARKERS,
+    apply_revise,
+    byte_identity_guard,
+    is_deterministic_kind,
+    resolve_regenerator,
+)
 from startd8.navigator.revise_tier import (
     ReviseEdit,
     ReviseEditError,
@@ -131,6 +137,68 @@ def test_fr6_construction_coupling_quarantined_to_applier():
 
 def test_fr7_no_new_node_field():
     assert "verify" in node_field_names() and len(node_field_names()) == 20   # +REQ-22 verify_gate; REQ-24 adds none
+
+
+# ── H2 — the guard is pluggable across DETERMINISTIC output kinds; polyglot fails safe ──────────────
+
+# a minimal scaffold manifest (app.yaml); a comment edit changes only the manifest-sha256 stamp, a
+# rename changes real content (pyproject name etc.) — the scaffold analogue of the schema fixtures.
+_MANIFEST = "app:\n  name: demo\n  package: app\n"
+_SCAFFOLD_IDENTICAL = ReviseEdit("app", "app.yaml", "package: app", "package: app  # the import package")
+_SCAFFOLD_CHANGING = ReviseEdit("app", "app.yaml", "name: demo", "name: renamed")
+
+
+def test_h2_registry_resolves_deterministic_kinds_only():
+    assert resolve_regenerator("backend") is not None
+    assert resolve_regenerator("scaffold") is not None
+    assert resolve_regenerator(None) is not None                     # default = backend
+    assert resolve_regenerator("") is not None                       # empty → default backend (like None)
+    for nondet in ("polyglot", "go", "nodejs", "unknown-kind"):
+        assert resolve_regenerator(nondet) is None
+        assert is_deterministic_kind(nondet) is False
+    assert is_deterministic_kind("scaffold") is True
+
+
+def test_h2_provenance_markers_cover_the_whole_deterministic_family():
+    """Regression guard for the H2 build-time discovery: a kind whose source-fingerprint stamp isn't
+    stripped can NEVER pass the guard. The marker set must cover every regenerator's stamp."""
+    for stamp in ("schema-sha256:", "manifest-sha256:", "views-sha256:"):
+        assert stamp in _PROVENANCE_MARKERS
+
+
+def test_h2_scaffold_kind_guard_true_for_comment_false_for_rename():
+    assert byte_identity_guard(_MANIFEST, _SCAFFOLD_IDENTICAL, kind="scaffold")() is True
+    assert byte_identity_guard(_MANIFEST, _SCAFFOLD_CHANGING, kind="scaffold")() is False
+
+
+def test_h2_polyglot_kind_guard_always_false_failsafe():
+    """A non-deterministic / polyglot kind has no regenerator → byte-identity unprovable → guard False
+    (→ human), even for an edit that would be byte-identical on a deterministic kind."""
+    assert byte_identity_guard(_MANIFEST, _SCAFFOLD_IDENTICAL, kind="polyglot")() is False
+    assert byte_identity_guard(_SCHEMA, _IDENTICAL_EDIT, kind="go")() is False
+
+
+def test_h2_apply_revise_scaffold_kind_auto_eligible(tmp_path):
+    manifest = tmp_path / "app.yaml"
+    manifest.write_text(_MANIFEST, encoding="utf-8")
+    lesson = _lesson(0.95)
+    elig = eligibility_of(lesson, byte_identical=True, effects=[])
+    audit = apply_revise(manifest, _SCAFFOLD_IDENTICAL, lesson, elig, timestamp="t", revert_ref="r",
+                         dry_run=False, kind="scaffold")
+    assert audit is not None                                          # the scaffold product is guarded too
+    assert "# the import package" in manifest.read_text(encoding="utf-8")
+
+
+def test_h2_apply_revise_polyglot_kind_stays_human(tmp_path):
+    """Even an eligible lesson + a would-be-identical edit stays human for a non-deterministic kind."""
+    schema = tmp_path / "schema.prisma"
+    schema.write_text(_SCHEMA, encoding="utf-8")
+    lesson = _lesson(0.95)
+    elig = eligibility_of(lesson, byte_identical=True, effects=[])
+    audit = apply_revise(schema, _IDENTICAL_EDIT, lesson, elig, timestamp="t", revert_ref="r",
+                         dry_run=False, kind="polyglot")
+    assert audit is None                                             # fail-safe → human
+    assert schema.read_text(encoding="utf-8") == _SCHEMA             # contract untouched
 
 
 # ── FR-5 — the CLI applier (dry-run default) ───────────────────────────────────────────────────────
