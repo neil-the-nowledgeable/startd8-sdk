@@ -115,3 +115,24 @@ def test_runner_never_imports_navigator_evaluate():
         # No call to classify(...) / evaluate(...).
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             assert node.func.id not in ("classify", "evaluate")
+
+
+def test_unresolved_console_script_is_error_not_executed(tmp_path, monkeypatch):
+    """Harvest H1 (security): a bare verb that is NOT pytest/python and has no app/bin entry point
+    (e.g. `rm`) must fail loud as ERROR — never fall through to a sandbox-PATH exec."""
+    ran = {"called": False}
+
+    def _boom(*a, **k):
+        ran["called"] = True
+        raise AssertionError("run_sandboxed must not be called for an unresolved console-script")
+
+    monkeypatch.setattr(runner_mod, "run_sandboxed", _boom)
+    from startd8.oracle_loop.grammar import ParsedClause, KIND_ONESHOT
+    from startd8.oracle_loop.runner import _run_oneshot
+    from startd8.benchmark_matrix.sandbox import SandboxConfig
+
+    clause = ParsedClause(fr_id="FR-1", kind=KIND_ONESHOT,
+                          command_argv=("rm", "-rf", "app"), is_console_script=True)
+    v = _run_oneshot(clause, tmp_path, SandboxConfig())
+    assert v.verdict == VERDICT_ERROR and "unresolved console-script" in v.reason
+    assert ran["called"] is False   # never executed

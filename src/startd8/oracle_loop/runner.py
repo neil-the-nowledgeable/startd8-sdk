@@ -57,21 +57,26 @@ def _probe_descriptor(p: ProbeSpec) -> str:
     return f"{p.method} {p.path}{body} -> {p.expected_status}"
 
 
-def _resolve_oneshot_cmd(clause: ParsedClause, app_root: Path) -> List[str]:
-    """Resolve a one-shot clause's argv to a runnable command.
+def _resolve_oneshot_cmd(clause: ParsedClause, app_root: Path) -> Optional[List[str]]:
+    """Resolve a one-shot clause's argv to a runnable command, or ``None`` if not allow-listed.
 
-    A ``pytest`` / ``python`` verb runs as-is. A bare console-script token is resolved against the
-    app's ``bin/`` (a prepared venv the deploy harness built) when present, else left as the bare
-    token (the sandbox PATH resolves it). This is NOT a host-PATH lookup of arbitrary binaries — the
-    grammar already constrained the first token to a bare name.
+    The one-shot allow-list is CLOSED: ``pytest`` / ``python`` run as-is; a bare console-script token
+    is runnable ONLY when it resolves to the app's own ``bin/`` entry point (the venv the deploy
+    harness built). An unresolved bare token (``rm`` / ``curl`` / ``sh`` — anything that is not a real
+    app entry point) returns ``None`` → the runner fails it loud as ``error`` rather than executing an
+    arbitrary command on the sandbox PATH. This closes the verb gate to match the FR-2 "closed
+    convention" claim (defense-in-depth: the sandbox contains blast radius, AND the allow-list refuses
+    non-entry-point verbs) — harvest H1.
     """
     argv = list(clause.command_argv)
     if not argv:
-        return argv
+        return None
     if clause.is_console_script:
         candidate = app_root / "bin" / argv[0]
         if candidate.exists():
-            argv = [str(candidate), *argv[1:]]
+            return [str(candidate), *argv[1:]]
+        # Not a real app entry point → not runnable (do NOT fall through to a bare-PATH exec).
+        return None
     return argv
 
 
@@ -122,6 +127,18 @@ def _run_oneshot(
     clause: ParsedClause, app_root: Path, cfg: SandboxConfig
 ) -> OracleVerdict:
     cmd = _resolve_oneshot_cmd(clause, app_root)
+    if cmd is None:
+        # Unresolved console-script (not pytest/python, no app/bin entry) — fail loud, never exec an
+        # arbitrary bare command on the sandbox PATH (harvest H1).
+        return OracleVerdict(
+            fr_id="",
+            kind=KIND_ONESHOT,
+            verdict=VERDICT_ERROR,
+            reason=f"unresolved console-script {clause.command_argv[0]!r} "
+            "(not pytest/python and no app/bin entry) — not run",
+            command_or_probe=" ".join(clause.command_argv),
+            isolation_level="none",
+        )
     local_cfg = SandboxConfig(**{**cfg.__dict__, "wall_timeout_s": max(cfg.wall_timeout_s, _ONESHOT_TIMEOUT_S)})
     result = run_sandboxed(cmd, app_root, local_cfg)
     descriptor = " ".join(cmd)
