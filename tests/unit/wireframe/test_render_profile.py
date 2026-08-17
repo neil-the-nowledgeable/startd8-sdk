@@ -173,6 +173,7 @@ def test_requirement_card_shows_structured_what_how_why_and_is_byte_safe():
     assert "function structuredDet" in profiled                       # the blob→slots parser
     assert "payload.profile?structuredDet(item.detail)" in profiled   # profiled card uses it; app path does not
     assert "Verify · how you’ll know" in profiled and "Serves · why it matters" in profiled  # captions
+    assert "Name · deterministic identity" in profiled                # DIDL semantic name shown up top
     assert "body.nav-profiled #outline .item .ci-row.ci-why{border-left-color:var(--accent)" in profiled
     # app path byte-identical (structuredDet only runs when a profile is present)
     assert render_html(_plan()) == render_html(_plan(), profile=None)
