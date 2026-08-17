@@ -15,10 +15,20 @@ from startd8.navigator.ground import ground_tree
 from startd8.navigator.sources_capability import nodes_from_capability_index
 from startd8.navigator.sources_requirements import (
     REQUIREMENTS_PROFILE,
+    _initiative_slug,
     nodes_from_requirements,
     requirement_identity,
     requirements_profile_for,
 )
+
+
+def test_initiative_slug_strips_the_req_plan_brand_for_didl_canonical():
+    # DIDL: the canonical initiative must NOT carry the REQ-/PLAN- content-type brand — strip both the
+    # integer-led (REQ-01-) and the semantic (REQ-<slug>) filename forms.
+    assert _initiative_slug(Path("REQ-01-sdk-node-home.md")) == "sdk-node-home"          # integer-led
+    assert _initiative_slug(Path("REQ-view-definition-mode.md")) == "view-definition-mode"  # DIDL semantic
+    assert _initiative_slug(Path("PLAN-01-sdk-node-home.md")) == "sdk-node-home"          # PLAN- brand too
+    assert not _initiative_slug(Path("REQ-anything-here.md")).lower().startswith(("req-", "plan-"))
 
 FIXTURE = Path(__file__).parent / "fixtures" / "REQ-fixture-minimal.md"
 _REQ01 = Path("docs/design/requirements-visualization/REQ-01-sdk-node-home.md")
@@ -300,8 +310,12 @@ def test_req15_frame_source_renders_bare_scaffolding(tmp_path):
     assert "body.frame-bare" in html                  # the bare-frame CSS (hide region content)
     assert 'id="layerToggles"' in html                # FR-4: the per-layer disclosure host
     assert 'data-scaffold="masthead' in html          # the region meta-descriptions are present
-    # zero requirement/FR node cards were rendered (free of any requirement)
-    assert '<div class="item"' not in html and "wrote 0 nodes" not in html
+    # zero requirement/FR node cards were rendered (free of any requirement) — assert the node COUNT.
+    # (REQ-view-definition-mode FR-6: the frame now DOES carry a node display-logic TEMPLATE — a
+    # slot-annotated skeleton reusing the card classes, injected client-side — so we check 0 real nodes
+    # via the reliable count, not the `.item` class the template legitimately reuses.)
+    assert "0 nodes" in res.output                     # the frame rendered zero requirement nodes
+    assert "FRAME_TEMPLATES" in html                   # FR-6: the per-region display-logic templates ship
 
 
 # ── REQ-17 FR-2 — the requirements projection carries verify/approve/was onto the Node ─────────────

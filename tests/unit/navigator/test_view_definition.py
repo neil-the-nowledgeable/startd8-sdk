@@ -514,16 +514,22 @@ def test_resolve_external_does_not_mutate_the_shipped_registry():
 # ── REQ-14 — control + region model in the definition (data layer; consumption deferred) ─────────
 
 def test_base_models_the_debug_control_panel_as_groups_of_toggles():
-    # REQ-view-definition-mode FR-2: collapsed to one pick-one VIEW picker + one additive OVERLAYS stack.
+    # REQ-view-definition-mode FR-2 (+ FR-8): one pick-one VIEW picker + one additive OVERLAYS stack +
+    # the FR-8 DEBUG group (raw data / node data).
     control = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).control
     assert control["panel"] == "top-right"
-    assert set(control["groups"]) == {"view", "overlays"}
+    assert set(control["groups"]) == {"view", "overlays", "debug", "paging"}
     assert control["groups"]["view"]["label"] == "View"
     assert control["groups"]["view"]["first"] is True
     # VIEW is the Requirement/View-Definition pick; the density modes + scaffoldOnly are retired.
     assert set(control["groups"]["view"]["toggles"]) == {"viewRequirement", "viewDefinition"}
+    # FR-8/FR-10: the Debug group exposes raw data + node data + the per-cell inspector.
+    assert set(control["groups"]["debug"]["toggles"]) == {"rawData", "nodeData", "inspectCells"}
+    # FR-9: the Paging group offers a pick-one page size incl. one-at-a-time.
+    assert set(control["groups"]["paging"]["toggles"]) == {"pageAll", "page10", "page5", "page1"}
     toggle_ids = {tid for g in control["groups"].values() for tid in g["toggles"]}
-    assert toggle_ids == {"viewRequirement", "viewDefinition", "nodeMeta", "outlineRegions", "hideScaffold"}
+    assert toggle_ids == {"viewRequirement", "viewDefinition", "nodeMeta", "outlineRegions", "hideScaffold",
+                          "rawData", "nodeData", "inspectCells", "pageAll", "page10", "page5", "page1"}
     assert "structOnly" not in toggle_ids and "combined" not in toggle_ids and "scaffoldOnly" not in toggle_ids
     assert "nodeMeta" in control["groups"]["overlays"]["toggles"]  # the item.meta reveal survives as an overlay
 
@@ -541,6 +547,26 @@ def test_base_models_the_region_layer_taxonomy():
     assert regions["layers"]["control"] == {"label": "control", "color": "accent2", "order": 0}
     used = {v["layer"] for v in b.values()}
     assert used == set(regions["layers"]), "every used layer must be declared in the layer schema"
+
+
+def test_display_logic_data_lives_in_the_definition_and_projects_to_the_profile():
+    # FR-13: the field→element mapping + region display templates are DEFINITION data, projected onto
+    # the profile (not hardcoded in the template). A domain delta can reconfigure either via the cascade.
+    resolved = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+    assert resolved.field_display["status"]["sel"] == ".badge"          # the inspector mapping
+    assert resolved.field_display["detail"]["sel"] == ".det"
+    assert "node card — how a requirement value renders" in resolved.region_templates["outline"]
+    # projected onto the RenderProfile
+    prof = to_render_profile(resolved)
+    assert prof.field_display["status"]["sel"] == ".badge"
+    assert set(prof.region_templates) == {"mast", "glance", "toolbar", "legend", "seclead", "outline"}
+    assert "field_display" in prof.to_dict() and "region_templates" in prof.to_dict()
+    # a domain delta overrides one field's selector atomically (keyed cascade), siblings kept
+    child = ViewDefinition(name="fdchild", extends="base",
+                           field_display={"status": {"sel": ".status-pill", "how": "→ pill"}})
+    rc = resolve(child, {**DEFINITION_REGISTRY, "fdchild": child})
+    assert rc.field_display["status"]["sel"] == ".status-pill"          # overridden
+    assert rc.field_display["detail"]["sel"] == ".det"                  # sibling kept
 
 
 def test_control_and_regions_ride_the_cascade_by_id():

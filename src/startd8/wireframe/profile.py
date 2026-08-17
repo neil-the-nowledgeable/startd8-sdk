@@ -30,6 +30,37 @@ class StatusStyle:
     is_gap: bool = False  # counts toward the "needs attention" summary
 
 
+# REQ-view-definition-mode FR-13: the display-logic DATA, owned by the View Definition and projected
+# onto the profile (a domain delta can reconfigure it via the cascade). Kept here so RenderProfile can
+# default to it (the projection target's default) — view_definition.py imports these for the base
+# definition and to_render_profile projects the resolved values over them.
+DEFAULT_FIELD_DISPLAY = {   # inspector field→element mapping (FR-10/12): field → {how it renders, card selector}
+    "label": {"how": "→ .lbl (title)", "sel": ".lbl"},
+    "key": {"how": "→ .lbl-key (bare key)", "sel": ".lbl-key"},
+    "status": {"how": "→ status badge", "sel": ".badge"},
+    "detail": {"how": "→ .det (body text)", "sel": ".det"},
+    "lives": {"how": "→ .lives (type: ref)", "sel": ".lives"},
+    "was": {"how": "→ .was (former state)", "sel": ".was"},
+    "meta": {"how": "→ .node-meta (Show node metadata)", "sel": ".node-meta"},
+}
+DEFAULT_REGION_TEMPLATES = {   # frame display-logic templates (FR-6): region-id → slot-annotated HTML
+    "mast": ('<span class="eyebrow">‹eyebrow›</span><div class="vd-h">‹headline›</div>'
+             '<div class="vd-sub">‹why› · ‹do›  — reading guidance (profile.why / profile.do)</div>'),
+    "glance": '<div class="vd-t">‹status roll-up ← status_counts›  ·  ‹shape ← plan.shape›  ·  ‹content›  ·  ‹cascade›</div>',
+    "toolbar": '<div class="vd-t">‹View ← audience / delivery-role›  ·  ‹Depth ← fluency lens›</div>',
+    "legend": '<div class="vd-t">‹● dot› ‹meaning›  — one per profile.statuses[]</div>',
+    "seclead": '‹section lead ← profile.section_lead›',
+    "outline": ('<div class="ndt-cap">node card — how a requirement value renders</div>'
+                '<div class="item"><div class="row">'
+                '<span class="lbl">‹label / name›</span>'
+                '<span class="lbl-key">‹key›</span>'
+                '<span class="badge ndt-badge">‹status›</span></div>'
+                '<div class="det">‹detail — the node body text›</div>'
+                '<div class="lives"><span class="lk">Lives</span>‹type›: ‹ref›</div>'
+                '<div class="node-meta">‹meta — structural metadata (Show node metadata)›</div></div>'),
+}
+
+
 @dataclass(frozen=True)
 class RenderProfile:
     """A domain's status vocabulary + chrome for the wireframe HTML preview."""
@@ -59,6 +90,12 @@ class RenderProfile:
     # so the default render is byte-identical and a domain delta overrides atomically.
     control: Mapping[str, object] = field(default_factory=dict)
     regions: Mapping[str, object] = field(default_factory=dict)
+    # FR-13: the display-logic data (inspector field→element mapping + frame region templates), owned by
+    # the View Definition and read by the template from the profile. Defaults to the canonical maps so a
+    # directly-constructed profile still has them; to_render_profile projects a resolved definition's
+    # (possibly domain-overridden) values over these.
+    field_display: Mapping[str, object] = field(default_factory=lambda: dict(DEFAULT_FIELD_DISPLAY))
+    region_templates: Mapping[str, object] = field(default_factory=lambda: dict(DEFAULT_REGION_TEMPLATES))
 
     def to_dict(self) -> dict:
         """JSON-safe payload the template's client renderer reads (``data.profile``)."""
@@ -85,6 +122,8 @@ class RenderProfile:
             "theme_tokens": dict(self.theme_tokens),
             "control": dict(self.control),
             "regions": dict(self.regions),
+            "field_display": dict(self.field_display),
+            "region_templates": dict(self.region_templates),
         }
 
 

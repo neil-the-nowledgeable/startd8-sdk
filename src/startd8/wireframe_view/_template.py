@@ -125,18 +125,22 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   /* Scaffold mode — the template's anatomy: outline every region carrying a data-scaffold role and
      float its label + data source, so an adopter (legal · benchmark · dev-os) can read the template
      itself from a debugging standpoint. Overlay only; no layout shift beyond the outline. */
-  /* scaffold mode needs a top gap so the floated label of the FIRST region isn't clipped off the page,
-     and each region's label sits in clear space above its own box instead of overlapping the region
-     above it. Applied only in scaffold mode (app path unaffected). */
-  body.scaffold{padding-top:18px}
-  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative;margin-top:15px}
-  /* blueprint-annotation label: a solid dark chip (white on --ink ≈ 13:1 contrast — legible over ANY
-     underlying content, unlike the old 9.5px semi-transparent colour-on-colour chip) with a
-     layer-coloured left stripe. 11px, full opacity, high z-index + shadow so it lifts off the content. */
-  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:-11px;left:8px;
+  /* Each region's label is a blueprint corner-annotation tucked INSIDE its own top-left (like a room
+     label on a floor plan), not floating in the margin ABOVE the box — the old top:-11px collided on
+     tightly-stacked + NESTED regions (a glance cell's label landed on the glance band's label). Every
+     region reserves a top label-band via padding-top, so a nested region's content — and its own label —
+     always start BELOW the parent's band. Scaffold-only: no body.scaffold on the app path → byte-identical. */
+  body.scaffold{padding-top:6px}
+  body.scaffold [data-scaffold]{outline:2px dashed var(--accent);outline-offset:2px;position:relative;
+    margin-top:10px;padding-top:26px}
+  /* the label chip: solid dark (white on --ink ≈ 13:1 contrast — legible over any content) with a
+     layer-coloured left stripe, seated in the corner and ellipsised so a long label never overflows a
+     narrow/nested region (the status-roll-up / shape cells were the worst case). */
+  body.scaffold [data-scaffold]::before{content:attr(data-scaffold);position:absolute;top:4px;left:4px;
     z-index:10;background:var(--ink);color:#f7f3ea;font-family:var(--mono);font-size:11px;font-weight:600;
-    letter-spacing:.02em;padding:2px 8px;border-radius:4px;white-space:nowrap;pointer-events:none;
-    border-left:4px solid var(--accent);box-shadow:0 1px 4px rgba(0,0,0,.35)}
+    letter-spacing:.02em;padding:2px 8px;border-radius:4px;max-width:calc(100% - 8px);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;
+    border-left:4px solid var(--accent);box-shadow:0 1px 3px rgba(0,0,0,.28)}
   /* layer-aware colouring — the dark chip is constant (legibility); the left stripe + dashed outline
      carry the LAYER (control · descriptive · computed · node-driven), so scaffold mode still teaches
      the taxonomy without the failed white-on-ochre / white-on-green contrast. */
@@ -150,15 +154,29 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
      the frame" intent is now the View Definition pick (frame-bare, below), with finer control via the
      per-layer disclosure toggles. */
   #debug .dbg-opt.dbg-sub{margin-left:16px}
-  /* REQ-15 FR-1/FR-4: frame-bare — hide EVERY region's content (keep the region outline + its ::before
-     meta-description), so the frame source shows only the scaffolding + control surface. A per-layer
-     toggle sets body.show-layer-<id>, which reveals that one layer's content (progressive disclosure). */
-  body.frame-bare [data-scaffold] *{visibility:hidden}
-  body.frame-bare [data-scaffold]{visibility:visible}
-  body.frame-bare.show-layer-control [data-layer="control"] *,
-  body.frame-bare.show-layer-descriptive [data-layer="descriptive"] *,
-  body.frame-bare.show-layer-computed [data-layer="computed"] *,
-  body.frame-bare.show-layer-node [data-layer="node"] *{visibility:visible}
+  /* REQ-15 FR-1/FR-4: frame-bare — hide EVERY region's real content (keep the region outline + its
+     ::before meta-description + the vd-template), so the frame shows only the scaffolding + control
+     surface. Uses **display:none** (not visibility:hidden) so hidden content takes NO SPACE — the old
+     visibility approach removed the text but kept its full height, leaving a large empty region (e.g. a
+     paged-in node card's blank height). A per-layer toggle sets body.show-layer-<id>, restoring that one
+     layer's content (progressive disclosure). The vd-template is excluded (:not) so it always shows. */
+  body.frame-bare [data-scaffold] > *:not(.vd-template){display:none}
+  body.frame-bare.show-layer-control [data-layer="control"] > *:not(.vd-template),
+  body.frame-bare.show-layer-descriptive [data-layer="descriptive"] > *:not(.vd-template),
+  body.frame-bare.show-layer-computed [data-layer="computed"] > *:not(.vd-template),
+  body.frame-bare.show-layer-node [data-layer="node"] > *:not(.vd-template){display:revert}
+  .vd-template{display:block;margin-top:2px;font-style:italic;color:var(--ink2)}
+  .vd-template .vd-t{font-size:13px;line-height:1.7}
+  .vd-template .vd-h{font-family:var(--serif);font-size:21px;color:var(--ink2);margin:3px 0}
+  .vd-template .vd-sub{font-size:12px;opacity:.85;margin-top:3px}
+  .vd-template .eyebrow{font-style:normal}
+  .vd-template .ndt-cap{font-family:var(--mono);font-size:10.5px;color:var(--ink2);
+    text-transform:uppercase;letter-spacing:.09em;margin:0 0 8px;font-style:normal}
+  .vd-template .lbl-key{display:inline !important;font-family:var(--mono);color:var(--ink2);font-weight:600}
+  .vd-template .node-meta{display:block !important}
+  .vd-template .lbl,.vd-template .det,.vd-template .lives,.vd-template .node-meta,
+  .vd-template .lbl-key{font-style:italic}
+  .vd-template .badge.ndt-badge{background:var(--ink2)}
   #debug #layerToggles{display:none} body.scaffold #debug #layerToggles{display:block}
   /* scaffold-mode layer legend in the debug panel (hidden until scaffold on) */
   #debug .dbg-layers{display:none;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);
@@ -303,6 +321,50 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .signbar button{margin-left:auto;font:inherit;font-size:12.5px;color:#fff;background:var(--accent);
     border:1px solid var(--accent);border-radius:20px;padding:6px 15px;cursor:pointer}
   .signbar button:hover{background:var(--accent2)}
+  /* FR-8: raw-data debug panel below the sign-off — a dark code block dumping the payload / node items
+     being visualized. Hidden until a Debug toggle is on; profiled-navigator-only (app path never emits it). */
+  .rawdata{margin:14px 0 0;background:var(--ink);border-radius:12px;padding:14px 16px}
+  .rawdata[hidden]{display:none}
+  .rawdata .raw-cap{font-family:var(--mono);font-size:11px;color:var(--accent);text-transform:uppercase;
+    letter-spacing:.08em;margin:12px 0 6px}
+  .rawdata .raw-cap:first-child{margin-top:0}
+  .rawdata .raw-json{font-family:var(--mono);font-size:11.5px;line-height:1.5;color:#e8e2d4;
+    white-space:pre-wrap;word-break:break-word;margin:0;max-height:440px;overflow:auto}
+  /* FR-9: paging — hide the cards/sections not on the current page, and a prev/next bar below the outline. */
+  .pg-hidden{display:none !important}
+  .pg-empty{display:none !important}
+  .pagebar{display:flex;align-items:center;gap:12px;margin:14px 0 0;padding:9px 14px;background:var(--card);
+    border:1px solid var(--line);border-radius:20px;font-size:12.5px;color:var(--ink2)}
+  .pagebar[hidden]{display:none}
+  .pagebar .pg-count{flex:1;text-align:center;font-family:var(--mono);font-size:12px}
+  .pagebar .pg-btn{font:inherit;font-size:12.5px;color:#fff;background:var(--accent);border:1px solid var(--accent);
+    border-radius:16px;padding:5px 13px;cursor:pointer}
+  .pagebar .pg-btn:hover:not([disabled]){background:var(--accent2)}
+  .pagebar .pg-btn[disabled]{opacity:.4;cursor:default}
+  /* FR-10/FR-11: per-cell inspector — a TABLE of the node's data (node data · value · how it's displayed);
+     not-displayed value cells are editable (contenteditable) → a non-persistent edit that surfaces the
+     field in the card (.ni-added) and updates only the in-memory node data. */
+  .node-inspect{margin-top:9px;padding-top:8px;border-top:1px dashed var(--line2);font-family:var(--mono);font-size:11px}
+  .node-inspect .ni-table{width:100%;border-collapse:collapse}
+  .node-inspect thead th{text-align:left;color:var(--faint);text-transform:uppercase;letter-spacing:.07em;
+    font-size:9.5px;font-weight:600;padding:0 8px 5px 0;border-bottom:1px solid var(--line2)}
+  .node-inspect td{padding:3px 8px 3px 0;vertical-align:top;border-bottom:1px solid var(--line)}
+  .node-inspect .ni-k{color:var(--accent);font-weight:600;white-space:nowrap;width:104px}
+  .node-inspect .ni-v{color:var(--ink2);white-space:pre-wrap;word-break:break-word;width:100%}
+  .node-inspect .ni-d{color:var(--faint);white-space:nowrap}
+  .node-inspect .ni-edit{border:1px dashed var(--accent);border-radius:3px;padding:2px 6px;cursor:text;
+    min-width:70px;color:var(--ink);background:rgba(120,90,40,.05)}
+  .node-inspect .ni-edit:focus{outline:2px solid var(--accent);background:var(--card)}
+  .node-inspect .ni-edit:empty::before{content:"click to add";color:var(--faint);font-style:italic}
+  /* FR-12: the inline on/off switch */
+  .node-inspect .ni-sw{position:relative;display:inline-block;width:26px;height:15px;vertical-align:middle;margin-right:8px}
+  .node-inspect .ni-sw input{opacity:0;width:0;height:0;position:absolute;margin:0}
+  .node-inspect .ni-sw .sw{position:absolute;inset:0;background:var(--line2);border-radius:15px;cursor:pointer;transition:background .15s}
+  .node-inspect .ni-sw .sw::before{content:"";position:absolute;width:11px;height:11px;left:2px;top:2px;background:#fff;border-radius:50%;transition:transform .15s}
+  .node-inspect .ni-sw input:checked+.sw{background:var(--accent)}
+  .node-inspect .ni-sw input:checked+.sw::before{transform:translateX(11px)}
+  .ni-added{color:var(--accent2);font-family:var(--mono);font-size:12px;margin:6px 0 0}
+  @media (max-width:560px){.node-inspect td,.node-inspect .ni-k,.node-inspect .ni-v{display:block;width:auto}}
 
   /* ---------- PF-1: status-filter chips (profiled navigator only; rendered only when payload.profile) ---------- */
   .status-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
@@ -343,8 +405,12 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   <hr class="rule">
   <p class="section-lead" id="seclead" data-layer="descriptive" data-scaffold="section lead — profile.section_lead">What your app includes</p>
   <main id="outline" data-layer="node" data-scaffold="outline — node sections + cards (the node-driven layer)"></main>
+  <!-- FR-9: paging bar — prev/next through the requirement nodes N at a time (shown when a finite size is picked). -->
+  <nav class="pagebar" id="pagebar" aria-label="Paging" hidden></nav>
   <div class="signbar" id="signbar"></div>
   <footer class="closing" id="closing" hidden></footer>
+  <!-- FR-8: raw-data debug panel — populated + shown by the Debug group's Raw data / Node data toggles. -->
+  <section class="rawdata" id="rawdata" aria-label="Raw data" hidden></section>
 </div>
 
 <!-- Embedded view-model (application/json is never executed; view.render_html escapes "<" on embed). -->
@@ -363,6 +429,7 @@ __PLAN_DATA__
   var VARS = payload.variants || {}, cur = payload.default;   // QW-1: embedded audience variants
   var KITS = payload.kits || {};                              // EC-4: delivery-role kits (overlay metadata)
   var data, EU, s;   // (re)set by renderAll() for the currently-selected variant
+  var _pagingHook=null;   // FR-9: re-applied after each renderAll so paging survives a lens/depth re-render
 
   // EC-4: which base voice a role renders as (a kit → its declared base; a base voice → itself).
   function voiceOf(role){ return (KITS[role] && KITS[role].base) || role; }
@@ -588,7 +655,7 @@ __PLAN_DATA__
 
   // ---------- items ----------
   function renderItem(k,item,nav){
-    var w=document.createElement("div"); w.className="item";
+    var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
     // PF-1: expose the item's status as a data attribute when a domain profile is active so the
     // filter machinery (data-status selectors) can show/hide items without touching the app path.
     if(payload.profile && item.status) w.setAttribute("data-status", item.status);
@@ -711,6 +778,7 @@ __PLAN_DATA__
     })();
     renderSignbar();   // EC-2: sign-off progress + export
     applyDefinitionOverride();   // REQ-14: apply the resolved control/region deltas over the defaults
+    if(_pagingHook) _pagingHook();   // FR-9: re-page the freshly-rendered cards
   }
 
   // REQ-14 (FR-3/FR-5/FR-7): apply a resolved ViewDefinition's control + regions as an ADDITIVE runtime
@@ -798,8 +866,14 @@ __PLAN_DATA__
   if(payload.profile){
     // Live provenance readout — "all content is cruft until proven otherwise": chrome that traces to
     // a source is proven; an orphan (no source) is cruft. Green when clean, ochre when cruft remains.
+    // FR-7: the bare frame has NO requirement content, so its empty chrome slots are not "cruft" —
+    // they are definition slots. In frame mode read as a definition summary instead of false cruft.
     var ch=payload.chrome, prov="";
-    if(ch){
+    if(payload.frame){
+      var nreg=document.querySelectorAll("[data-scaffold]").length;
+      var nlay=(payload.profile.regions&&payload.profile.regions.layers)?Object.keys(payload.profile.regions.layers).length:0;
+      prov='<div class="dbg-prov dbg-clean">View Definition · '+nreg+' regions · '+nlay+' layers defined</div>';
+    } else if(ch){
       var cruft=(ch.orphans||[]).length, cls=cruft?"dbg-cruft":"dbg-clean";
       prov='<div class="dbg-prov '+cls+'">provenance '+ch.score+' · '+ch.present+'/'+ch.total+' proven'+
         (cruft?' · <b>'+cruft+' cruft</b>: '+esc((ch.orphans||[]).join(", ")):' · no cruft ✓')+'</div>';
@@ -826,6 +900,17 @@ __PLAN_DATA__
       '<div class="dbg-layers">layers: <span class="ll control">control</span>'+
         '<span class="ll descriptive">descriptive</span><span class="ll computed">computed</span>'+
         '<span class="ll node">node-driven</span></div>'+
+      // ── DEBUG: raw view of the data + nodes being visualized (FR-8) — renders into #rawdata below sign-off
+      '<div class="dbg-group" data-group="debug">Debug <span class="dbg-hint">· raw</span></div>'+
+      '<label class="dbg-opt"><input type="checkbox" id="rawData"><span>Raw data</span></label>'+
+      '<label class="dbg-opt"><input type="checkbox" id="nodeData"><span>Node data</span></label>'+
+      '<label class="dbg-opt"><input type="checkbox" id="inspectCells"><span>Inspect cells</span></label>'+
+      // ── PAGING: show N requirement nodes at a time + page through the rest (FR-9, pick-one) ──────
+      '<div class="dbg-group" data-group="paging">Paging <span class="dbg-hint">· show N at a time</span></div>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="pageAll" checked><span>All</span></label>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="page10"><span>10</span></label>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="page5"><span>5</span></label>'+
+      '<label class="dbg-opt"><input type="radio" name="pagepick" id="page1"><span>1 at a time</span></label>'+
       // ── PROVENANCE: the live readout stays at the bottom ──────────────────────────────────────
       prov;
     var viewReq=document.getElementById("viewRequirement"), viewDef=document.getElementById("viewDefinition");
@@ -835,14 +920,163 @@ __PLAN_DATA__
     // scaffold + frame-bare. `scaffold` (region outlines + ::before meta + legend) is on when EITHER
     // the View Definition pick OR the Outline-regions overlay is active; `frame-bare` (hide all region
     // CONTENT, leaving only the meta-descriptions) is on only for the View Definition pick.
+    // FR-6: display-logic templates — when the View Definition is shown, EVERY region renders a
+    // slot-annotated skeleton of WHAT it displays and FROM WHAT it derives (built from the real render
+    // classes), so no region is blank. Injected client-side in frame mode only; removed on leaving it.
+    // FR-13: the region display templates now come FROM the View Definition (payload.profile.region_templates,
+    // projected by to_render_profile) — no longer hardcoded here. The interaction below stays template-side.
+    var FRAME_TEMPLATES=(payload.profile&&payload.profile.region_templates)||{};
+    function syncFrameTemplates(on){
+      Object.keys(FRAME_TEMPLATES).forEach(function(id){
+        var el=document.getElementById(id); if(!el) return;
+        var existing=el.querySelector(".vd-template");
+        if(on && !existing){
+          // a <span> (inline element) can live inside #seclead's <p>; a <div> everywhere else.
+          var wrap=document.createElement(el.tagName==="P"?"span":"div");
+          wrap.className="vd-template"; wrap.innerHTML=FRAME_TEMPLATES[id]; el.appendChild(wrap);
+        } else if(!on && existing){ existing.parentNode.removeChild(existing); }
+      });
+    }
     function syncView(){
       var vd=viewDef.checked;
       document.body.classList.toggle("scaffold", vd || outline.checked);
       document.body.classList.toggle("frame-bare", vd);
+      syncFrameTemplates(vd);   // FR-6: show/hide every region's display-logic template with the View Definition
     }
     viewReq.onchange=syncView; viewDef.onchange=syncView; outline.onchange=syncView;
     nodeMeta.onchange=function(){ document.body.classList.toggle("show-node-meta", nodeMeta.checked); };
     hide.onchange=function(){ document.body.classList.toggle("hide-scaffold", hide.checked); };
+    // FR-8: raw-data debug panel below the sign-off — Raw data = the current variant being visualized;
+    // Node data = just the node items (flattened from the variant's sections). Rebuilt on each toggle.
+    var rawData=document.getElementById("rawData"), nodeData=document.getElementById("nodeData"),
+        inspectCells=document.getElementById("inspectCells");
+    function nodeItems(){
+      var out=[]; (data.sections||[]).forEach(function(sec){ (sec.items||[]).forEach(function(it){ out.push(it); }); });
+      return out;
+    }
+    function renderRawData(){
+      var el=document.getElementById("rawdata"); if(!el) return;
+      var blocks="";
+      if(rawData.checked){ blocks+='<div class="raw-cap">raw data being visualized — payload.variants["'+esc(cur)+'"]</div>'+
+        '<pre class="raw-json">'+esc(JSON.stringify(data,null,2))+'</pre>'; }
+      if(nodeData.checked){ var n=nodeItems(); blocks+='<div class="raw-cap">node data — '+n.length+' node(s) being visualized</div>'+
+        '<pre class="raw-json">'+esc(JSON.stringify(n,null,2))+'</pre>'; }
+      el.innerHTML=blocks; el.hidden=!(rawData.checked||nodeData.checked);
+    }
+    rawData.onchange=renderRawData; nodeData.onchange=renderRawData;
+    // FR-10: per-cell inspector — under each card, show the node's data (every field + value) next to HOW
+    // each field is displayed (field→element mapping, or "not displayed"). Uses each card's stashed
+    // _nodeData (exact, not order-guessed). Re-applied after each renderAll (combined into the hook below).
+    // FR-13: the field→element mapping now comes FROM the View Definition (payload.profile.field_display,
+    // projected by to_render_profile) — no longer hardcoded. Each entry = {how it renders, card selector}.
+    var INSPECT_MAP=(payload.profile&&payload.profile.field_display)||{};
+    // FR-11: editing a not-displayed field is NON-PERSISTENT — it updates the card's in-memory node data
+    // and surfaces the field as a line in the card, affecting only the shown HTML (never written to disk).
+    function updateAddedLine(card, field, raw){
+      // coerce ANY value to a string first — a node field can be a list/number/bool (approve_prompts,
+      // confidence, technical, paths), and calling .trim() on those threw (the toggle silently failed).
+      var val=(raw==null)?"":(typeof raw==="object"?JSON.stringify(raw):String(raw));
+      var line=card.querySelector('[data-ni-add="'+field+'"]');
+      if(val&&val.trim()){
+        if(!line){ line=document.createElement("div"); line.className="ni-added";
+          line.setAttribute("data-ni-add",field); card.insertBefore(line, card.querySelector(".node-inspect")); }
+        line.textContent=field+": "+val;
+      } else if(line){ line.parentNode.removeChild(line); }
+    }
+    function buildInspect(card){
+      var item=card._nodeData||{}, d=document.createElement("div"); d.className="node-inspect";
+      var rows=Object.keys(item).map(function(k){
+        var v=item[k], val=(v==null)?"":(typeof v==="object"?JSON.stringify(v):String(v)), m=INSPECT_MAP[k];
+        if(m){   // displayed field: read-only value + a switch (default ON) that toggles the element
+          return '<tr><td class="ni-k">'+esc(k)+'</td><td class="ni-v">'+(esc(val)||"∅")+'</td>'+
+            '<td class="ni-d"><label class="ni-sw"><input type="checkbox" checked data-ni-toggle="'+esc(m.sel)+'">'+
+            '<span class="sw"></span></label>'+esc(m.how)+'</td></tr>';
+        }        // not-displayed field: editable value + a switch (default OFF) that SURFACES the value in the card
+        return '<tr><td class="ni-k">'+esc(k)+'</td>'+
+          '<td class="ni-v ni-edit" contenteditable="true" data-ni-field="'+esc(k)+'">'+esc(val)+'</td>'+
+          '<td class="ni-d"><label class="ni-sw"><input type="checkbox" data-ni-show="'+esc(k)+'">'+
+          '<span class="sw"></span></label>show in card</td></tr>';
+      }).join("");
+      d.innerHTML='<table class="ni-table"><thead><tr><th>node data</th><th>value</th>'+
+        '<th>how it’s displayed</th></tr></thead><tbody>'+rows+'</tbody></table>';
+      // FR-11: editable not-displayed value → update in-memory data; editing auto-surfaces it (checks its switch)
+      Array.prototype.forEach.call(d.querySelectorAll(".ni-edit"), function(cell){
+        cell.addEventListener("input", function(){
+          var f=cell.getAttribute("data-ni-field");
+          card._nodeData[f]=cell.textContent;            // non-persistent, in-memory only
+          var sw=d.querySelector('[data-ni-show="'+f+'"]'); if(sw) sw.checked=true;
+          updateAddedLine(card, f, cell.textContent);     // reflect the edit in the card view
+        });
+      });
+      // FR-12 (displayed): the switch toggles that element's display in THIS card (default on)
+      Array.prototype.forEach.call(d.querySelectorAll("[data-ni-toggle]"), function(inp){
+        inp.addEventListener("change", function(){
+          var sel=inp.getAttribute("data-ni-toggle");
+          Array.prototype.forEach.call(card.querySelectorAll(sel), function(el){
+            if(el.closest(".node-inspect")) return;      // never toggle the inspector's own nodes
+            el.style.display = inp.checked ? "" : "none";
+          });
+        });
+      });
+      // FR-12 (not-displayed): the switch SURFACES the field's value as a card line — reveal what isn't shown
+      Array.prototype.forEach.call(d.querySelectorAll("[data-ni-show]"), function(inp){
+        inp.addEventListener("change", function(){
+          var f=inp.getAttribute("data-ni-show");   // pass the RAW value; updateAddedLine coerces (bool/num/list)
+          updateAddedLine(card, f, inp.checked ? card._nodeData[f] : "");
+        });
+      });
+      return d;
+    }
+    function syncInspect(on){
+      var cards=Array.prototype.filter.call(document.querySelectorAll("#outline .item"),
+        function(el){ return !el.closest(".vd-template"); });
+      cards.forEach(function(card){
+        var existing=card.querySelector(".node-inspect");
+        if(on && !existing && card._nodeData){ card.appendChild(buildInspect(card)); }
+        else if(!on && existing){ existing.parentNode.removeChild(existing);
+          Array.prototype.forEach.call(card.querySelectorAll("[data-ni-add]"),
+            function(l){ l.parentNode.removeChild(l); }); }   // drop the edit-surfaced lines too
+      });
+    }
+    inspectCells.onchange=function(){ syncInspect(inspectCells.checked); };
+    // FR-9: paging over the requirement nodes — pick-one page size shows N cards at a time; the #pagebar
+    // pages through the rest, down to one at a time. Runs after each renderAll (via _pagingHook) so it
+    // survives a lens/depth re-render. Operates on the real node cards (not the frame display template).
+    var pageAll=document.getElementById("pageAll"), page10=document.getElementById("page10"),
+        page5=document.getElementById("page5"), page1=document.getElementById("page1"), _page=0;
+    function pageSize(){ return page1.checked?1 : page5.checked?5 : page10.checked?10 : Infinity; }
+    function pagedCards(){
+      return Array.prototype.filter.call(document.querySelectorAll("#outline .item"),
+        function(el){ return !el.closest(".vd-template"); });   // real cards only, not the display template
+    }
+    function applyPaging(){
+      var bar=document.getElementById("pagebar"), cards=pagedCards(), sz=pageSize();
+      var secs=document.querySelectorAll("#outline details.sec");
+      if(sz===Infinity){
+        cards.forEach(function(c){ c.classList.remove("pg-hidden"); });
+        secs.forEach(function(sc){ sc.classList.remove("pg-empty"); });
+        bar.hidden=true; bar.innerHTML=""; return;
+      }
+      var total=cards.length, pages=Math.max(1, Math.ceil(total/sz));
+      if(_page>=pages) _page=pages-1; if(_page<0) _page=0;
+      var start=_page*sz, end=Math.min(start+sz, total);
+      cards.forEach(function(c,i){ c.classList.toggle("pg-hidden", i<start||i>=end); });
+      secs.forEach(function(sc){
+        var vis=Array.prototype.some.call(sc.querySelectorAll(".item"), function(c){
+          return !c.classList.contains("pg-hidden") && !c.closest(".vd-template"); });
+        sc.classList.toggle("pg-empty", !vis);
+      });
+      bar.innerHTML='<button class="pg-btn" id="pg-prev"'+(_page===0?' disabled':'')+'>‹ prev</button>'+
+        '<span class="pg-count">showing '+(total?start+1:0)+'–'+end+' of '+total+'  ·  page '+(_page+1)+' / '+pages+'</span>'+
+        '<button class="pg-btn" id="pg-next"'+(_page>=pages-1?' disabled':'')+'>next ›</button>';
+      bar.hidden=false;
+      var pv=document.getElementById("pg-prev"), nx=document.getElementById("pg-next");
+      if(pv) pv.onclick=function(){ _page--; applyPaging(); };
+      if(nx) nx.onclick=function(){ _page++; applyPaging(); };
+    }
+    pageAll.onchange=page10.onchange=page5.onchange=page1.onchange=function(){ _page=0; applyPaging(); };
+    // renderAll re-applies paging + the per-cell inspector after rebuilding the cards (FR-9/FR-10).
+    _pagingHook=function(){ applyPaging(); syncInspect(inspectCells.checked); };
     // `--source frame`: reflect the requirement-free frame in the picker so toggling back works.
     if(payload.frame){ viewDef.checked=true; viewReq.checked=false; }
     syncView();

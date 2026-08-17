@@ -135,6 +135,110 @@ def test_debug_view_mode_panel_is_profiled_and_byte_safe():
     assert render_html(_plan()) == render_html(_plan(), profile=None)
 
 
+def test_view_definition_shows_every_region_display_logic_template():
+    # REQ-view-definition-mode FR-6 (v0.5): when the View Definition is shown, EVERY region renders a
+    # slot-annotated DISPLAY-LOGIC template (built from the real render classes) showing what it displays
+    # and FROM WHAT it derives — not just the node region. JS-injected only in frame mode, so ABSENT from
+    # a normal render's served HTML → byte-identity holds.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    # the template map + its frame-mode wiring ship in the (client-side) render
+    assert "FRAME_TEMPLATES" in profiled                    # the per-region display-logic template map
+    assert "payload.profile.region_templates" in profiled   # FR-13: read FROM the View Definition, not hardcoded
+    assert "function syncFrameTemplates" in profiled        # injected/removed with the View Definition (syncView)
+    # the map keys cover EVERY region — now carried in the profile payload (region_templates JSON)
+    for region in ('"mast":', '"glance":', '"toolbar":', '"legend":', '"seclead":', '"outline":'):
+        assert region in profiled, region
+    # per-region derivation sources are annotated (ASCII markers survive the JSON embed; the ‹…›/— slot
+    # text is now JSON-encoded in the payload since the templates live in the definition — FR-13)
+    for src in ("status_counts", "plan.shape", "audience", "profile.statuses", "profile.section_lead"):
+        assert src in profiled, src
+    # the node-card (outline) template still ships in region_templates (its ndt-cap caption survives ASCII)
+    assert "ndt-cap" in profiled
+    # frame-bare hides real content with display:none (collapses space) and EXCLUDES the vd-template so
+    # it always shows; the template force-reveals the normally-hidden key+meta slots
+    assert "body.frame-bare [data-scaffold] > *:not(.vd-template){display:none}" in profiled
+    assert ".vd-template .lbl-key{display:inline" in profiled
+    # JS-injected only — NOT pre-rendered into the served HTML (a normal render is unchanged)
+    assert 'class="vd-template"' not in profiled
+    # Byte-safe: the app path is byte-identical (templates never land in a normal render).
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_debug_group_and_raw_data_panel_ship_and_are_byte_safe():
+    # REQ-view-definition-mode FR-8: the Debug control group (Raw data / Node data) + a #rawdata panel
+    # positioned BELOW the sign-off (#signbar) ship in the profiled render, hidden by default; app-safe.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert 'data-group="debug"' in profiled                 # the Debug group header
+    assert 'id="rawData"' in profiled and 'id="nodeData"' in profiled   # the two debug toggles
+    assert "function renderRawData" in profiled             # the raw-data renderer
+    # the panel is placed below the sign-off (its element appears AFTER #signbar in the document)
+    assert profiled.index('id="rawdata"') > profiled.index('id="signbar"')
+    assert 'class="rawdata"' in profiled and "hidden" in profiled       # hidden until a toggle is on
+    # app path never emits the debug panel content / byte-identity holds
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_inspect_cells_shows_per_node_data_and_display_mapping():
+    # REQ-view-definition-mode FR-10: an Inspect cells Debug toggle shows, under each card, the node's
+    # data (fields+values) and how each field is displayed (field→element mapping). Cards stash their
+    # exact node data (_nodeData). Client-side machinery ships; the app path is byte-identical.
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert 'id="inspectCells"' in profiled                   # the toggle
+    assert "function buildInspect" in profiled and "function syncInspect" in profiled   # the inspector
+    assert "w._nodeData=item" in profiled                    # exact per-cell data stashed at render
+    assert "INSPECT_MAP" in profiled                         # the field→element display mapping
+    # FR-10: rendered as a TABLE with the three headings
+    assert 'class="ni-table"' in profiled
+    for th in ("<th>node data</th>", "<th>value</th>", "how it’s displayed</th>"):
+        assert th in profiled, th
+    # FR-11: not-displayed value cells are editable (contenteditable) and edit NON-PERSISTENTLY
+    assert 'class="ni-v ni-edit" contenteditable="true"' in profiled
+    assert "function updateAddedLine" in profiled            # surfaces the edited field in the card
+    assert "card._nodeData[f]=cell.textContent" in profiled  # in-memory only (no disk write path)
+    # FR-12: EVERY field's row carries an on/off switch — displayed toggles the element, not-displayed
+    # surfaces the value. Both switch flavours + their handlers ship.
+    assert "data-ni-toggle=" in profiled and "data-ni-show=" in profiled and 'class="ni-sw"' in profiled
+    assert 'el.style.display = inp.checked ? "" : "none"' in profiled   # displayed: per-card element toggle
+    assert "inp.checked ? card._nodeData[f] : \"\"" in profiled          # not-displayed: surface the raw value
+    assert 'typeof raw==="object"?JSON.stringify(raw)' in profiled        # coerce list/num/bool (the toggle bug fix)
+    assert 'class="node-inspect"' not in profiled            # injected on toggle only, not pre-rendered
+    # app path byte-identical (inspector is profiled-navigator-only)
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_paging_control_ships_and_is_byte_safe():
+    # REQ-view-definition-mode FR-9: a definition-owned Paging group (pick-one page size incl. 1-at-a-time)
+    # + a #pagebar below the outline pages through the requirement nodes N at a time. Client-side machinery
+    # ships in the profiled render; the app path is byte-identical (no paging emitted without a profile).
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    assert 'data-group="paging"' in profiled                 # the Paging group header
+    for tid in ('id="pageAll"', 'id="page10"', 'id="page5"', 'id="page1"'):
+        assert tid in profiled, tid                          # the pick-one page sizes incl. 1-at-a-time
+    assert "function applyPaging" in profiled                # the paging engine
+    assert 'id="pagebar"' in profiled                        # the prev/next bar element
+    # the bar sits below the node outline (appears after #outline in the document)
+    assert profiled.index('id="pagebar"') > profiled.index('id="outline"')
+    assert "pg-hidden" in profiled and "pg-next" in profiled  # slice-hiding + next control
+    # app path byte-identical (paging is profiled-navigator-only)
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
+def test_frame_provenance_reads_as_definition_summary_not_cruft():
+    # REQ-view-definition-mode FR-7: a bare frame (payload.frame) must NOT report its empty chrome slots
+    # as "cruft" — the readout reads as a definition summary. (Client-side: the frame-branch ships in JS.)
+    prof = RenderProfile(statuses=(StatusStyle("spec", "Spec", "#888888", "written, not built"),))
+    profiled = render_html(_keyed_plan(), profile=prof)
+    # the definition-summary branch is present and gated on payload.frame
+    assert "if(payload.frame){" in profiled
+    assert "View Definition · " in profiled and "regions · " in profiled   # the definition-summary text
+    # the app path stays byte-identical
+    assert render_html(_plan()) == render_html(_plan(), profile=None)
+
+
 def test_chrome_provenance_readout_embeds_and_is_byte_safe():
     # FR-13: the debug panel's live provenance readout is fed by an embedded chrome summary; the app
     # path (no chrome) stays byte-identical.

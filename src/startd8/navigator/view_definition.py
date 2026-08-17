@@ -29,13 +29,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Union
 
-from startd8.wireframe.profile import RenderProfile, StatusStyle
+from startd8.wireframe.profile import (
+    DEFAULT_FIELD_DISPLAY,
+    DEFAULT_REGION_TEMPLATES,
+    RenderProfile,
+    StatusStyle,
+)
 
 # REQ-12: a chrome-binding placeholder — ``{field}`` referencing a single content-context key.
 _BINDING = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
-# The seven scaffold-taxonomy sections a definition (and its resolution) carry.
-_SECTIONS = ("theme", "vocabulary", "chrome", "glance", "control", "regions", "lenses")
+# The scaffold-taxonomy sections a definition (and its resolution) carry. FR-13 adds the display-logic
+# DATA sections (field_display = inspector field→element mapping, region_templates = frame templates).
+_SECTIONS = ("theme", "vocabulary", "chrome", "glance", "control", "regions", "lenses",
+             "field_display", "region_templates")
 
 # A defaults holder so the projection falls back to the RenderProfile field defaults (single source of
 # truth) for any chrome key a (partial) definition omits — the real domains supply every key.
@@ -82,6 +89,8 @@ class ViewDefinition:
     glance: Dict[str, Any] = field(default_factory=dict)
     control: Dict[str, Any] = field(default_factory=dict)
     regions: Dict[str, Any] = field(default_factory=dict)
+    field_display: Dict[str, Any] = field(default_factory=dict)      # FR-13: inspector field→element mapping
+    region_templates: Dict[str, Any] = field(default_factory=dict)   # FR-13: frame region display templates
     lenses: Dict[str, Any] = field(default_factory=dict)
 
     def _sections(self) -> Dict[str, Any]:
@@ -118,6 +127,8 @@ class ResolvedDefinition:
     glance: Dict[str, Any] = field(default_factory=dict)
     control: Dict[str, Any] = field(default_factory=dict)
     regions: Dict[str, Any] = field(default_factory=dict)
+    field_display: Dict[str, Any] = field(default_factory=dict)      # FR-13: inspector field→element mapping
+    region_templates: Dict[str, Any] = field(default_factory=dict)   # FR-13: frame region display templates
     lenses: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -266,6 +277,11 @@ def to_render_profile(
         theme_tokens=dict(resolved.theme or {}),
         control=dict(resolved.control or {}),      # REQ-14 FR-2: the debug-panel schema
         regions=dict(resolved.regions or {}),      # REQ-14 FR-5a: the region/layer taxonomy
+        # FR-13: the display-logic data — fall back to the RenderProfile default (single source) if a
+        # (partial) definition omits it, so the inspector/frame still have their maps.
+        field_display=dict(resolved.field_display) if resolved.field_display else dict(DEFAULT_FIELD_DISPLAY),
+        region_templates=(dict(resolved.region_templates) if resolved.region_templates
+                          else dict(DEFAULT_REGION_TEMPLATES)),
     )
 
 
@@ -307,6 +323,28 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
                              "outlineRegions": {"label": "Outline regions", "order": 1},
                              "hideScaffold": {"label": "Hide app-scaffold chrome", "order": 2},
                          }},
+            # REQ-view-definition-mode FR-8: the Debug group exposes the raw data + nodes being
+            # visualized in a panel below the export sign-off (Raw data = the payload variant, Node data
+            # = the node items). Additive, default off, profiled-navigator-only (app path byte-identical).
+            "debug": {"label": "Debug", "hint": "· raw", "order": 2,
+                      "toggles": {
+                          "rawData": {"label": "Raw data", "order": 0},
+                          "nodeData": {"label": "Node data", "order": 1},
+                          # FR-10: per-cell inspector — under each card, the node's data + how each field
+                          # is displayed (field→element mapping).
+                          "inspectCells": {"label": "Inspect cells", "order": 2},
+                      }},
+            # REQ-view-definition-mode FR-9: Paging — the first FUNCTIONAL display capability the View
+            # Definition owns. A pick-one page size shows N requirement nodes at a time; a prev/next bar
+            # pages through the rest, down to one at a time. Default All; definition-owned (a domain can
+            # reconfigure the sizes); additive + profiled-navigator-only (app path byte-identical).
+            "paging": {"label": "Paging", "hint": "· show N at a time", "order": 3,
+                       "toggles": {
+                           "pageAll": {"label": "All", "order": 0},
+                           "page10": {"label": "10", "order": 1},
+                           "page5": {"label": "5", "order": 2},
+                           "page1": {"label": "1 at a time", "order": 3},
+                       }},
         },
     },
     glance={"summary": "status-counts"},
@@ -336,6 +374,11 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
             "glance-status-cell": {"layer": "computed", "scaffold": "status roll-up — status_counts (+ PF-1 grounding filter)", "order": 8},
         },
     },
+    # FR-13: the display-logic DATA — the inspector field→element mapping + the frame region templates —
+    # now live in the definition (imported from the projection target so there is one canonical copy). A
+    # domain delta can reconfigure either via the keyed cascade.
+    field_display=dict(DEFAULT_FIELD_DISPLAY),
+    region_templates=dict(DEFAULT_REGION_TEMPLATES),
 )
 
 # FR-4: the requirements domain — ``extends: base`` + a thin delta (its vocabulary/statuses + chrome).
