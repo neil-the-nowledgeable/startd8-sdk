@@ -233,6 +233,31 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .item .lives .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin-right:6px}
   .item .was{color:var(--faint);font-size:12px;font-family:var(--mono);margin:2px 0 0 1px}
   .item .was .lk{font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-right:6px}
+  /* ── Requirement-card readability (PROFILED NAVIGATOR ONLY — body.nav-profiled; a generated-app
+     preview has no profile → plain .item card above, byte-identical). Each requirement reads as an
+     editorial reference-card: a status-coloured spine to scan by, a FR-id tag + title, "what it does"
+     in readable serif prose, and evidence/metadata set apart as a quiet indented technical block. ── */
+  body.nav-profiled #outline .item{border-top:none;margin:11px 0;padding:12px 16px 13px 16px;
+    background:var(--card);border:1px solid var(--line);border-left:3px solid var(--st,var(--line2));
+    border-radius:9px;transition:box-shadow .16s ease,border-left-color .16s}
+  body.nav-profiled #outline .item:first-child{border-top:none}
+  body.nav-profiled #outline .item:hover{box-shadow:0 3px 15px rgba(45,33,16,.08)}
+  body.nav-profiled #outline .item .row{gap:10px}
+  /* the FR-id as a leading mono tag (was hidden); pulled before the title via flex order */
+  body.nav-profiled #outline .item .lbl-key{display:inline-block;order:-1;font-family:var(--mono);
+    font-size:10.5px;font-weight:700;letter-spacing:.02em;color:var(--accent);background:rgba(27,84,95,.08);
+    padding:2px 7px;border-radius:5px;flex:none}
+  body.nav-profiled #outline .item .lbl{font-size:15px;line-height:1.33;letter-spacing:-.005em;color:var(--ink)}
+  body.nav-profiled #outline .item .badge{margin-left:auto}   /* status to the right edge */
+  /* "what it does" — prose reads better in the serif body than cramped mono */
+  body.nav-profiled #outline .item .det{font-family:var(--serif);font-size:13.5px;line-height:1.5;
+    color:var(--ink);margin:8px 0 0}
+  /* evidence + metadata — a quiet indented technical block set apart from the prose */
+  body.nav-profiled #outline .item .lives,
+  body.nav-profiled #outline .item .was,
+  body.nav-profiled #outline .item .node-meta{margin:8px 0 0;padding-left:11px;
+    border-left:2px solid var(--line);font-size:11.5px}
+  body.nav-profiled #outline .item .lives{color:var(--ink2)}
   .badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;
     border-radius:20px;color:#fff;white-space:nowrap}
   .b-planned{background:var(--planned)}.b-defaults{background:var(--defaults)}
@@ -658,7 +683,12 @@ __PLAN_DATA__
     var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
     // PF-1: expose the item's status as a data attribute when a domain profile is active so the
     // filter machinery (data-status selectors) can show/hide items without touching the app path.
-    if(payload.profile && item.status) w.setAttribute("data-status", item.status);
+    if(payload.profile && item.status){
+      w.setAttribute("data-status", item.status);
+      // readability: stamp the status colour as a CSS var so the card's status spine renders it
+      // (profiled-navigator only — the app path sets nothing → byte-identical).
+      var _ps=profStatus(item.status); if(_ps&&_ps.color) w.style.setProperty("--st", _ps.color);
+    }
     var mock=mockFor(k,item);
     var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
     var livesHtml="";
@@ -758,6 +788,9 @@ __PLAN_DATA__
   // ---------- render the whole document from the current variant (re-run on toggle, QW-1) ----------
   function renderAll(){
     _activeFilter = null;   // PF-1: reset status filter on each full re-render (voice/depth toggle)
+    // readability: mark the body so the enhanced requirement-card styling applies to the PROFILED
+    // navigator only — a generated-app preview (no profile) keeps the plain .item card, byte-identical.
+    document.body.classList.toggle("nav-profiled", !!payload.profile);
     data=resolveVM(cur);                                       // EC-4: kit → its base voice's variant
     EU=((data.audience&&data.audience.voice)==="end_user"); s=data.summary||{};
     renderLens();                                              // EC-4: the delivery-role focus lens
