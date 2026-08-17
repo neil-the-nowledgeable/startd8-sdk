@@ -111,7 +111,10 @@ def _node_detail(node: Node) -> str:
     if a.get("verify"):
         lines.append("VERIFY → " + a["verify"])
     if a.get("serves"):
-        lines.append("SERVES → " + a["serves"])
+        line = "SERVES → " + a["serves"]
+        if a.get("serves_objective"):   # the joined objective text — the 'why / system benefit'
+            line += " · " + a["serves_objective"]
+        lines.append(line)
     if a.get("fr_health"):
         lines.append("FR-HEALTH: " + a["fr_health"])
     if node.wont:

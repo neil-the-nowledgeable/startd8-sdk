@@ -258,6 +258,16 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.nav-profiled #outline .item .node-meta{margin:8px 0 0;padding-left:11px;
     border-left:2px solid var(--line);font-size:11.5px}
   body.nav-profiled #outline .item .lives{color:var(--ink2)}
+  /* what/how/why captioned rows — HOW (verify) neutral, WHY (serves+objective) accented, quiet context */
+  body.nav-profiled #outline .item .ci-row{font-size:12.5px;line-height:1.5;color:var(--ink2);
+    margin:8px 0 0;padding-left:11px;border-left:2px solid var(--line)}
+  body.nav-profiled #outline .item .ci-row.ci-why{border-left-color:var(--accent);color:var(--ink)}
+  body.nav-profiled #outline .item .ci-row.ci-wont{color:var(--faint)}
+  body.nav-profiled #outline .item .ci-cap{display:block;font-family:var(--mono);font-size:9.5px;
+    font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--faint);margin-bottom:2px}
+  body.nav-profiled #outline .item .ci-why .ci-cap{color:var(--accent)}
+  body.nav-profiled #outline .item .ci-meta{margin-top:8px}
+  body.nav-profiled #outline .item .ci-conf{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
   .badge{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;
     border-radius:20px;color:#fff;white-space:nowrap}
   .b-planned{background:var(--planned)}.b-defaults{background:var(--defaults)}
@@ -679,6 +689,26 @@ __PLAN_DATA__
   }
 
   // ---------- items ----------
+  // Turn the node-detail blob (NAME →/VERIFY →/SERVES →/WON'T:/DEPENDS-ON:/confidence:) into captioned
+  // WHAT/HOW/WHY rows for the profiled requirement card. Recognised prefixes become a labelled row; the
+  // served objective (joined onto SERVES) carries the 'why it matters'; any bare line is the statement.
+  var _SLOT={ "VERIFY → ":{cap:"Verify · how you’ll know",cls:"ci-how"},
+              "SERVES → ":{cap:"Serves · why it matters",cls:"ci-why"},
+              "WON’T: ":{cap:"Won’t",cls:"ci-wont"}, "WON'T: ":{cap:"Won’t",cls:"ci-wont"},
+              "DEPENDS-ON: ":{cap:"Depends on",cls:"ci-dep"}, "SHIPS-WHEN: ":{cap:"Ships when",cls:"ci-dep"} };
+  function structuredDet(detail){
+    var rows="", conf="", stmt="";
+    detail.split("\n").forEach(function(ln){
+      ln=ln.replace(/\s+$/,""); if(!ln) return;
+      if(ln.indexOf("NAME → ")===0||ln.indexOf("HANDLE: ")===0||ln.indexOf("FR-HEALTH: ")===0) return;
+      if(ln.indexOf("confidence: ")===0){ conf='<span class="ci-conf">conf '+esc(ln.slice(12))+'</span>'; return; }
+      var hit=null; for(var p in _SLOT){ if(ln.indexOf(p)===0){ hit=p; break; } }
+      if(hit){ var s=_SLOT[hit];
+        rows+='<div class="ci-row '+s.cls+'"><span class="ci-cap">'+s.cap+'</span>'+esc(ln.slice(hit.length))+'</div>'; }
+      else { stmt+=(stmt?" ":"")+ln; }
+    });
+    return (stmt?'<div class="det">'+esc(stmt)+'</div>':'')+rows+(conf?'<div class="ci-meta">'+conf+'</div>':'');
+  }
   function renderItem(k,item,nav){
     var w=document.createElement("div"); w.className="item"; w._nodeData=item;   // FR-10: exact per-cell data
     // PF-1: expose the item's status as a data attribute when a domain profile is active so the
@@ -690,7 +720,10 @@ __PLAN_DATA__
       var _ps=profStatus(item.status); if(_ps&&_ps.color) w.style.setProperty("--st", _ps.color);
     }
     var mock=mockFor(k,item);
-    var det=(item.detail&&!EU)?'<div class="det">'+esc(item.detail)+'</div>':'';
+    // Profiled requirement card: parse the node-detail blob into labelled WHAT/HOW/WHY slots so a reader
+    // sees what it does, how it's verified, and WHY it matters (the served objective). App path (no
+    // profile) keeps the plain .det blob → byte-identical.
+    var det=(item.detail&&!EU)?(payload.profile?structuredDet(item.detail):'<div class="det">'+esc(item.detail)+'</div>'):'';
     var livesHtml="";
     if(item.lives&&item.lives.length&&!EU){
       livesHtml='<div class="lives"><span class="lk">Lives</span>'+
