@@ -80,6 +80,28 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 
 ## Recommended next pickups (priority order)
 
+### Loop backlog — BUILD-READY specs awaiting a separate implementation session
+
+> The 2026-08-17 **two-sided-coin inflection** (`STRATEGY_navig8r-inflection-two-sided-validation.md`)
+> opened a NEW arc on top of the REQ-01..27 one. Each spec below passes the Spec Delivery Loop stage-0
+> gate and has a self-contained `HANDOFF_*.md`. **Two independent tracks** — card-browse filters, and
+> graph/composition. Take a spec through the loop from its handoff; land via the hot-main ff cadence.
+
+| # | Spec | Track | State | Handoff / note |
+|---|------|-------|-------|----------------|
+| 1 | `REQ-unify-card-visibility-predicates` (Move 3) | card-browse | **BUILD-READY** | `HANDOFF_take-REQ-unify-visibility-predicates-…` — the enabler; fixes the `pagedCards`↔`pf-hidden` bug; **do first** |
+| 2 | `REQ-freetext-search-on-navigator-card-browse` | card-browse | **BUILD-READY** | `HANDOFF_take-REQ-freetext-search-…` — consumes Move 3's seam (its FR-5 is subsumed by Move 3) |
+| 3 | Move 2 — audience-first tiering | card-browse | outlined | spec reflectively against Move 3's landed seam (STRATEGY §Move 2) |
+| A | `REQ-feature-capability-composition-rollup` | graph/grammar | **BUILD-READY** | `HANDOFF_take-REQ-feature-capability-composition-…` — orthogonal; the SDK dogfood of ContextCore EB-4 |
+| B | Move 1 — navig8r as the hub (cross-source graph) | graph | outlined | after the composition primitive (STRATEGY §Move 1) |
+
+> **Order:** card-browse = Move 3 → search → Move 2; graph = composition primitive → Move 1. The two
+> tracks are independent. **Already shipped this arc:** node-fields distillation (`ce6ed667`) + requirement
+> detail view (`788042a8`). *Cross-repo sibling (ContextCore, not the loop):*
+> `REQ-contextcore-objective-serves-edge.md` — the same composition primitive, objective→objective.
+
+---
+
 > **Reconciled 2026-08-17 (twice — the first pass was itself stale).** A full build-status review found
 > the arc far more complete than the ledger claimed. **Already built (do NOT pick up):** REQ-03 a11y
 > (`d416fc38`) · REQ-04 lift-lenses (`5cb91c37`) · **REQ-15 frame view** (`ea65febf`) · **REQ-19
@@ -87,7 +109,7 @@ called out explicitly. Names follow the semantic-naming convention (no integer+c
 > writes the artifact; `build/govern --realization-provenance` load it). The recurring lesson: verify by
 > FR-tag commits + tests, never by this list.
 
-**Genuinely open — the requirements-visualization arc is complete; only deferred-by-design tails remain:**
+**Deferred-by-design tails of the REQ-01..27 arc** (the *new* inflection backlog is the table above; the original numbered arc is complete bar these tails):
 
 1. **REQ-25 judgment-rungs — un-park MECHANISM now grounded** (`785fb317`): the **labeled fixture set** +
    precision-measurement harness shipped, so a rung's `precision` is now MEASURED over 24 labeled cases
