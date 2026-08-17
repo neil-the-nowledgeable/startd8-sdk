@@ -1291,6 +1291,13 @@ app.command("wireframe")(_wireframe_command)
 # ──────────────────────────────────────────────────────────────────────────
 app.command("validate")(validate_command)
 
+# ──────────────────────────────────────────────────────────────────────────
+# build-to-spec (oracle-generation loop — FR-8; default-OFF behind oracle_loop.enabled, FR-11)
+# ──────────────────────────────────────────────────────────────────────────
+from .cli_oracle import build_to_spec as _build_to_spec_command  # noqa: E402
+
+app.command("build-to-spec")(_build_to_spec_command)
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Service Assistant (project<->SDK bridge: detect runs, triage, notify)

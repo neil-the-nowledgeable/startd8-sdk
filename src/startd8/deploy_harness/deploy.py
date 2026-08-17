@@ -42,6 +42,51 @@ _SMOKE_STATUS = {
 }
 
 
+def _run_oracle_rung(
+    result: LadderResult,
+    root: Path,
+    port: Optional[int],
+    spec_path: Optional[Path | str],
+    oracle_enabled: Optional[bool],
+) -> None:
+    """FR-3 ORACLE rung — the spec's runnable ``Verify:`` clauses as the fitness (doubly gated).
+
+    Records NOTHING (byte-identical) unless a spec is supplied AND the FR-11 gate is on. Imports the
+    oracle_loop seams lazily so the deploy harness carries no oracle dependency when disabled.
+    """
+    # FR-11: consult the config gate unless the caller forced it (fast tests / the loop CLI).
+    from startd8.oracle_loop import oracle_loop_enabled
+
+    enabled = oracle_loop_enabled() if oracle_enabled is None else oracle_enabled
+    if spec_path is None or not enabled:
+        return  # doubly-gated off → no ORACLE rung → byte-identical
+
+    from startd8.oracle_loop.report import (
+        STATUS_FITNESS_PASSED,
+        STATUS_NO_FITNESS,
+        rung_status,
+    )
+    from startd8.oracle_loop.runner import run_oracle
+
+    t0 = time.monotonic()
+    verdicts = run_oracle(spec_path, root, live_port=port)
+    for v in verdicts:
+        result.oracle_verdicts[v.fr_id] = v
+    status_str = rung_status(verdicts)
+    if status_str == STATUS_FITNESS_PASSED:
+        ladder_status, reason = StageStatus.PASS, None
+    elif status_str == STATUS_NO_FITNESS:
+        ladder_status, reason = StageStatus.SKIPPED, STATUS_NO_FITNESS
+    else:
+        ladder_status, reason = StageStatus.FAIL, status_str
+    result.record(
+        Stage.ORACLE,
+        ladder_status,
+        reason=reason,
+        ms=(time.monotonic() - t0) * 1000,
+    )
+
+
 def deploy_app_local(
     app_root: Path | str,
     *,
@@ -55,6 +100,8 @@ def deploy_app_local(
     runner_python: Optional[str] = None,
     editable_installs: Optional[list[str]] = None,
     work_parent: Optional[Path] = None,
+    spec_path: Optional[Path | str] = None,
+    oracle_enabled: Optional[bool] = None,
 ) -> LadderResult:
     """Deploy one generated app locally and return its graded :class:`LadderResult`.
 
@@ -208,6 +255,11 @@ def deploy_app_local(
                     reason=reason,
                     ms=(time.monotonic() - t0) * 1000,
                 )
+
+            # ---- oracle rung (FR-3) — DOUBLY GATED: a spec supplied AND the FR-11 flag on.
+            # Absent either, NO ORACLE rung is recorded → this LadderResult is byte-identical
+            # to the pre-feature output (FR-9/FR-11).
+            _run_oracle_rung(result, root, boot.port, spec_path, oracle_enabled)
         return result
     finally:
         if cleanup:

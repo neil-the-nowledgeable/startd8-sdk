@@ -17,6 +17,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from ..oracle_loop import OracleVerdict  # FR-3: typed per-FR verdict home (no cycle — see __init__)
+
 
 class Stage(str, Enum):
     """The ordered rungs of the deploy ladder. ``order`` drives ``highest_stage`` computation."""
@@ -27,6 +29,7 @@ class Stage(str, Enum):
     HEALTH = "health"
     SMOKE = "smoke"
     CONTEXT_SMOKE = "context_smoke"
+    ORACLE = "oracle"  # FR-3 (oracle-generation-loop): appended LAST — no existing stage renumbered
 
     @property
     def order(self) -> int:
@@ -40,6 +43,9 @@ _STAGE_ORDER: Dict[Stage, int] = {
     Stage.HEALTH: 3,
     Stage.SMOKE: 4,
     Stage.CONTEXT_SMOKE: 5,
+    # ORACLE is appended AFTER CONTEXT_SMOKE (R1-S3): inserting mid-sequence would renumber
+    # CONTEXT_SMOKE and break FR-9's byte-identity guard on the existing rungs.
+    Stage.ORACLE: 6,
 }
 
 
@@ -113,6 +119,9 @@ class LadderResult(BaseModel):
     harness_env: HarnessEnv = Field(default_factory=HarnessEnv)
     log_paths: Dict[str, str] = Field(default_factory=dict)
     outbound_context_smoke: Dict[str, StageResult] = Field(default_factory=dict)
+    # FR-3: per-FR ORACLE-rung verdicts, keyed by fr_id (mirrors the ``outbound_context_smoke``
+    # dict-field precedent at line ~115). Empty for a spec-less / disabled deploy (FR-11 byte-check).
+    oracle_verdicts: Dict[str, OracleVerdict] = Field(default_factory=dict)
 
     # ---- builder helpers (used by the stage orchestration in M1+) ----
 
