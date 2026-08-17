@@ -11,7 +11,7 @@ the REQ-08 Stage pattern, **no new Node field**. ``revises`` is a *relation valu
 from __future__ import annotations
 
 import dataclasses
-from typing import List
+from typing import List, Optional
 
 from .models import DerivationEdge, EdgeRelation, Node, NodeEvidence
 
@@ -29,10 +29,14 @@ class LessonStatus:
     ALL = (PROPOSED, ACCEPTED, REJECTED)
 
 
-def build_lesson_from_regression(finding) -> Node:
+def build_lesson_from_regression(finding, *, confidence=None) -> Node:
     """FR-5 — the end-to-end proof: a REQ-19 determinism-regression ``Finding`` → a ``proposed`` Lesson
     that ``derives-from`` the regression outcome (its grounding) and ``revises`` the offending contract
-    node named in the finding (``finding.fr``). The smallest closure of the retrospective loop."""
+    node named in the finding (``finding.fr``). The smallest closure of the retrospective loop.
+
+    ``confidence`` (REQ-21 FR-4): the Lesson's grounding confidence = the measured join confidence of the
+    regression (how confidently the drift was measured). It gates the auto-tier — ``None`` or below the
+    floor → the revise stays ``human``. Set live by :func:`nodes_from_retrospective`."""
     contract_key = (getattr(finding, "fr", "") or getattr(finding, "check", "")).strip() or "unknown"
     outcome_key = f"regression:{contract_key}"
     message = getattr(finding, "message", "")
@@ -41,6 +45,7 @@ def build_lesson_from_regression(finding) -> Node:
         does=(f"Determinism regression on {contract_key!r} (planned deterministic, realized llm) — "
               f"propose revising the contract's regime plan or generation path."),
         category=LESSON_CATEGORY,
+        confidence=confidence,   # REQ-21 FR-4: grounding confidence = the measured regression confidence
         # FR-2 grounding: `lives` cites the outcome it derived from — a belief is cruft until grounded.
         lives=(NodeEvidence(type="link", ref=outcome_key, note="determinism-regression outcome"),),
         derivation=(
@@ -57,24 +62,52 @@ def build_lesson_from_regression(finding) -> Node:
     )
 
 
-def nodes_from_retrospective(spec_dir, provenance) -> List[Node]:
+def _measured_confidence(node: Node, provenance) -> Optional[float]:
+    """REQ-21 FR-4 — the measured join confidence for a node's regime (its Lesson's grounding
+    confidence): the provenance match on the node's derivation edges, else its lives; ``None`` when no
+    match. A high-confidence measured regression yields a high-confidence lesson (auto-eligible); a
+    low-confidence one stays below the floor (``human``)."""
+    if provenance is None:
+        return None
+    for e in getattr(node, "derivation", ()) or ():
+        match = provenance.regime_for(node, e)
+        if match is not None:
+            return match[1]
+    match = provenance.regime_for(node, None)  # edge-less lives join
+    return match[1] if match is not None else None
+
+
+def nodes_from_retrospective(spec_dir, provenance, *, include_pipeline: bool = True) -> List[Node]:
     """Project a corpus into Lesson nodes (the live retrospective source, FR-5/FR-6): run REQ-19's
-    determinism-regression check over each doc's requirement nodes against the measured ``provenance``,
-    and build one grounded, ``proposed`` Lesson per regression. Empty when no regression fires (honest —
-    the loop only produces a lesson when construction actually drifted from plan)."""
+    determinism-regression check against the measured ``provenance`` and build one grounded, ``proposed``
+    Lesson per regression, its grounding **confidence** carried from the measured match (so the REQ-21
+    auto-tier is reachable). A regression fires only on nodes that carry a DECLARED (planned) regime — the
+    pipeline stages (``include_pipeline``, the natural declared-regime source) and any requirement node
+    that declares one — so the loop produces a lesson exactly when construction drifted from plan."""
     from pathlib import Path
 
     from .govern import check_determinism_regression
     from .sources_requirements import nodes_from_requirements
 
     lessons: List[Node] = []
+
+    def _harvest(nodes: List[Node], doc: str) -> None:
+        by_key = {n.key: n for n in nodes}
+        for finding in check_determinism_regression(nodes, provenance, doc):
+            node = by_key.get(getattr(finding, "fr", ""))
+            conf = _measured_confidence(node, provenance) if node is not None else None
+            lessons.append(_tag_revise_tier(build_lesson_from_regression(finding, confidence=conf)))
+
+    if include_pipeline:
+        from .sources_pipeline import nodes_from_pipeline
+        _harvest(nodes_from_pipeline(), "pipeline")
+
     for p in sorted(Path(spec_dir).glob("REQ-*.md")):
         try:
             reqs = nodes_from_requirements(p)
         except Exception:  # pragma: no cover - projection is defensive; a bad doc never aborts the sweep
             continue
-        for finding in check_determinism_regression(reqs, provenance, p.name):
-            lessons.append(_tag_revise_tier(build_lesson_from_regression(finding)))
+        _harvest(reqs, p.name)
     return lessons
 
 
