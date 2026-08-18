@@ -69,9 +69,29 @@ explicitly. Names follow the semantic-naming convention (no integer+content-type
 
 ## 📝 Planned, NOT explicitly deferred (open specs — no code yet)
 
-> **None currently.** (REQ-15 moved to Implemented on 2026-08-17 — it was misfiled here as "building
-> now" but is built + landed `ea65febf`. The only remaining open work is the two seams below, both of
-> which HAVE code and are extensions, not greenfield specs.)
+> **Navigator REQ-01..27 arc: none.** (REQ-15 moved to Implemented on 2026-08-17 — it was misfiled here as
+> "building now" but is built + landed `ea65febf`. The only remaining open work on that arc is the two seams
+> below, both of which HAVE code and are extensions, not greenfield specs.)
+
+### det-doc-kit metabolization arc (open specs, 2026-08-17) — the CRP-theme shift-left
+
+> The CRP-theme metabolization thread (four parallel investigations → `SYNTHESIS_crp-theme-metabolization-four-investigations.md`)
+> produced one spec + a named backlog. **Key finding for the builder: these are NOT greenfield — REQ-32's
+> draft-surface wire is a fan-out of the already-built + fixture-proven REQ-25 fact-rung/judgment-rung
+> machinery** (`2097d43e` + `785fb317`), and REQ-30/31 are the same class as the open `Depends:` grammar tail.
+> The convergence: all four themes queue at ONE seam (REQ-32); wire it once → each theme is one additive predicate.
+
+| Spec | What | State | Effort | Closest relative — REUSE, don't rebuild |
+|---|---|---|--------|------------------------------------------|
+| **REQ-32 draft-time firing wire** | the convergence unlock — inject settled-themes into the CRP prompt (FR-1) + fire fact-rung theme lints in det-req `extract.py` (FR-2) + park judgment-rungs behind the REQ-07 precision gate (FR-3) + complete REQ-01 FR-4 keyed lookup + `pattern_catalog sync` (FR-4) + register LOOP_CATALOG #8 (FR-5) | 📄 **spec** (`e3560ca3`), no code | M, cross-repo (dev-os + CRP generator) | **REQ-25** parking machinery (`JudgmentRung`/`is_unparked`/`measure_precision`) verbatim; **prereq** for the rows below |
+| **REQ-30 schema `Emits:` field** | serialization-artifact FR grammar (theme #3) + `serialization_gaps` fact-lint | ⬜ named, not specced | M, cross-repo | same class as the open **`Depends:` field (G-1)** — build as one det-req-kit grammar batch |
+| **REQ-31 lifecycle `Lifecycle:` field** | state/lifecycle FR grammar (theme #6) + `lifecycle_gaps` fact-lint; det-plan process rollup grounded in shipped `checkpoint.py` | ⬜ named, not specced | M, cross-repo | `Depends:` field (G-1); det-plan `§2/§10` |
+| **ambiguity / atomic-write / security fact-rungs** | the top-3 ship-ready theme lints (SYNTHESIS §3) — one predicate each, fire through REQ-32's seam | ⬜ backlog | S each | **security ≈ REQ-25 FR-1** (same `query_prime/security verify_file` reuse, draft-text altitude) |
+
+> **Shared open questions with the REQ-22/23/25 tails** (don't re-solve): (a) the draft-lint **default-sweep-vs-opt-in**
+> wiring is the *same* decision as "whole-liveness-layer govern wiring" (blocked-on corpus signal adoption); (b) the
+> judgment-rungs need the *same* real LLM verify-live judge as the REQ-25 residual; (c) cousin of the unbuilt det-crp
+> `crp_lint.py` (both fire CRP-derived rules on det-* docs, both grounded in CRP-INDEX).
 
 > **REQ-14 numbering resolution (2026-08-16):** `REQ-14` = **control-region unification** (`REQ-14-control-region-unification.md`, BUILT `a84bf12c`). Two specs briefly collided under REQ-14 — a narrow `control-schema-formalization` (data-only, renderer-consumption deferred) and this broader *control + region* unification (steps 4+5, renderer consumption). The **unification was built** (it closes the wired-vs-inert mirror the integration review flagged), so it is the canonical REQ-14; the narrow `control-schema-formalization.md` is **superseded + removed**. The earlier "renumber the unification to REQ-15" note is retired.
 
@@ -94,7 +114,7 @@ explicitly. Names follow the semantic-naming convention (no integer+content-type
 
 **det-doc-kit arc:**
 - **det-crp `crp_lint.py`** — the format is authored; the conformance lint tool (charter §9.2) is not built. `[S]`
-- **cross-repo det-req `Depends:` field (G-1)** — makes projected `dependsOn` real; the projector already consumes it, the gap is upstream in det-req-kit's grammar. `[M, cross-repo]`
+- **cross-repo det-req `Depends:` field (G-1)** — makes projected `dependsOn` real; the projector already consumes it, the gap is upstream in det-req-kit's grammar. `[M, cross-repo]` — **same class as REQ-30/31 (`Emits:`/`Lifecycle:`)**; batch the three det-req-kit grammar-field additions together.
 - **det-howto pairsWith path-value convergence** — the *line format* is shared now, but howto stores a full path while plan/handoff store a basename (both resolve; a minor projector-choice divergence). `[XS]`
 - **provider skip-path unexercised** — the 3 projectors' `is_in_sync` `$0`-skip is unit-tested but never driven by a real prime-contractor run (an integration test would prove the `$0` claim end-to-end). `[S]`
 - **push the det-doc-kit arc to `origin`** — it's on local `main` only (through `72fdd740`). `[XS, human call]`
