@@ -32,7 +32,7 @@ is *spec'd/partly-built*; the **research→spec pipeline** resolved most open qu
 | **REQ-20/21/24** | Lesson node + `revises` edge · guarded auto-tier · byte-identity applier | ✅ **built** | — |
 | **REQ-22/23** | verify-liveness · liveness fact cells | ✅ **built** | — |
 | **REQ-25** | liveness hypothesis cells (fact-rungs ship, judgment-rungs park) | 📄 spec · build-ready | build (Spec Delivery Loop) |
-| **REQ-26** | a11y as a cross-topology lens (the FF-1 analogue) | 📄 spec · build-ready | build |
+| **REQ-26** | a11y as a cross-topology lens (the FF-1 analogue) | ✅ **built** (`c8745e5d`; `render_a11y.a11y_view_of_nodes` + `_a11y_shell`) — v0.2 reflective correction: a11y is a modality that COMPOSES with node_lenses, not a lens value inside it; `--format a11y` × `--renderer tree\|graph` + `diff --a11y`; 10 FR pins | — |
 | **REQ-27** | self-dogfood `verify.gate` on our own corpus | 📄 spec · build-ready | build |
 | **REQ-28** | runtime o11y grounding (feature + AI o11y → SARIF/seam) | 📄 spec · build-ready | build |
 | **REQ-29** | the `$0` REQ→PLAN projector (det-plan-kit's generator) | ✅ **built + HTH-hardened** (`35e75c89`; `plan_codegen`) | — (extracted the STANDARD below) |
