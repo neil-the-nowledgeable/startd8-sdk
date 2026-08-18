@@ -95,14 +95,22 @@ doc → prompt; persists Appendix-C rounds, triages to A/B). This kit therefore 
 
 ## 10. Conformance (the `crp_lint.py` gate — what a validator checks)
 
-A det-crp/0.1 artifact is conformant iff: `formatVersion == det-crp/0.1`; `companionKind == CRP`; `pairsWith` resolves
-**LIVE** (§6); the focus carries a non-empty `leastReviewedTarget`; every Appendix-C suggestion has a unique
-`R{n}-S{k}`/`R{n}-F{k}` id; every Appendix-A/B row references a real C-suggestion id (no orphan dispositions); no C
-suggestion is dropped without an A/B disposition or an explicit pending (§4); A and B are present (append-only, may be
-empty on round 1); and `maturity` is not inflated beyond the rounds actually in Appendix A/B (§7). A `.bad` fixture
-(phantom `pairsWith` · a dropped C-suggestion · an orphan A/B id · a deleted A/B row · inflated `post-CRP` with empty
-A/B) must fail the gate `exit 1`. Findings emit as **SARIF 2.1.0** via the ONE `coverage_map/findings_sarif` (imported,
-not vendored — charter §5/§6).
+A det-crp/0.1 artifact is conformant iff: the focus carries a non-empty `leastReviewedTarget`; every Appendix-A/B row
+references a real C-suggestion id (no orphan dispositions); no id is **double-triaged** (in both A and B); A and B are
+present (append-only, may be empty on round 1); and — when the artifact declares them — `formatVersion == det-crp/0.1`
+/ `companionKind == CRP` / `maturity` not inflated / `pairsWith` LIVE. Findings emit as **SARIF 2.1.0** via the ONE
+`coverage_map/findings_sarif` (imported, not vendored — charter §5/§6).
+
+> **BUILT + dogfood fold-back (`src/startd8/crp_lint/` + `scripts/crp_lint.py`, 12 tests):** two rules the first draft
+> listed do NOT survive contact with real accreted review-logs, and the build corrected them:
+> - **id-uniqueness is authoring-time, not lint-time.** A naive "an id appears twice in Appendix C → duplicate" check
+>   is a FALSE POSITIVE — a real review-log legitimately *references* an id many times (the round's suggestion table +
+>   a coverage matrix + an endorsements list). A text lint can't tell a second *definition* (a genuine collision) from
+>   a *reference*, so uniqueness is enforced by the compiler at authoring time; the lint does **not** check it.
+> - **the header checks are conditional-on-presence.** A bare accreted review-log (an Appendix-A/B/C block inside a
+>   REQ/PLAN) usually carries **no** det-crp header — so `formatVersion`/`companionKind`/`pairsWith`/`maturity` are
+>   checked only when the artifact declares them, not required. The load-bearing checks are the review-log's *integrity*
+>   (orphan disposition · double-triage · A/B scaffold) + the focus target. Dogfooded clean over the 26-doc corpus.
 
 *v0.1 — formalizes the latent CRP format (focus + Appendix-A/B/C review-log) into a versioned det-doc-kit member,
 mirroring det-plan-0.1's essentials (header/DIDL · liveness · maturity ladder · honesty · §10 conformance) and adapting
