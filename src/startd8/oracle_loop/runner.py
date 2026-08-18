@@ -13,8 +13,12 @@ runnable ones **inside ``benchmark_matrix.sandbox``**:
 
 A ``SandboxResult``/``ServiceResult`` ``violation`` (env failure: never-ready / launch error /
 client raised) maps to :data:`VERDICT_ERROR` (degrade), NEVER the model's ``fail`` — the same
-"missing-key is infra_fail, not a catastrophic 0" rule the benchmark matrix encodes. A non-runnable
-FR yields :data:`VERDICT_SKIP`.
+"missing-key is infra_fail, not a catastrophic 0" rule the benchmark matrix encodes. Even a
+one-shot that *launched* (no ``violation``) but reports a NON-launch outcome degrades: a command
+that could not run (rc 127), or pytest's own env exit codes (interrupted / internal / usage / no
+tests collected, or an rc-1 pre-run bootstrap crash where pytest itself is not installed in the app
+venv) map to :data:`VERDICT_ERROR`, while a real test failure (pytest rc 1 without a bootstrap
+signature) stays :data:`VERDICT_FAIL` (OL-EB-5). A non-runnable FR yields :data:`VERDICT_SKIP`.
 
 This module does NOT import ``verify_oracle.evaluate``/``classify`` (navigator-locked) and never
 touches the navigator allow-list (NR-2 / FR-9).
@@ -50,6 +54,62 @@ logger = get_logger("startd8.oracle_loop.runner")
 
 # A conservative default timeout for a one-shot oracle command.
 _ONESHOT_TIMEOUT_S = 120.0
+
+# Exit code for "command not found" (POSIX shell / exec convention). For ANY one-shot, rc 127 means
+# the command isn't runnable in the app env → env/infra outcome (ERROR), never the model's fail.
+_RC_COMMAND_NOT_FOUND = 127
+
+# pytest exit-code semantics (https://docs.pytest.org/en/stable/reference/exit-codes.html):
+#   0 = all passed · 1 = tests failed (real model fail) · 2 = interrupted · 3 = internal error
+#   4 = usage error · 5 = no tests collected. Codes {2,3,4,5} are harness/env outcomes → ERROR
+#   (degrade), NOT the model's catastrophic fail.
+_PYTEST_ENV_CODES = frozenset({2, 3, 4, 5})
+
+# Substrings in stderr that mark a pre-run pytest BOOTSTRAP failure (pytest / a plugin / conftest
+# could not even launch — e.g. pytest itself is not installed in the app venv). rc 1 accompanied by
+# one of these is an env failure, not real test failures → ERROR. This is the OL-EB-5 case: the $0
+# dry-run ran `pytest tests/test_health.py` against fixtures/otel-demo/email-py (pytest not in that
+# app's requirements) and got rc 1 with a pytest bootstrap traceback — previously mis-scored `fail`.
+_PYTEST_BOOTSTRAP_SIGNATURES = (
+    "ModuleNotFoundError",
+    "ImportError",
+    "No module named",
+    "_pytest",
+)
+
+
+def _is_pytest_invocation(argv: List[str]) -> bool:
+    """True when the one-shot argv runs pytest — either ``pytest …`` or ``python[3] -m pytest …``."""
+    if not argv:
+        return False
+    if argv[0] == "pytest":
+        return True
+    return argv[0] in ("python", "python3") and "-m" in argv[1:] and "pytest" in argv[1:]
+
+
+def _classify_oneshot(argv: List[str], returncode: int, stderr: str) -> str:
+    """Exit-code-aware verdict for a one-shot that launched (no sandbox ``violation``).
+
+    Splits infra/env failures (→ ERROR, degrade) from real model failures (→ FAIL) so a harness gap
+    (a command that cannot launch, pytest not installed, no tests collected) never wrongly triggers a
+    regenerate — the same "infra-fail is not the model's catastrophic 0" rule the benchmark matrix
+    encodes. ``returncode == 0`` (PASS) is handled by the caller and never reaches here.
+    """
+    # Command-not-found for ANY one-shot: the command isn't runnable in the env → infra/env.
+    if returncode == _RC_COMMAND_NOT_FOUND:
+        return VERDICT_ERROR
+    if _is_pytest_invocation(argv):
+        # pytest's own exit-code semantics: {2,3,4,5} are interrupted/internal/usage/no-tests → env.
+        if returncode in _PYTEST_ENV_CODES:
+            return VERDICT_ERROR
+        if returncode == 1:
+            # rc 1 = tests failed — UNLESS stderr shows a pre-run bootstrap crash (pytest couldn't
+            # even launch), which is an env failure, not real test failures.
+            if any(sig in (stderr or "") for sig in _PYTEST_BOOTSTRAP_SIGNATURES):
+                return VERDICT_ERROR
+            return VERDICT_FAIL
+    # Any other one-shot (or a pytest rc outside the classified set): non-zero → real model fail.
+    return VERDICT_FAIL
 
 
 def _probe_descriptor(p: ProbeSpec) -> str:
@@ -152,10 +212,21 @@ def _run_oneshot(
             command_or_probe=descriptor,
             isolation_level=result.isolation_level,
         )
-    verdict = VERDICT_PASS if result.returncode == 0 else VERDICT_FAIL
-    reason = "exit 0" if result.returncode == 0 else f"exit {result.returncode}"
-    if verdict == VERDICT_FAIL and result.stderr:
-        reason = f"{reason}: {result.stderr[-400:]}"
+    if result.returncode == 0:
+        verdict = VERDICT_PASS
+        reason = "exit 0"
+    else:
+        # Exit-code-aware infra-vs-model split (OL-EB-5): a command that cannot launch (rc 127) or a
+        # pytest env outcome (interrupted / no-tests / bootstrap crash) DEGRADES to error, not fail.
+        verdict = _classify_oneshot(cmd, result.returncode, result.stderr)
+        if verdict == VERDICT_ERROR:
+            reason = f"env: command could not run ({descriptor}) — exit {result.returncode}"
+            if result.stderr:
+                reason = f"{reason}: {result.stderr[-400:]}"
+        else:
+            reason = f"exit {result.returncode}"
+            if result.stderr:
+                reason = f"{reason}: {result.stderr[-400:]}"
     return OracleVerdict(
         fr_id="",
         kind=KIND_ONESHOT,

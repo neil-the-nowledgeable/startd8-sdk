@@ -22,10 +22,10 @@ _APP = _FIX / "passing_app"
 
 
 class _FakeSandboxResult:
-    def __init__(self, returncode=0, violation=None):
+    def __init__(self, returncode=0, violation=None, stderr=None):
         self.returncode = returncode
         self.stdout = ""
-        self.stderr = "boom" if returncode else ""
+        self.stderr = stderr if stderr is not None else ("boom" if returncode else "")
         self.violation = violation
         self.isolation_level = "rlimits+seatbelt"
 
@@ -136,3 +136,60 @@ def test_unresolved_console_script_is_error_not_executed(tmp_path, monkeypatch):
     v = _run_oneshot(clause, tmp_path, SandboxConfig())
     assert v.verdict == VERDICT_ERROR and "unresolved console-script" in v.reason
     assert ran["called"] is False   # never executed
+
+
+# --------------------------------------------------------------------------- OL-EB-5
+# A one-shot that LAUNCHED but reports a non-launch outcome (command not runnable, pytest env exit
+# codes, or an rc-1 pytest bootstrap crash where pytest isn't installed in the app venv) must
+# degrade to ERROR — not surface as the model's FAIL and wrongly trigger a regenerate.
+
+
+def _oneshot_verdict(monkeypatch, argv, returncode, stderr, tmp_path):
+    """Drive ``_run_oneshot`` with a controlled sandbox result for a pytest/one-shot argv."""
+    from startd8.oracle_loop.grammar import KIND_ONESHOT, ParsedClause
+    from startd8.oracle_loop.runner import _run_oneshot
+    from startd8.benchmark_matrix.sandbox import SandboxConfig
+
+    monkeypatch.setattr(
+        runner_mod, "run_sandboxed",
+        lambda *a, **k: _FakeSandboxResult(returncode=returncode, stderr=stderr),
+    )
+    clause = ParsedClause(fr_id="FR-1", kind=KIND_ONESHOT, command_argv=tuple(argv))
+    return _run_oneshot(clause, tmp_path, SandboxConfig())
+
+
+def test_pytest_no_tests_collected_rc5_is_error(monkeypatch, tmp_path):
+    """pytest rc 5 (no tests collected) is a harness/env outcome → ERROR, not the model's FAIL."""
+    v = _oneshot_verdict(monkeypatch, ["pytest", "tests/"], 5, "no tests ran", tmp_path)
+    assert v.verdict == VERDICT_ERROR
+    assert "exit 5" in v.reason
+
+
+def test_pytest_rc1_real_test_failure_is_fail(monkeypatch, tmp_path):
+    """pytest rc 1 with a NORMAL test-failure stderr (no bootstrap signature) → FAIL (real defect)."""
+    stderr = "FAILED tests/test_health.py::test_ok - assert 500 == 200\n1 failed in 0.10s"
+    v = _oneshot_verdict(monkeypatch, ["pytest", "tests/test_health.py"], 1, stderr, tmp_path)
+    assert v.verdict == VERDICT_FAIL
+    assert "exit 1" in v.reason
+
+
+def test_pytest_rc1_bootstrap_module_not_found_is_error(monkeypatch, tmp_path):
+    """The OL-EB-5 case: pytest not installed in the app venv → rc 1 + a bootstrap traceback → ERROR."""
+    stderr = "ModuleNotFoundError: No module named 'pytest'"
+    v = _oneshot_verdict(monkeypatch, ["pytest", "tests/test_health.py"], 1, stderr, tmp_path)
+    assert v.verdict == VERDICT_ERROR
+    assert "could not run" in v.reason
+
+
+def test_non_pytest_oneshot_rc127_command_not_found_is_error(monkeypatch, tmp_path):
+    """Any one-shot returning rc 127 (command not found) → ERROR (not runnable in the env)."""
+    v = _oneshot_verdict(monkeypatch, ["python3", "run.py"], 127, "python3: command not found", tmp_path)
+    assert v.verdict == VERDICT_ERROR
+    assert "could not run" in v.reason
+
+
+def test_oneshot_rc0_is_pass(monkeypatch, tmp_path):
+    """rc 0 stays PASS regardless of the classification path."""
+    v = _oneshot_verdict(monkeypatch, ["pytest", "tests/"], 0, "", tmp_path)
+    assert v.verdict == VERDICT_PASS
+    assert v.reason == "exit 0"
