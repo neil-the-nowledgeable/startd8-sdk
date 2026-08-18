@@ -72,7 +72,11 @@ def _rollup(statuses: List[str]) -> str:
     worst = "planned"
     worst_rank = -1
     for s in statuses:
-        rank = _STATUS_SEVERITY.index(s) if s in _STATUS_SEVERITY else len(_STATUS_SEVERITY)
+        rank = (
+            _STATUS_SEVERITY.index(s)
+            if s in _STATUS_SEVERITY
+            else len(_STATUS_SEVERITY)
+        )
         if rank > worst_rank:
             worst_rank, worst = rank, s
     return worst
@@ -101,8 +105,25 @@ def _node_meta(node: Node) -> str:
 # authored Touches entry, derived deterministically from the path alone (never guessed from meaning).
 # The test rule mirrors sources_requirements._TEST_PATH (one stable regex, cross-referenced here).
 _TOUCH_TEST = re.compile(r"(?:^|/)tests?(?:/|_)|(?:^|/)test_|_test\.")
-_TOUCH_CODE_EXT = {".py", ".go", ".js", ".ts", ".tsx", ".jsx", ".java", ".cs", ".rb", ".rs",
-                   ".c", ".cpp", ".cc", ".h", ".hpp", ".sh", ".sql"}
+_TOUCH_CODE_EXT = {
+    ".py",
+    ".go",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".java",
+    ".cs",
+    ".rb",
+    ".rs",
+    ".c",
+    ".cpp",
+    ".cc",
+    ".h",
+    ".hpp",
+    ".sh",
+    ".sql",
+}
 _TOUCH_CONFIG_EXT = {".yaml", ".yml", ".toml", ".json", ".ini", ".env", ".cfg", ".conf"}
 _TOUCH_DOC_EXT = {".md", ".rst", ".txt"}
 _TOUCH_BUILD_NAMES = {"dockerfile", "makefile", "go.mod", "go.sum"}
@@ -118,20 +139,21 @@ def _classify_touch(path: str) -> str:
         return "build"
     if _TOUCH_TEST.search(p):
         return "test"
-    ext = base[base.rfind("."):] if "." in base else ""
+    ext = base[base.rfind(".") :] if "." in base else ""
     if ext in _TOUCH_CODE_EXT:
         return "code"
     if ext in _TOUCH_CONFIG_EXT:
         return "config"
     if ext in _TOUCH_DOC_EXT:
         return "doc"
-    return "other"   # a bare projection token (e.g. "navigator-build") or an unknown extension
+    return "other"  # a bare projection token (e.g. "navigator-build") or an unknown extension
 
 
 def _typed_touches(attr_touches: str) -> List[tuple]:
     """Split the node's joined ``touches`` attribute back to entries and tag each with its kind — the
     full authored blast-radius, typed. Deterministic + source-bound; the split is over a comma-joined
-    path list (authored paths carry no ``, ``), and backticks/whitespace are stripped per entry."""
+    path list (authored paths carry no ``, ``), and backticks/whitespace are stripped per entry.
+    """
     out: List[tuple] = []
     for raw in (attr_touches or "").split(", "):
         p = raw.strip().strip("`").strip()
@@ -150,11 +172,13 @@ def _node_fields(node: Node) -> Dict[str, str]:
     f: Dict[str, str] = {}
     if a.get("name"):
         f["name"] = a["name"]
-    if a.get("archetype"):   # functional archetype (what kind of requirement) + its plain gloss
+    if a.get(
+        "archetype"
+    ):  # functional archetype (what kind of requirement) + its plain gloss
         f["archetype"] = a["archetype"]
         if a.get("archetype_gloss"):
             f["archetype_gloss"] = a["archetype_gloss"]
-    if a.get("touches_count"):   # scope / blast-radius — how many files it touches
+    if a.get("touches_count"):  # scope / blast-radius — how many files it touches
         f["touches_count"] = a["touches_count"]
     if a.get("handle"):
         f["handle"] = a["handle"]
@@ -165,7 +189,9 @@ def _node_fields(node: Node) -> Dict[str, str]:
         f["verify"] = a["verify"]
     if a.get("serves"):
         f["serves"] = a["serves"]
-        if a.get("serves_objective"):   # the joined objective text — the 'why / system benefit'
+        if a.get(
+            "serves_objective"
+        ):  # the joined objective text — the 'why / system benefit'
             f["serves_objective"] = a["serves_objective"]
     if a.get("fr_health"):
         f["fr_health"] = a["fr_health"]
@@ -179,10 +205,13 @@ def _node_fields(node: Node) -> Dict[str, str]:
 def _node_detail(node: Node) -> str:
     """The terminal text/JSON detail string (``wireframe/render.py`` Rich tree + canonical JSON body).
     Formatted FROM :func:`_node_fields` so the string and the structured card can never drift; the
-    first-class ``ships_when``/``confidence`` are appended here (string surface only)."""
+    first-class ``ships_when``/``confidence`` are appended here (string surface only).
+    """
     f = _node_fields(node)
     lines: List[str] = []
-    if f.get("name"):   # Deterministic semantic name first (identify by meaning, not the integer key).
+    if f.get(
+        "name"
+    ):  # Deterministic semantic name first (identify by meaning, not the integer key).
         lines.append("NAME → " + f["name"])
     if f.get("archetype"):
         line = "TYPE → " + f["archetype"]
@@ -264,9 +293,13 @@ def nodes_to_wireframe_plan(
             label = f"{node.key} — {does}" if does and does != node.key else node.key
             conf = node.confidence
             prompts_raw = (node.attributes.get("approve_prompts") or "").strip()
-            prompts = tuple(p.strip() for p in re.split(r"\s*[·|;]\s*", prompts_raw) if p.strip())
+            prompts = tuple(
+                p.strip() for p in re.split(r"\s*[·|;]\s*", prompts_raw) if p.strip()
+            )
             was_raw = (node.attributes.get("was") or "").strip()
-            was = tuple(w.strip() for w in re.split(r"\s*[·|,;]\s*", was_raw) if w.strip())
+            was = tuple(
+                w.strip() for w in re.split(r"\s*[·|,;]\s*", was_raw) if w.strip()
+            )
             items.append(
                 WireframeItem(
                     label=label,
@@ -275,7 +308,8 @@ def nodes_to_wireframe_plan(
                     paths=paths,
                     key=node.key,
                     lives=tuple(
-                        EvidenceRef(type=ev.type, ref=ev.ref, note=ev.note) for ev in node.lives
+                        EvidenceRef(type=ev.type, ref=ev.ref, note=ev.note)
+                        for ev in node.lives
                     ),
                     confidence=conf,
                     ships_when=node.ships_when or "",
@@ -310,7 +344,9 @@ def nodes_to_wireframe_plan(
     # REQ-18 declared / REQ-19 measured: one path — corpus_realization returns the distribution and a
     # `grounded` flag (True only when a provenance source contributed above-threshold measured regimes →
     # the label becomes `measured`; else `declared`). No provenance → empty/declared → byte-identical.
-    realization, realization_grounded = corpus_realization(nodes, realization_provenance)
+    realization, realization_grounded = corpus_realization(
+        nodes, realization_provenance
+    )
 
     return WireframePlan(
         project_root=project_root,
@@ -372,7 +408,8 @@ def nodes_to_json(nodes: Sequence[Node]) -> List[Dict[str, Any]]:
 
 def nodes_from_json(data: Sequence[Dict[str, Any]]) -> List[Node]:
     """Inverse of ``nodes_to_json``: reconstruct a Node tree from a pre-projected NODE-SCHEMA-JSON
-    graph (REQ-02 FR-2, ``--source nodes-json``). ``children`` recurse; unknown keys are ignored."""
+    graph (REQ-02 FR-2, ``--source nodes-json``). ``children`` recurse; unknown keys are ignored.
+    """
     out: List[Node] = []
     for d in data:
         out.append(
@@ -382,14 +419,19 @@ def nodes_from_json(data: Sequence[Dict[str, Any]]) -> List[Node]:
                 status=str(d.get("status", NodeStatus.SPEC)),
                 wont=tuple(d.get("wont") or ()),
                 lives=tuple(
-                    NodeEvidence(type=str(e.get("type", "")), ref=str(e.get("ref", "")),
-                                 note=str(e.get("note", "")))
+                    NodeEvidence(
+                        type=str(e.get("type", "")),
+                        ref=str(e.get("ref", "")),
+                        note=str(e.get("note", "")),
+                    )
                     for e in (d.get("lives") or [])
                 ),
                 ships_when=str(d.get("ships_when", "")),
                 confidence=d.get("confidence"),
                 triggers=tuple(d.get("triggers") or ()),
-                children=tuple(nodes_from_json(d.get("children") or [])),  # recurse the tree
+                children=tuple(
+                    nodes_from_json(d.get("children") or [])
+                ),  # recurse the tree
                 child_keys=tuple(d.get("child_keys") or ()),
                 category=str(d.get("category", "")),
                 orientation=str(d.get("orientation", "")),
@@ -404,7 +446,9 @@ def nodes_from_json(data: Sequence[Dict[str, Any]]) -> List[Node]:
                     DerivationEdge(
                         from_key=str(e.get("from_key", "")),
                         relation=str(e.get("relation", "derived-from")),
-                        regime=(str(e["regime"]) if e.get("regime") is not None else None),
+                        regime=(
+                            str(e["regime"]) if e.get("regime") is not None else None
+                        ),
                     )
                     for e in (d.get("derivation") or [])
                     if isinstance(e, dict) and e.get("from_key")
@@ -425,27 +469,39 @@ def render_nodes_html(
     profile: Optional[RenderProfile] = None,
     frame: bool = False,
     realization_provenance=None,
+    cross_links: Optional[dict] = None,
 ) -> Path:
     """Render nodes via wireframe_view (FR-10). ``frame`` (REQ-15) renders scaffold-only bare frame.
     ``realization_provenance`` (REQ-19): a measured ProvenanceSource → the determinism-% relabels
-    ``measured`` when it grounds regimes above threshold (else the declared fallback, byte-identical)."""
+    ``measured`` when it grounds regimes above threshold (else the declared fallback, byte-identical).
+    """
     from startd8.wireframe_view import render_to_file
 
-    plan = nodes_to_wireframe_plan(nodes, project_root=project_root, group_by=group_by,
-                                   realization_provenance=realization_provenance)
+    plan = nodes_to_wireframe_plan(
+        nodes,
+        project_root=project_root,
+        group_by=group_by,
+        realization_provenance=realization_provenance,
+    )
     kwargs: Dict[str, Any] = {"role": role, "fluency": fluency}
     if frame:
         kwargs["frame"] = True
+    # REQ-navigator-cross-topology-links (Move 1) FR-3: forward the authored cross-links map (embedded
+    # only under a profile downstream → app path byte-identical).
+    if cross_links:
+        kwargs["cross_links"] = cross_links
     if profile is not None:
         kwargs["profile"] = profile
         # Live chrome-provenance readout for the debug panel: "all content is cruft until proven"
         # — an element with no traceable origin is unproven (cruft). Embed the score + orphans.
         from .provenance import chrome_provenance
+
         rows = chrome_provenance(nodes, plan, profile)
         present = sum(1 for r in rows if r["present"])
         kwargs["chrome"] = {
             "score": round(present / len(rows), 3) if rows else 0.0,
-            "present": present, "total": len(rows),
+            "present": present,
+            "total": len(rows),
             "orphans": [r["element"] for r in rows if not r["present"]],
         }
     return render_to_file(plan, Path(out_path), **kwargs)

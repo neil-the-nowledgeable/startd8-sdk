@@ -479,6 +479,11 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
 
   /* ---------- full-page requirement view (client-side route; profiled-navigator only) ---------- */
   #fullview{display:none}
+  /* Move 1: cross-topology links in the full-page requirement view (profiled-navigator only) */
+  body.nav-profiled .fv-xlinks{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 2px}
+  body.nav-profiled .fv-xl{font-size:12px;color:var(--accent);border:1px solid var(--line2);
+    border-radius:6px;padding:3px 9px;text-decoration:none}
+  body.nav-profiled .fv-xl:hover{border-color:var(--accent);background:var(--card)}
   body.fullview-open .wrap,body.fullview-open #debug{display:none}
   body.fullview-open #fullview{display:block}
   .fv{max-width:820px;margin:0 auto;padding:38px 26px 80px}
@@ -957,10 +962,23 @@ __PLAN_DATA__
     var rows=recordEntries(item).map(function(e){
       return '<div class="fv-row"><div class="fv-k">'+esc(e.k)+'</div><div class="fv-v">'+e.v+'</div></div>'; }).join("");
     var tr=touchesRows(item);
+    // REQ-navigator-cross-topology-links (Move 1) FR-2/FR-4: a cross-topology "see this requirement in"
+    // row from the AUTHORED payload.cross_links (topology → url-template). Each href is the template with
+    // {key} substituted by this requirement's key — verbatim, no fabricated path/anchor (so no dead link);
+    // absent cross_links → no row. Only configured topologies render.
+    var xl=(payload.profile&&payload.cross_links)||null, xhtml="";
+    if(xl){
+      var links=Object.keys(xl).map(function(topo){
+        var href=String(xl[topo]).replace(/\{key\}/g, encodeURIComponent(item.key||""));
+        return '<a class="fv-xl" href="'+esc(href)+'">'+esc(topo)+' →</a>';
+      }).join("");
+      if(links) xhtml='<div class="fv-xlinks"><span class="fv-sk">see this requirement in</span>'+links+'</div>';
+    }
     d.innerHTML=
       '<a class="fv-back" href="#">← all requirements</a>'+
       '<div class="fv-head"><div class="fv-eyebrow"><span class="lbl-key">'+esc(item.key||"")+'</span>'+badge(item.status)+'</div>'+
         '<h1 class="fv-name">'+esc(f.name||item.label||"")+'</h1></div>'+
+      xhtml+
       '<div class="fv-body">'+(rows||'<div class="fv-row"><div class="fv-v">(no further detail)</div></div>')+
       (tr?'<div class="fv-touches"><div class="fv-sk">Touches · '+item.touches.length+' — the full blast-radius</div>'+tr+'</div>':'')+
       '</div>';

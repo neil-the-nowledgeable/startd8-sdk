@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import typer
 from rich.console import Console
@@ -78,9 +78,12 @@ def build(
         "--source",
         help="Node source: capability-index | requirements | node-schema | pipeline | nodes-json",
     ),
-    fmt: str = typer.Option("json", "--format", help="Output format: json | html | a11y"),
+    fmt: str = typer.Option(
+        "json", "--format", help="Output format: json | html | a11y"
+    ),
     renderer: Optional[str] = typer.Option(
-        None, "--renderer",
+        None,
+        "--renderer",
         help="HTML renderer: wireframe | tree | graph (default: tree for nodes-json, else wireframe)",
     ),
     semantic_only: bool = typer.Option(
@@ -89,7 +92,9 @@ def build(
         help="graph renderer: show only source nodes + semantic edges (default), "
         "or --full-graph to include the visual-editor view-markers",
     ),
-    out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Output path (required for html)"
+    ),
     requirements: Optional[Path] = typer.Option(
         None, "--requirements", help="det-req markdown path (source=requirements)"
     ),
@@ -97,28 +102,57 @@ def build(
         None, "--capability-index", help="Override capability YAML path"
     ),
     nodes_json: Optional[Path] = typer.Option(
-        None, "--nodes-json", help="pre-projected NODE-SCHEMA-JSON graph (source=nodes-json)"
+        None,
+        "--nodes-json",
+        help="pre-projected NODE-SCHEMA-JSON graph (source=nodes-json)",
     ),
-    group_by: str = typer.Option("category", "--group-by", help="Section grouping axis"),
-    open_depth: int = typer.Option(2, "--open-depth", help="tree renderer: levels open by default"),
+    group_by: str = typer.Option(
+        "category", "--group-by", help="Section grouping axis"
+    ),
+    open_depth: int = typer.Option(
+        2, "--open-depth", help="tree renderer: levels open by default"
+    ),
     role: Optional[str] = typer.Option(
-        None, "--role",
+        None,
+        "--role",
         help="audience lens for tree/a11y labels (e.g. end_user); default None = raw labels "
         "(byte-identical). Not applied to the graph renderer (already lensed).",
     ),
     fluency: str = typer.Option(
-        "intermediate", "--fluency", help="fluency lens for tree/a11y labels (with --role)"
+        "intermediate",
+        "--fluency",
+        help="fluency lens for tree/a11y labels (with --role)",
     ),
     realization_provenance: Optional[Path] = typer.Option(
-        None, "--realization-provenance",
+        None,
+        "--realization-provenance",
         help="REQ-19: an emitted realization-provenance JSON artifact; grounds the determinism-% as "
         "`measured` (else the declared fallback). Applies to --format html --renderer wireframe.",
+    ),
+    cross_link: Optional[List[str]] = typer.Option(
+        None,
+        "--cross-link",
+        help="Move 1: a cross-topology link from the full-page requirement view, as "
+        "`<topology>=<url-template>` (repeatable). The template may contain `{key}`, substituted by the "
+        "requirement's key, e.g. `--cross-link a11y=reqs.a11y.html#{key}`. Author-supplied (the navigator "
+        "fabricates no sibling path/anchor → no dead links); absent → byte-identical.",
     ),
 ) -> None:
     """Project a source into Nodes and write JSON or HTML."""
     source = source.strip().lower()
     fmt = fmt.strip().lower()
-    frame_mode = False   # REQ-15: the domain-neutral bare-frame render
+    frame_mode = False  # REQ-15: the domain-neutral bare-frame render
+    # Move 1 FR-3/FR-4: parse the authored `<topology>=<url-template>` cross-links (verbatim, no fabrication).
+    cross_links: Dict[str, str] = {}
+    for cl in cross_link or []:
+        if "=" not in cl:
+            console.print(
+                f"[red]error:[/red] --cross-link must be <topology>=<url-template>, got {cl!r}"
+            )
+            raise typer.Exit(_EXIT_ERR)
+        topo, url = cl.split("=", 1)
+        if topo.strip() and url.strip():
+            cross_links[topo.strip()] = url.strip()
     try:
         if source == "capability-index":
             path = capability_index or default_capability_index_path()
@@ -127,7 +161,9 @@ def build(
             project_root = str(path.parent)
         elif source == "requirements":
             if requirements is None:
-                console.print("[red]error:[/red] --requirements is required for source=requirements")
+                console.print(
+                    "[red]error:[/red] --requirements is required for source=requirements"
+                )
                 raise typer.Exit(_EXIT_ERR)
             nodes = nodes_from_requirements(requirements)
             # Seat-req FR-6 (R1-F4): the parse-loss FLOOR — the projection must not SILENTLY drop a
@@ -135,7 +171,14 @@ def build(
             # mismatch (a dropped FR) exits non-zero with a named parse-loss (symmetry with FR-3's
             # fail-loud round-trip gate — the same round-trip must not lose FRs on the render side).
             import re as _re
-            _markers = len(_re.findall(r"^- \*\*FR-", requirements.read_text(encoding="utf-8"), _re.MULTILINE))
+
+            _markers = len(
+                _re.findall(
+                    r"^- \*\*FR-",
+                    requirements.read_text(encoding="utf-8"),
+                    _re.MULTILINE,
+                )
+            )
             if _markers and len(nodes) != _markers:
                 console.print(
                     f"[red]error:[/red] parse-loss — {len(nodes)} node(s) projected from {_markers} FR "
@@ -158,10 +201,17 @@ def build(
             # shell. The graph renderer shows the stage DAG; the chain is a tree affordance.
             _stages = pipeline_stages()
             for n in nodes:
-                chain = pipeline_provenance(nodes, _stages, query=n.attributes.get("sdk_artifact", n.key))
-                n.attributes["artifact_chain"] = " -> ".join(
-                    f"{r['stage']}({'built' if r['present'] else 'spec'})" for r in chain if r["stage"]
-                ) or "(unowned)"
+                chain = pipeline_provenance(
+                    nodes, _stages, query=n.attributes.get("sdk_artifact", n.key)
+                )
+                n.attributes["artifact_chain"] = (
+                    " -> ".join(
+                        f"{r['stage']}({'built' if r['present'] else 'spec'})"
+                        for r in chain
+                        if r["stage"]
+                    )
+                    or "(unowned)"
+                )
             profile = PIPELINE_PROFILE
             project_root = "."
         elif source == "frame":
@@ -169,15 +219,21 @@ def build(
             # requirement. Zero nodes + the base profile (theme/control/regions), rendered scaffold-on
             # with all region content hidden (only the region meta-descriptions + control surface show).
             nodes = []
-            profile = to_render_profile(resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY))
+            profile = to_render_profile(
+                resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+            )
             project_root = "."
             frame_mode = True
         elif source == "nodes-json":
             if nodes_json is None:
-                console.print("[red]error:[/red] --nodes-json is required for source=nodes-json")
+                console.print(
+                    "[red]error:[/red] --nodes-json is required for source=nodes-json"
+                )
                 raise typer.Exit(_EXIT_ERR)
             data = json.loads(Path(nodes_json).read_text(encoding="utf-8"))
-            nodes = nodes_from_json(data.get("nodes", data) if isinstance(data, dict) else data)
+            nodes = nodes_from_json(
+                data.get("nodes", data) if isinstance(data, dict) else data
+            )
             profile = None  # a pre-projected graph brings its own domain; default to the tree renderer
             project_root = str(Path(nodes_json).parent)
         else:
@@ -192,7 +248,11 @@ def build(
 
     # Resolve the HTML renderer: explicit --renderer wins; else tree for a pre-projected graph
     # (the adopter seam), wireframe for the flat 2-level sources (back-compat).
-    renderer = (renderer or ("tree" if source == "nodes-json" else "wireframe")).strip().lower()
+    renderer = (
+        (renderer or ("tree" if source == "nodes-json" else "wireframe"))
+        .strip()
+        .lower()
+    )
 
     if fmt == "json":
         payload = {"source": source, "nodes": nodes_to_json(nodes)}
@@ -217,7 +277,8 @@ def build(
         try:
             if renderer == "tree":
                 render_navigator_tree_html(
-                    list(nodes), out,
+                    list(nodes),
+                    out,
                     title=f"Node Navigator — {source}",
                     open_depth=open_depth,
                     role=role,
@@ -225,7 +286,8 @@ def build(
                 )
             elif renderer == "graph":
                 render_navigator_graph_html(
-                    list(nodes), out,
+                    list(nodes),
+                    out,
                     title=f"Node Graph — {source}",
                     semantic_only=semantic_only,
                 )
@@ -236,7 +298,10 @@ def build(
                 if realization_provenance is not None:
                     from .realization import MeasuredProvenanceSource
                     from .realization_provenance import load_provenance
-                    _prov = MeasuredProvenanceSource(load_provenance(realization_provenance))
+
+                    _prov = MeasuredProvenanceSource(
+                        load_provenance(realization_provenance)
+                    )
                 render_nodes_html(
                     nodes,
                     out,
@@ -245,6 +310,7 @@ def build(
                     profile=profile,
                     frame=frame_mode,
                     realization_provenance=_prov,
+                    cross_links=cross_links or None,
                 )
         except OSError as exc:
             console.print(f"[red]error:[/red] {exc}")
@@ -258,15 +324,18 @@ def build(
             console.print("[red]error:[/red] --out is required for --format a11y")
             raise typer.Exit(_EXIT_ERR)
         try:
-            render_a11y_to_file(list(nodes), out, title=f"{source}",
-                                role=role, fluency=fluency)
+            render_a11y_to_file(
+                list(nodes), out, title=f"{source}", role=role, fluency=fluency
+            )
         except OSError as exc:
             console.print(f"[red]error:[/red] {exc}")
             raise typer.Exit(_EXIT_ERR)
         console.print(f"wrote {out} ({len(nodes)} nodes, a11y)")
         raise typer.Exit(_EXIT_OK)
 
-    console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html|a11y)")
+    console.print(
+        f"[red]error:[/red] unknown --format {fmt!r} (expected json|html|a11y)"
+    )
     raise typer.Exit(_EXIT_ERR)
 
 
@@ -282,18 +351,25 @@ _VERDICT_STATUS = {
 @navigator_app.command("verify")
 def verify(
     requirements: Path = typer.Option(
-        ..., "--requirements", help="det-req markdown path whose Verify: clauses become the oracle"
+        ...,
+        "--requirements",
+        help="det-req markdown path whose Verify: clauses become the oracle",
     ),
     run_oracle: bool = typer.Option(
-        False, "--run-oracle",
+        False,
+        "--run-oracle",
         help="Opt-in: execute command-shaped Verify: clauses (read-only startd8 navigator subcommands, "
         "argv/no-shell). Default OFF — every clause reports skip, no subprocess.",
     ),
     fmt: str = typer.Option("json", "--format", help="Output format: json | html"),
-    out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Output path (required for html)"
+    ),
     oracle_timeout: int = typer.Option(
-        60, "--oracle-timeout", help="Per-command timeout in seconds under --run-oracle (a timeout is a "
-        "distinct fail reason)."
+        60,
+        "--oracle-timeout",
+        help="Per-command timeout in seconds under --run-oracle (a timeout is a "
+        "distinct fail reason).",
     ),
 ) -> None:
     """Promote each requirement's ``Verify:`` clause to a checkable acceptance oracle (REQ-08 FR-5/FR-7).
@@ -307,7 +383,9 @@ def verify(
     """
     fmt = fmt.strip().lower()
     if fmt not in ("json", "html"):
-        console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)")
+        console.print(
+            f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)"
+        )
         raise typer.Exit(_EXIT_ERR)
     try:
         descriptors: List[OracleDescriptor] = classify(requirements)
@@ -315,7 +393,9 @@ def verify(
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)
 
-    verdicts: List[OracleVerdict] = evaluate(descriptors, run_oracle=run_oracle, timeout=oracle_timeout)
+    verdicts: List[OracleVerdict] = evaluate(
+        descriptors, run_oracle=run_oracle, timeout=oracle_timeout
+    )
     rc = aggregate_exit_code(verdicts)
 
     if fmt == "json":
@@ -360,7 +440,8 @@ def verify(
     ]
     try:
         render_navigator_tree_html(
-            verdict_nodes, out,
+            verdict_nodes,
+            out,
             title=f"Verify oracle — {requirements.name}",
         )
     except OSError as exc:
@@ -373,16 +454,20 @@ def verify(
 @navigator_app.command("provenance")
 def provenance(
     query: str = typer.Option(
-        ..., "--query",
+        ...,
+        "--query",
         help="What to trace: an FR id (e.g. FR-3) or a file path. An FR id resolves to the FR's "
         "code Lives:/Touches: file via --requirements (R8-EB-4).",
     ),
     requirements: Optional[Path] = typer.Option(
-        None, "--requirements",
+        None,
+        "--requirements",
         help="det-req markdown — required to resolve an FR-id query to its file (ignored for a path query).",
     ),
     fmt: str = typer.Option("json", "--format", help="Output format: json | html"),
-    out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Output path (required for html)"
+    ),
 ) -> None:
     """Trace an artifact (or an FR) back through the prose→product pipeline stages to its origin (FR-6/FR-9).
 
@@ -397,12 +482,16 @@ def provenance(
     """
     fmt = fmt.strip().lower()
     if fmt not in ("json", "html"):
-        console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)")
+        console.print(
+            f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)"
+        )
         raise typer.Exit(_EXIT_ERR)
     # A friendly pre-check: an FR-id query needs a corpus to resolve against — name the CLI flag, not
     # the library param (which the not-found row would otherwise surface).
     if _FR_ID_RE.match(query.strip()) and requirements is None:
-        console.print("[red]error:[/red] an FR-id query requires --requirements <det-req.md> to resolve")
+        console.print(
+            "[red]error:[/red] an FR-id query requires --requirements <det-req.md> to resolve"
+        )
         raise typer.Exit(_EXIT_ERR)
     if fmt == "html" and out is None:
         console.print("[red]error:[/red] --out is required for --format html")
@@ -416,16 +505,24 @@ def provenance(
         except (FileNotFoundError, ValueError, OSError) as exc:
             console.print(f"[red]error:[/red] {exc}")
             raise typer.Exit(_EXIT_ERR)
-    chain = pipeline_provenance(stage_nodes, _stages, query=query, requirement_nodes=req_nodes)
+    chain = pipeline_provenance(
+        stage_nodes, _stages, query=query, requirement_nodes=req_nodes
+    )
     # A trace that reaches a real stage exits 0; a not-found (unowned / unresolvable FR) exits 1 so a
     # caller/CI can tell "traced" from "nothing owns this".
     traced = any(row.get("stage") is not None for row in chain)
     rc = _EXIT_OK if traced else _EXIT_ERR
 
     if fmt == "json":
-        text = json.dumps(
-            {"query": query, "chain": chain}, indent=2, sort_keys=True, ensure_ascii=True
-        ) + "\n"
+        text = (
+            json.dumps(
+                {"query": query, "chain": chain},
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=True,
+            )
+            + "\n"
+        )
         sys.stdout.write(text)
         raise typer.Exit(rc)
 
@@ -462,7 +559,8 @@ def _validate_node_json(node_list, path: Path, where: str) -> None:
     ``nodes_from_json`` assumes each entry is a ``dict`` (and each ``lives`` element a ``dict``) and
     recurses into ``children``; a structurally-wrong-but-valid-JSON payload would otherwise leak an
     ``AttributeError``/``TypeError`` as a raw traceback out of the CLI. Raises ``ValueError`` (which
-    the ``diff`` guard catches) with a path-qualified message. Recurses into ``children``."""
+    the ``diff`` guard catches) with a path-qualified message. Recurses into ``children``.
+    """
     if not isinstance(node_list, list):
         raise ValueError(
             f"{path}: expected a JSON array of node objects (or a {{'nodes': [...]}} object) "
@@ -477,7 +575,9 @@ def _validate_node_json(node_list, path: Path, where: str) -> None:
         if lives is not None and (
             not isinstance(lives, list) or any(not isinstance(ev, dict) for ev in lives)
         ):
-            raise ValueError(f"{path}: {where} entry #{i} ('lives') must be a list of objects")
+            raise ValueError(
+                f"{path}: {where} entry #{i} ('lives') must be a list of objects"
+            )
         children = entry.get("children")
         if children is not None:
             _validate_node_json(children, path, "children")
@@ -514,13 +614,19 @@ def diff(
         None, "--out", help="Delta HTML output path (required unless --json)"
     ),
     as_json: bool = typer.Option(
-        False, "--json", help="Emit the machine-readable NodeDiff (for CI) instead of HTML"
+        False,
+        "--json",
+        help="Emit the machine-readable NodeDiff (for CI) instead of HTML",
     ),
     max_detail: Optional[int] = typer.Option(
-        None, "--max-detail", help="Altitude cap: past N changed keys, render Changed counts-only"
+        None,
+        "--max-detail",
+        help="Altitude cap: past N changed keys, render Changed counts-only",
     ),
     role: Optional[str] = typer.Option(
-        None, "--role", help="audience lens for labels (e.g. end_user); default None = raw labels"
+        None,
+        "--role",
+        help="audience lens for labels (e.g. end_user); default None = raw labels",
     ),
     fluency: str = typer.Option(
         "intermediate", "--fluency", help="fluency lens for labels (with --role)"
@@ -543,7 +649,12 @@ def diff(
     delta = diff_nodes(before_nodes, after_nodes)
 
     if as_json:
-        text = json.dumps(node_diff_to_json(delta), indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+        text = (
+            json.dumps(
+                node_diff_to_json(delta), indent=2, sort_keys=True, ensure_ascii=True
+            )
+            + "\n"
+        )
         if out is None:
             sys.stdout.write(text)
         else:
@@ -561,7 +672,8 @@ def diff(
         raise typer.Exit(_EXIT_ERR)
     try:
         render_navigator_diff_html(
-            delta, out,
+            delta,
+            out,
             title=f"Node Corpus Delta — {before.name} → {after.name}",
             max_detail=max_detail,
             role=role,
@@ -580,7 +692,9 @@ def diff(
 
 @navigator_app.command("ground")
 def ground(
-    root: Path = typer.Option(Path("src"), "--root", help="Tree to scan for FR-/capability keys"),
+    root: Path = typer.Option(
+        Path("src"), "--root", help="Tree to scan for FR-/capability keys"
+    ),
     out: Path = typer.Option(..., "--out", help="Grounding JSON output path"),
 ) -> None:
     """$0 mention-count grounding pass (FR-9)."""
@@ -639,7 +753,8 @@ def govern(
         None, "--out", help="Write the report to a path (default: stdout)"
     ),
     realization_provenance: Optional[Path] = typer.Option(
-        None, "--realization-provenance",
+        None,
+        "--realization-provenance",
         help="REQ-19 FR-6: an emitted realization-provenance JSON artifact; when given, also reports "
         "planned-vs-realized determinism regressions (planned deterministic but measured llm).",
     ),
@@ -657,16 +772,21 @@ def govern(
         raise typer.Exit(_EXIT_OPERATIONAL)
     fmt = fmt.strip().lower()
     if fmt not in ("text", "json"):
-        console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected text|json)")
+        console.print(
+            f"[red]error:[/red] unknown --format {fmt!r} (expected text|json)"
+        )
         raise typer.Exit(_EXIT_OPERATIONAL)
     try:
         _prov = None
         if realization_provenance is not None:
             from .realization import MeasuredProvenanceSource
             from .realization_provenance import load_provenance
+
             _prov = MeasuredProvenanceSource(load_provenance(realization_provenance))
         report = govern_corpus(directory, realization_provenance=_prov)
-        rendered = render_govern_json(report) if fmt == "json" else render_govern_text(report)
+        rendered = (
+            render_govern_json(report) if fmt == "json" else render_govern_text(report)
+        )
     except OSError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_OPERATIONAL)
@@ -696,17 +816,27 @@ def govern(
 
 @navigator_app.command("retrospective")
 def retrospective(
-    directory: Path = typer.Option(..., "--dir", help="Directory of requirement docs (REQ-*.md)"),
+    directory: Path = typer.Option(
+        ..., "--dir", help="Directory of requirement docs (REQ-*.md)"
+    ),
     realization_provenance: Path = typer.Option(
-        ..., "--realization-provenance",
+        ...,
+        "--realization-provenance",
         help="An emitted realization-provenance JSON artifact — its measured regimes surface the "
         "determinism regressions each Lesson derives from (REQ-19 FR-6 → REQ-20).",
     ),
-    fmt: str = typer.Option("json", "--format", help="Output format: json | html (graph)"),
-    out: Optional[Path] = typer.Option(None, "--out", help="Output path (required for html)"),
+    fmt: str = typer.Option(
+        "json", "--format", help="Output format: json | html (graph)"
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Output path (required for html)"
+    ),
     store: Optional[Path] = typer.Option(
-        None, "--store", help="persist the derived Lessons into a store JSON, MERGING with any prior "
-        "run — human dispositions (accept/reject + rationale) are preserved across runs (REQ-20 H3)"),
+        None,
+        "--store",
+        help="persist the derived Lessons into a store JSON, MERGING with any prior "
+        "run — human dispositions (accept/reject + rationale) are preserved across runs (REQ-20 H3)",
+    ),
 ) -> None:
     """Close the retrospective loop (REQ-20): build a grounded, human-gated Lesson per determinism
     regression, each proposing a `revises` to its offending contract. Read-only on the corpus, never
@@ -730,6 +860,7 @@ def retrospective(
 
     if store is not None:
         from .lesson_store import load_lessons, merge_lessons, save_lessons
+
         try:
             lessons = merge_lessons(load_lessons(store), lessons)
             save_lessons(store, lessons)
@@ -741,7 +872,7 @@ def retrospective(
         payload = {"source": "retrospective", "lessons": nodes_to_json(lessons)}
         text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
         if out is None:
-            sys.stdout.write(text)                       # stdout carries ONLY the JSON (pipeable)
+            sys.stdout.write(text)  # stdout carries ONLY the JSON (pipeable)
         else:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text, encoding="utf-8")
@@ -751,7 +882,9 @@ def retrospective(
         if out is None:
             console.print("[red]error:[/red] --out is required for --format html")
             raise typer.Exit(_EXIT_ERR)
-        render_navigator_graph_html(list(lessons), out, title="Retrospective — proposed lessons")
+        render_navigator_graph_html(
+            list(lessons), out, title="Retrospective — proposed lessons"
+        )
         console.print(f"wrote {out} ({len(lessons)} lessons)")
         raise typer.Exit(_EXIT_OK)
     console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected json|html)")
@@ -760,18 +893,35 @@ def retrospective(
 
 @navigator_app.command("revise-apply")
 def revise_apply_cmd(
-    schema: Path = typer.Option(..., "--schema", help="the contract file (schema.prisma) the revise edits"),
-    lesson: Path = typer.Option(..., "--lesson", help="JSON lesson node (its confidence gates the tier)"),
+    schema: Path = typer.Option(
+        ..., "--schema", help="the contract file (schema.prisma) the revise edits"
+    ),
+    lesson: Path = typer.Option(
+        ..., "--lesson", help="JSON lesson node (its confidence gates the tier)"
+    ),
     edit: Optional[Path] = typer.Option(
-        None, "--edit", help="JSON revise-edit {target, path, before, after}; OMIT to derive it from the "
-        "lesson when it carries a concrete `revise_edit` (a description-clarification lesson, REQ-24 H1)"),
-    apply: bool = typer.Option(False, "--apply", help="write the edit on proof (default: dry-run, no write)"),
-    commit: bool = typer.Option(False, "--commit", help="with --apply on proof, git-commit the written "
+        None,
+        "--edit",
+        help="JSON revise-edit {target, path, before, after}; OMIT to derive it from the "
+        "lesson when it carries a concrete `revise_edit` (a description-clarification lesson, REQ-24 H1)",
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="write the edit on proof (default: dry-run, no write)"
+    ),
+    commit: bool = typer.Option(
+        False,
+        "--commit",
+        help="with --apply on proof, git-commit the written "
         "contract so the audit's revert_ref names a real commit (REQ-24 H3); off → the write is left "
-        "uncommitted for the human to stage"),
-    kind: str = typer.Option("backend", "--kind", help="the DETERMINISTIC output kind to byte-identity-"
+        "uncommitted for the human to stage",
+    ),
+    kind: str = typer.Option(
+        "backend",
+        "--kind",
+        help="the DETERMINISTIC output kind to byte-identity-"
         "guard against (REQ-24 H2): backend (default) | scaffold. A non-deterministic / polyglot kind "
-        "has no regenerator → the revise fails safe to `human` (byte-identity is unprovable for LLM output)"),
+        "has no regenerator → the revise fails safe to `human` (byte-identity is unprovable for LLM output)",
+    ),
 ) -> None:
     """REQ-24 — apply a revise's concrete edit THROUGH a real byte-identity guard (regenerate the `$0`
     product + hash-compare). Auto-applies ONLY when the guard proves the product unchanged; any diff →
@@ -779,29 +929,40 @@ def revise_apply_cmd(
 
     The edit comes from `--edit`, or is DERIVED from `--lesson` when it carries a concrete `revise_edit`
     (the Lesson→ReviseEdit producer, REQ-24 H1); a lesson without one still requires `--edit`. `--kind`
-    selects which deterministic product is guarded (REQ-24 H2); a polyglot/LLM kind fails safe to human."""
+    selects which deterministic product is guarded (REQ-24 H2); a polyglot/LLM kind fails safe to human.
+    """
     import subprocess
     from datetime import datetime, timezone
 
     from .project import nodes_from_json
     from .revise_apply import apply_revise, is_deterministic_kind
-    from .revise_tier import ReviseEditError, eligibility_of, parse_revise_edit, revise_edit_from_lesson
+    from .revise_tier import (
+        ReviseEditError,
+        eligibility_of,
+        parse_revise_edit,
+        revise_edit_from_lesson,
+    )
 
     try:
         lesson_data = json.loads(Path(lesson).read_text(encoding="utf-8"))
-        nodes = nodes_from_json(lesson_data if isinstance(lesson_data, list) else [lesson_data])
+        nodes = nodes_from_json(
+            lesson_data if isinstance(lesson_data, list) else [lesson_data]
+        )
         if not nodes:
             raise ReviseEditError("--lesson JSON produced no node")
         lesson_node = nodes[0]
         if edit is not None:
-            edit_obj = parse_revise_edit(json.loads(Path(edit).read_text(encoding="utf-8")))
+            edit_obj = parse_revise_edit(
+                json.loads(Path(edit).read_text(encoding="utf-8"))
+            )
         else:
             edit_obj = revise_edit_from_lesson(lesson_node)
             if edit_obj is None:
                 raise ReviseEditError(
                     "no --edit given and the lesson carries no concrete `revise_edit` — a "
                     "determinism-regression lesson proposes a plan re-examination, not a mechanical edit; "
-                    "supply --edit for those.")
+                    "supply --edit for those."
+                )
     except (OSError, ValueError, ReviseEditError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)
@@ -810,16 +971,28 @@ def revise_apply_cmd(
     # edit, no spend. confidence comes from the lesson (gates the tier).
     elig = eligibility_of(lesson_node, byte_identical=True, effects=[])
     try:
-        head = subprocess.run(["git", "-C", str(Path(schema).parent), "rev-parse", "--short", "HEAD"],
-                              capture_output=True, text=True, timeout=5)
+        head = subprocess.run(
+            ["git", "-C", str(Path(schema).parent), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         revert_ref = head.stdout.strip() if head.returncode == 0 else "uncommitted"
     except Exception:
         revert_ref = "uncommitted"
     timestamp = datetime.now(timezone.utc).isoformat()
 
     try:
-        audit = apply_revise(schema, edit_obj, lesson_node, elig,
-                             timestamp=timestamp, revert_ref=revert_ref, dry_run=not apply, kind=kind)
+        audit = apply_revise(
+            schema,
+            edit_obj,
+            lesson_node,
+            elig,
+            timestamp=timestamp,
+            revert_ref=revert_ref,
+            dry_run=not apply,
+            kind=kind,
+        )
     except OSError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)
@@ -832,38 +1005,66 @@ def revise_apply_cmd(
             # not a manual `git checkout`. Only the schema file is staged (never `git add -A`).
             sdir = str(Path(schema).parent)
             try:
-                add = subprocess.run(["git", "-C", sdir, "add", str(Path(schema).name)],
-                                     capture_output=True, text=True, timeout=10)
-                msg = (f"revise(auto): clarify {audit.target} — byte-identity-proven ($0 product "
-                       f"unchanged)\n\nlesson={audit.lesson} revert_ref={audit.revert_ref}")
-                cm = subprocess.run(["git", "-C", sdir, "commit", "-m", msg, "--only", str(Path(schema).name)],
-                                    capture_output=True, text=True, timeout=15)
+                add = subprocess.run(
+                    ["git", "-C", sdir, "add", str(Path(schema).name)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                msg = (
+                    f"revise(auto): clarify {audit.target} — byte-identity-proven ($0 product "
+                    f"unchanged)\n\nlesson={audit.lesson} revert_ref={audit.revert_ref}"
+                )
+                cm = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        sdir,
+                        "commit",
+                        "-m",
+                        msg,
+                        "--only",
+                        str(Path(schema).name),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
                 if add.returncode == 0 and cm.returncode == 0:
                     committed = " (committed)"
                 else:
                     committed = " [yellow](commit skipped: git error)[/yellow]"
             except Exception:
                 committed = " [yellow](commit skipped: git unavailable)[/yellow]"
-        console.print(f"[green]{verb}[/green]{committed}: revise of {audit.target!r} — guard proved the "
-                      f"{kind} product byte-identical. audit: lesson={audit.lesson} revert={audit.revert_ref}")
+        console.print(
+            f"[green]{verb}[/green]{committed}: revise of {audit.target!r} — guard proved the "
+            f"{kind} product byte-identical. audit: lesson={audit.lesson} revert={audit.revert_ref}"
+        )
     elif not is_deterministic_kind(kind):
-        console.print(f"[yellow]human[/yellow]: `--kind {kind}` is non-deterministic (polyglot / LLM) — "
-                      "it has no byte-identity regenerator, so the revise can't be auto-proven and stays "
-                      "human by construction. The contract is untouched.")
+        console.print(
+            f"[yellow]human[/yellow]: `--kind {kind}` is non-deterministic (polyglot / LLM) — "
+            "it has no byte-identity regenerator, so the revise can't be auto-proven and stays "
+            "human by construction. The contract is untouched."
+        )
     else:
-        console.print("[yellow]human[/yellow]: not auto-applied — the tier is not `auto` or the guard "
-                      "did not prove the product unchanged. The contract is untouched; propose to a human.")
+        console.print(
+            "[yellow]human[/yellow]: not auto-applied — the tier is not `auto` or the guard "
+            "did not prove the product unchanged. The contract is untouched; propose to a human."
+        )
     raise typer.Exit(_EXIT_OK)
 
 
 # REQ-20 H2 — the human-disposition surface over the persisted Lesson store (REQ-20 H3). The IR never
 # self-disposes; these commands are the ONLY path that accepts/rejects a Lesson, and they always persist.
-lesson_app = typer.Typer(help="Dispose persisted retrospective Lessons (REQ-20): list | accept | reject.")
+lesson_app = typer.Typer(
+    help="Dispose persisted retrospective Lessons (REQ-20): list | accept | reject."
+)
 navigator_app.add_typer(lesson_app, name="lesson")
 
 
 def _load_store_or_exit(store: Path):
     from .lesson_store import load_lessons
+
     try:
         return load_lessons(store)
     except (OSError, ValueError) as exc:
@@ -873,7 +1074,11 @@ def _load_store_or_exit(store: Path):
 
 @lesson_app.command("list")
 def lesson_list(
-    store: Path = typer.Option(..., "--store", help="the Lesson store JSON (written by `retrospective --store`)"),
+    store: Path = typer.Option(
+        ...,
+        "--store",
+        help="the Lesson store JSON (written by `retrospective --store`)",
+    ),
 ) -> None:
     """List persisted Lessons with their disposition (proposed | accepted | rejected)."""
     lessons = _load_store_or_exit(store)
@@ -881,9 +1086,12 @@ def lesson_list(
         console.print(f"(store {store} holds no lessons)")
         raise typer.Exit(_EXIT_OK)
     from .sources_retrospective import lesson_status
+
     for n in lessons:
         st = lesson_status(n)
-        color = {"accepted": "green", "rejected": "yellow", "proposed": "cyan"}.get(st, "white")
+        color = {"accepted": "green", "rejected": "yellow", "proposed": "cyan"}.get(
+            st, "white"
+        )
         proposes = n.attributes.get("proposes", "")
         console.print(f"[{color}]{st:<9}[/{color}] {n.key} — {proposes}")
     raise typer.Exit(_EXIT_OK)
@@ -892,7 +1100,9 @@ def lesson_list(
 @lesson_app.command("accept")
 def lesson_accept(
     store: Path = typer.Option(..., "--store", help="the Lesson store JSON"),
-    key: str = typer.Option(..., "--key", help="the Lesson key (or its bare requirement key)"),
+    key: str = typer.Option(
+        ..., "--key", help="the Lesson key (or its bare requirement key)"
+    ),
 ) -> None:
     """Human disposition — ACCEPT a Lesson's `revises` proposal (persists; its revise becomes active)."""
     from .lesson_store import find_lesson, save_lessons, upsert_lesson
@@ -908,16 +1118,22 @@ def lesson_accept(
     except (OSError, ValueError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_OPERATIONAL)
-    console.print(f"[green]accepted[/green]: {target.key} — the revise is now active (still applied only "
-                  f"through the byte-identity guard).")
+    console.print(
+        f"[green]accepted[/green]: {target.key} — the revise is now active (still applied only "
+        f"through the byte-identity guard)."
+    )
     raise typer.Exit(_EXIT_OK)
 
 
 @lesson_app.command("reject")
 def lesson_reject(
     store: Path = typer.Option(..., "--store", help="the Lesson store JSON"),
-    key: str = typer.Option(..., "--key", help="the Lesson key (or its bare requirement key)"),
-    rationale: str = typer.Option(..., "--rationale", help="why it's declined — retained across runs"),
+    key: str = typer.Option(
+        ..., "--key", help="the Lesson key (or its bare requirement key)"
+    ),
+    rationale: str = typer.Option(
+        ..., "--rationale", help="why it's declined — retained across runs"
+    ),
 ) -> None:
     """Human disposition — REJECT a Lesson, RETAINED with its rationale (the memory keeps *why*)."""
     from .lesson_store import find_lesson, save_lessons, upsert_lesson
@@ -933,32 +1149,39 @@ def lesson_reject(
     except (OSError, ValueError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_OPERATIONAL)
-    console.print(f"[yellow]rejected[/yellow]: {target.key} — retained with rationale (survives re-runs).")
+    console.print(
+        f"[yellow]rejected[/yellow]: {target.key} — retained with rationale (survives re-runs)."
+    )
     raise typer.Exit(_EXIT_OK)
 
 
 @navigator_app.command("view-definition")
 def view_definition(
     name: Optional[str] = typer.Option(
-        None, "--name",
+        None,
+        "--name",
         help="Definition to resolve + dump (e.g. requirements | capability | node-schema | base). "
         "Omit to dump the whole registry.",
     ),
     resolved: bool = typer.Option(
-        True, "--resolved/--raw",
+        True,
+        "--resolved/--raw",
         help="Dump the RESOLVED definition (extends chain flattened, default) or the raw authored delta.",
     ),
     diff: bool = typer.Option(
-        False, "--diff",
+        False,
+        "--diff",
         help="With --name: dump only the leaves this domain overrides/adds vs the base (its delta).",
     ),
     validate: bool = typer.Option(
-        False, "--validate",
+        False,
+        "--validate",
         help="Govern the registry: check every definition resolves + bindings reference known fields. "
         "Exit 0=clean, 1=issues (EC-6).",
     ),
     from_file: Optional[Path] = typer.Option(
-        None, "--from",
+        None,
+        "--from",
         help="Consume an EXTERNAL VIEW-SCHEMA JSON file (REQ-13): load it, resolve against the shipped "
         "base, validate, and dump the resolved JSON. The cross-repo import seam.",
     ),
@@ -977,7 +1200,9 @@ def view_definition(
             for issue in issues:
                 console.print(f"[red]definition:[/red] {issue}")
             raise typer.Exit(_EXIT_ERR)
-        console.print(f"[green]ok:[/green] {len(DEFINITION_REGISTRY)} definitions valid")
+        console.print(
+            f"[green]ok:[/green] {len(DEFINITION_REGISTRY)} definitions valid"
+        )
         raise typer.Exit(_EXIT_OK)
     if from_file is not None:
         # REQ-13: consume an externally-authored definition — load, resolve against the shipped base,
@@ -994,7 +1219,9 @@ def view_definition(
         except (OSError, ValueError) as exc:
             console.print(f"[red]error:[/red] {exc}")
             raise typer.Exit(_EXIT_ERR)
-        sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
+        sys.stdout.write(
+            json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+        )
         raise typer.Exit(_EXIT_OK)
     try:
         if name is not None:
@@ -1007,17 +1234,29 @@ def view_definition(
                 raise typer.Exit(_EXIT_ERR)
             defn = DEFINITION_REGISTRY[key]
             if diff:
-                payload = definition_diff(defn, BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY)
+                payload = definition_diff(
+                    defn, BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY
+                )
             else:
-                payload = resolve(defn, DEFINITION_REGISTRY).to_dict() if resolved else defn.to_dict()
+                payload = (
+                    resolve(defn, DEFINITION_REGISTRY).to_dict()
+                    if resolved
+                    else defn.to_dict()
+                )
         else:
             payload = {
-                k: (resolve(d, DEFINITION_REGISTRY).to_dict() if resolved else d.to_dict())
+                k: (
+                    resolve(d, DEFINITION_REGISTRY).to_dict()
+                    if resolved
+                    else d.to_dict()
+                )
                 for k, d in DEFINITION_REGISTRY.items()
             }
     except (KeyError, ValueError) as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)
 
-    sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
+    sys.stdout.write(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    )
     raise typer.Exit(_EXIT_OK)
