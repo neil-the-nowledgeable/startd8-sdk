@@ -87,6 +87,33 @@ def test_record_intervention_into_explicit_collector():
     assert "go" in obs.message and "struct" in obs.message
 
 
+# ── Benchmark opt-out: the STARTD8_CENSUS_DISABLED hard kill-switch ──────────────────────────────────
+
+def test_hard_disable_env_forces_no_op_even_with_explicit_collector(monkeypatch):
+    # The benchmark opt-out: with the env kill-switch set, the hook records NOTHING even when a collector
+    # is explicitly passed — so a benchmark cell is byte-identical regardless of any installed collector.
+    monkeypatch.setenv("STARTD8_CENSUS_DISABLED", "1")
+    c = CensusCollector()
+    record_intervention(FindingClass.ELEMENT_RENDER, "go", "struct", file_path="a.go", collector=c)
+    assert len(c) == 0
+
+
+def test_hard_disable_env_refuses_set_collector(monkeypatch):
+    # set_collector refuses to install while hard-disabled, so nothing is installed for the cell.
+    monkeypatch.setenv("STARTD8_CENSUS_DISABLED", "true")
+    set_collector(CensusCollector())
+    assert get_collector() is None
+
+
+def test_hard_disable_falsy_values_do_not_disable(monkeypatch):
+    # Guard against accidental disable: falsy/empty values leave the census in its normal (opt-in) mode.
+    for val in ("0", "false", "no", ""):
+        monkeypatch.setenv("STARTD8_CENSUS_DISABLED", val)
+        c = CensusCollector()
+        record_intervention("repair_syntax", "python", "function", collector=c)
+        assert len(c) == 1, f"{val!r} must NOT disable the census"
+
+
 def test_record_intervention_into_process_scoped_collector():
     c = CensusCollector()
     set_collector(c)

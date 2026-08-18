@@ -384,6 +384,12 @@ def main() -> int:
     # FR-2: benchmark mode requires Micro Prime OFF (LLM does maximal work).
     if args.benchmark_mode and args.micro_prime:
         parser.error("--benchmark-mode is incompatible with --micro-prime (benchmark mode requires the full LLM lead/drafter path; Micro Prime must stay off)")
+    # Benchmark integrity: force the determinism-gap census fully OFF for the whole cell (it is already
+    # off-by-default + per-cell subprocess-isolated, but this makes "benchmark ⇒ census off" an EXPLICIT,
+    # guaranteed invariant that survives a future global-collector install). Observation must never perturb
+    # what the benchmark measures.
+    if args.benchmark_mode:
+        os.environ["STARTD8_CENSUS_DISABLED"] = "1"
 
     setup_logging(verbose=args.verbose)
 

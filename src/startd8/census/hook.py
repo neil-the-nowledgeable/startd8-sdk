@@ -19,6 +19,7 @@ switch.
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass
 from enum import Enum
@@ -29,6 +30,18 @@ from startd8.logging_config import get_logger
 from . import rule_catalog
 
 logger = get_logger(__name__)
+
+#: Config-level HARD kill-switch (benchmark opt-out). When this env var is truthy the census is forced
+#: fully off — ``record_intervention`` no-ops and ``set_collector`` refuses to install — REGARDLESS of any
+#: installed collector, so benchmark-related SDK behavior is guaranteed opt-in. ``run_prime_workflow.py
+#: --benchmark-mode`` sets it (belt-and-suspenders atop the empty-default guard + per-cell subprocess
+#: isolation), so a benchmark run can never be perturbed even if a future caller installs a global collector.
+_ENV_DISABLE = "STARTD8_CENSUS_DISABLED"
+
+
+def _hard_disabled() -> bool:
+    """True when the census is force-disabled via the :data:`_ENV_DISABLE` env kill-switch (benchmark opt-out)."""
+    return os.environ.get(_ENV_DISABLE, "").strip().lower() not in ("", "0", "false", "no")
 
 
 class FindingClass(str, Enum):
@@ -125,6 +138,9 @@ def set_collector(collector: Optional[CensusCollector]) -> None:
     """Install (or clear, with ``None``) the process-scoped census collector. Opt-in: until this is
     called the hook is a no-op and every generated artifact is byte-identical."""
     global _collector
+    if _hard_disabled() and collector is not None:
+        logger.debug("census hard-disabled (%s) — refusing to install a collector", _ENV_DISABLE)
+        return
     with _collector_lock:
         _collector = collector
 
@@ -153,6 +169,8 @@ def record_intervention(
     explicit *collector* to record into a specific sink (tests, per-run scoping); else the process-scoped
     one is used.
     """
+    if _hard_disabled():
+        return  # census force-disabled (benchmark opt-out) — byte-identical regardless of any collector
     sink = collector if collector is not None else get_collector()
     if sink is None:
         return  # census off — the empty-default guard; byte-identical
