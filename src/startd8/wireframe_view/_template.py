@@ -506,6 +506,12 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   .status-chip.active{box-shadow:0 0 0 2px var(--ink),0 0 0 4px transparent;outline:2px solid var(--ink);outline-offset:1px}
   /* items hidden by the active filter (JS sets display:none via applyFilter) */
   .item.pf-hidden{display:none}
+  /* REQ-freetext-search: the third independent pre-paging hide-reason (free-text search) */
+  .item.srch-hidden{display:none}
+  /* the free-text card-browse search input (profiled-navigator-only; inert without #q-cards) */
+  .q-cards-wrap{margin-top:5px}
+  #q-cards{width:100%;box-sizing:border-box;font:inherit;font-size:12.5px;padding:5px 9px;border-radius:6px;
+    border:1px solid var(--line,#ccc);background:var(--card,#fff);color:inherit}
   /* sections with no visible items are collapsed + dimmed when a filter is active */
   details.sec.pf-empty{opacity:.45;pointer-events:none}
 
@@ -749,6 +755,22 @@ __PLAN_DATA__
     _applyFilter(_activeFilter);
   }
 
+  // REQ-freetext-search FR-3/4/5: the search predicate. It sets ONLY its own `srch-hidden` class (a
+  // card whose data-search doesn't substring-match the trimmed lowercased term), then defers to
+  // applyVisibility() — the Move 3 seam that composes the pre-paging predicates (srch-hidden ∈
+  // PRE_PAGING_REASONS, so it intersects status by construction — FR-4) and re-pages the survivor set
+  // (FR-5: the paged count reflects the filtered set). It never touches pf-hidden/pg-hidden (no clobber).
+  function _applySearch(){
+    var q=document.getElementById("q-cards"); if(!q) return;
+    var term=(q.value||"").trim().toLowerCase();
+    document.querySelectorAll("#outline .item").forEach(function(it){
+      if(it.closest(".vd-template")) return;
+      var blob=it.getAttribute("data-search")||"";
+      it.classList.toggle("srch-hidden", term!=="" && blob.indexOf(term)===-1);
+    });
+    applyVisibility();
+  }
+
   // ---------- at-a-glance ----------
   function renderGlance(){
     var g=document.getElementById("glance");
@@ -944,6 +966,14 @@ __PLAN_DATA__
       // readability: stamp the status colour as a CSS var so the card's status spine renders it
       // (profiled-navigator only — the app path sets nothing → byte-identical).
       var _ps=profStatus(item.status); if(_ps&&_ps.color) w.style.setProperty("--st", _ps.color);
+    }
+    // REQ-freetext-search FR-2: the structural data-search blob — built BY KEY from the card's typed
+    // fields + Touches (never a prose reparse; the ce6ed667 distillation is what makes this honest).
+    // Profiled-navigator-only (stamped in this branch), lowercased. The app path stamps nothing → byte-identical.
+    if(payload.profile){
+      var _sf=item.fields||{}, _sp=[k, _sf.name, _sf.statement, _sf.verify, _sf.serves_objective];
+      if(item.touches&&item.touches.length){ item.touches.forEach(function(t){ _sp.push(t&&t.path); }); }
+      w.setAttribute("data-search", _sp.filter(Boolean).join(" ").toLowerCase());
     }
     var mock=mockFor(k,item);
     // Profiled requirement card: parse the node-detail blob into labelled WHAT/HOW/WHY slots so a reader
@@ -1234,8 +1264,14 @@ __PLAN_DATA__
       '<label class="dbg-opt"><input type="radio" name="pagepick" id="page10"><span>10</span></label>'+
       '<label class="dbg-opt"><input type="radio" name="pagepick" id="page5"><span>5</span></label>'+
       '<label class="dbg-opt"><input type="radio" name="pagepick" id="page1"><span>1 at a time</span></label>'+
+      // ── SEARCH: free-text filter over the card browse (FR-1; composes via the Move 3 seam) ───────
+      '<div class="dbg-group" data-group="search">Search <span class="dbg-hint">· filter cards</span></div>'+
+      '<div class="q-cards-wrap"><input type="search" id="q-cards" placeholder="search requirements…" autocomplete="off" aria-label="Search requirements"></div>'+
       // ── PROVENANCE: the live readout stays at the bottom ──────────────────────────────────────
       prov;
+    // REQ-freetext-search FR-3: wire the live substring filter on the search input's `input` event.
+    var qCards=document.getElementById("q-cards");
+    if(qCards) qCards.addEventListener("input", _applySearch);
     var viewReq=document.getElementById("viewRequirement"), viewDef=document.getElementById("viewDefinition");
     var nodeMeta=document.getElementById("nodeMeta"), outline=document.getElementById("outlineRegions");
     var hide=document.getElementById("hideScaffold");

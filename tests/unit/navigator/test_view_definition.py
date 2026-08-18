@@ -518,7 +518,7 @@ def test_base_models_the_debug_control_panel_as_groups_of_toggles():
     # the FR-8 DEBUG group (raw data / node data).
     control = resolve(BASE_NAVIG8R_DEFINITION, DEFINITION_REGISTRY).control
     assert control["panel"] == "top-right"
-    assert set(control["groups"]) == {"view", "overlays", "debug", "paging"}
+    assert set(control["groups"]) == {"view", "overlays", "debug", "paging", "search"}
     assert control["groups"]["view"]["label"] == "View"
     assert control["groups"]["view"]["first"] is True
     # VIEW is the Requirement/View-Definition pick; the density modes + scaffoldOnly are retired.
@@ -527,9 +527,11 @@ def test_base_models_the_debug_control_panel_as_groups_of_toggles():
     assert set(control["groups"]["debug"]["toggles"]) == {"rawData", "nodeData", "inspectCells"}
     # FR-9: the Paging group offers a pick-one page size incl. one-at-a-time.
     assert set(control["groups"]["paging"]["toggles"]) == {"pageAll", "page10", "page5", "page1"}
+    # REQ-freetext-search FR-6: the Search group's single free-text input (rendered as an <input>).
+    assert set(control["groups"]["search"]["toggles"]) == {"q-cards"}
     toggle_ids = {tid for g in control["groups"].values() for tid in g["toggles"]}
     assert toggle_ids == {"viewRequirement", "viewDefinition", "nodeMeta", "outlineRegions", "hideScaffold",
-                          "rawData", "nodeData", "inspectCells", "pageAll", "page10", "page5", "page1"}
+                          "rawData", "nodeData", "inspectCells", "pageAll", "page10", "page5", "page1", "q-cards"}
     assert "structOnly" not in toggle_ids and "combined" not in toggle_ids and "scaffoldOnly" not in toggle_ids
     assert "nodeMeta" in control["groups"]["overlays"]["toggles"]  # the item.meta reveal survives as an overlay
 

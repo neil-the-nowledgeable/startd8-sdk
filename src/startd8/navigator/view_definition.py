@@ -345,6 +345,15 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
                            "page5": {"label": "5", "order": 2},
                            "page1": {"label": "1 at a time", "order": 3},
                        }},
+            # REQ-freetext-search FR-6: the free-text card-browse search — a definition-owned control
+            # group (like paging) so its label/hint inherit the REQ-14 override cascade. The single
+            # `q-cards` free-text input registers as one toggle (the template renders it as an <input>,
+            # not a radio); it composes as the `srch-hidden` predicate through Move 3's applyVisibility
+            # seam. Additive, profiled-navigator-only (app-scaffold path byte-identical).
+            "search": {"label": "Search", "hint": "· filter cards", "order": 4,
+                       "toggles": {
+                           "q-cards": {"label": "search requirements…", "order": 0},
+                       }},
         },
     },
     glance={"summary": "status-counts"},
@@ -380,6 +389,9 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
             "docband": {"layer": "descriptive", "scaffold": "doc-context band — criticality/backend/audience/trust/risks (profile.doc_context)", "order": 9},
             "detail": {"layer": "node", "scaffold": "requirement detail peek — click-to-expand record + typed Touches (item.fields/touches)", "order": 10},
             "fullview": {"layer": "node", "scaffold": "full-page requirement view — buildFullView on the #<key> route", "order": 11},
+            # REQ-freetext-search FR-6: the search input's region binding (control layer) — so the frame
+            # mode maps it honestly alongside the toolbar's other control affordances.
+            "qcards": {"layer": "control", "scaffold": "card-browse search — free-text filter over item.fields/touches (srch-hidden)", "order": 12},
         },
     },
     # FR-13: the display-logic DATA — the inspector field→element mapping + the frame region templates —
