@@ -81,6 +81,8 @@ WIREFRAME_VIEW_TEMPLATE = r"""<!doctype html>
   body.nav-profiled .dc-risks summary{cursor:pointer;font-family:var(--mono);font-size:11px;
     color:var(--ink2);padding:3px 0;list-style-position:outside}
   body.nav-profiled .dc-risks summary::-webkit-details-marker{color:var(--faint)}
+  /* Move 2: the summary-only risk readout at non-maximal disclosure tiers (matches the <summary> look) */
+  body.nav-profiled .dc-risks-sum{font-family:var(--mono);font-size:11px;color:var(--ink2);padding:3px 0}
   body.nav-profiled .dc-risk{border-left:2px solid var(--line);padding:5px 0 5px 10px;margin:6px 0 6px 2px;
     font-size:12px;line-height:1.5}
   body.nav-profiled .dc-risk.dc-pri-high{border-left-color:#ab473a}
@@ -670,30 +672,55 @@ __PLAN_DATA__
   }
 
   // ---------- masthead ----------
-  // Doc-context band — the REQ's overall nature (criticality/domain/audience/trust/data-class/version +
-  // FR/objective/non-goal counts + the risk profile with mitigation→FR coverage). MAXIMAL for now; pare
-  // back after review. Rendered only when payload.profile.doc_context is populated (a per-doc req render).
+  // REQ-audience-tiered-disclosure (Move 2) FR-1: the disclosure tier, derived from the EXISTING
+  // audience×fluency lens key `cur` (= role|flu) — no new audience state (Mottainai/Kagami: reuse the
+  // lens, don't fork it). beginner → minimal · intermediate → standard · advanced → maximal.
+  var DISCLOSE_TIER={minimal:0, standard:1, maximal:2};
+  function discloseTier(){
+    var flu=(cur||"").split("|")[1]||"";
+    if(flu==="advanced") return "maximal";
+    if(flu==="beginner") return "minimal";
+    return "standard";   // intermediate / unset → the middle tier
+  }
+  // FR-4: the ONE disclosure seam — per-surface field→tier registration. A field renders iff its tier
+  // rank ≤ the current discloseTier's rank (minimal 0 always · standard 1 · maximal 2 advanced-only). Add
+  // a surface/field by registering it HERE; the surface reads atTier(), never open-codes a fluency check.
+  // The deferred band-pare (trust·data·version·riskDetail) is the MAXIMAL tier — a tier, not a delete (FR-5).
+  var DC_FIELD_TIER={ criticality:0, counts:0, riskSummary:0, domain:1, audience:1,
+                      trust:2, data:2, version:2, riskDetail:2 };
+  function atTier(fieldKey, map){ return (map[fieldKey]||0) <= DISCLOSE_TIER[discloseTier()]; }
+  // Doc-context band — the REQ's overall nature. FR-2/FR-3/FR-5: each field renders at its declared tier
+  // (via the seam), re-tiered by renderAll() on every lens change. Rendered only when
+  // payload.profile.doc_context is populated (a per-doc req render → app-scaffold byte-identical, FR-7).
   function docContextBand(){
     var P=payload.profile, c=(P&&P.doc_context)||null; if(!c||!Object.keys(c).length) return "";
+    function at(fk){ return atTier(fk, DC_FIELD_TIER); }
     function chip(cls,label,val,title){ return val?'<span class="dc-chip '+cls+'" title="'+esc(title||label)+'"><span class="dc-k">'+esc(label)+'</span>'+esc(val)+'</span>':''; }
+    // FR-2/FR-5: each chip renders only at its declared tier — minimal shows criticality; standard adds
+    // domain + audience; maximal (advanced) adds trust · data · version. No field is deleted — the maximal
+    // tier is the full set the band shows today; a beginner sees a minimal default and reaches the rest by
+    // raising the fluency.
     var chips=chip("dc-crit dc-crit-"+esc(c.criticality||""),"criticality",c.criticality,"how critical this requirement is")
-      + chip("dc-backend","domain",(c.backend||"").replace("python-",""),"backend / projection domain: "+(c.backend||""))
-      + chip("dc-aud","for",c.audience,"audience — who this is for")
-      + chip("dc-trust","trust",c.trust_boundary,"trust boundary")
-      + chip("dc-data","data",c.data_classification,"data classification")
-      + chip("dc-ver","version",c.version,"requirement version");
+      + (at("domain")?chip("dc-backend","domain",(c.backend||"").replace("python-",""),"backend / projection domain: "+(c.backend||"")):"")
+      + (at("audience")?chip("dc-aud","for",c.audience,"audience — who this is for"):"")
+      + (at("trust")?chip("dc-trust","trust",c.trust_boundary,"trust boundary"):"")
+      + (at("data")?chip("dc-data","data",c.data_classification,"data classification"):"")
+      + (at("version")?chip("dc-ver","version",c.version,"requirement version"):"");
     var counts=[]; if(c.fr_count)counts.push(c.fr_count+" FRs"); if(c.objectives)counts.push(c.objectives+" objectives"); if(c.non_goals)counts.push(c.non_goals+" non-goals");
     if(counts.length) chips+='<span class="dc-chip dc-counts">'+esc(counts.join(" · "))+'</span>';
     var risks=c.risks||[], rhtml="";
     if(risks.length){
       var hi=0,unmit=0; risks.forEach(function(r){ if(r.priority==="high")hi++; if(!(r.cites&&r.cites.length))unmit++; });
       var sum=risks.length+" risks · "+hi+" high · "+(unmit?("⚠ "+unmit+" unmitigated"):"all mitigated");
-      var rows=risks.map(function(r){
+      // riskSummary is always shown; the full detail ROWS are advanced-only (maximal tier) — a beginner
+      // sees the collapsed summary line, an auditor sees every risk + its mitigation/citation.
+      var rows=at("riskDetail")?risks.map(function(r){
         var cite=(r.cites&&r.cites.length)?'<span class="dc-cite">'+esc(r.cites.join(" "))+'</span>':'<span class="dc-nocite">⚠ no FR cited</span>';
         return '<div class="dc-risk dc-pri-'+esc(r.priority)+'"><span class="dc-rp">'+esc(r.priority)+'</span><span class="dc-rt">'+esc(r.type)+'</span> '+esc(r.desc)+
           '<div class="dc-mit">→ '+esc(r.mitigation)+' '+cite+'</div></div>';
-      }).join("");
-      rhtml='<details class="dc-risks"'+(unmit?' open':'')+'><summary>'+esc(sum)+'</summary>'+rows+'</details>';
+      }).join(""):"";
+      rhtml=rows?('<details class="dc-risks"'+(unmit?' open':'')+'><summary>'+esc(sum)+'</summary>'+rows+'</details>')
+                :('<div class="dc-risks dc-risks-sum">'+esc(sum)+'</div>');   // summary-only at non-maximal tiers
     }
     return (chips||rhtml)?'<div class="dc-band" data-layer="descriptive" data-scaffold="doc-context band — criticality/backend/audience/trust/risks (profile.doc_context)">'+chips+'</div>'+rhtml:'';
   }
