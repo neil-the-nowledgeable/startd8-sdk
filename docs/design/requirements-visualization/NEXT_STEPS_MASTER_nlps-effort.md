@@ -71,18 +71,13 @@ coordinations** (owners' calls).
 ## 3. Research backlog — detailed (from `RESEARCH_AGENDA_*`)
 
 **Research-now (emeritus lane, unblocked):**
-1. **CRP-theme metabolization** 🥇 — `/audit-then-metabolize` on `CRP-INDEX.md`'s 7299 accepted suggestions: mine the
-   recurring themes, metabolize the top *un-metabolized* one into a det-req/det-plan grammar rule so drafts satisfy it
-   and reviews stop re-deriving it (shift-left). **Top pick: an "ambiguity" lint** (theme #2 — 158 docs, 542 rows).
-   *(We already metabolized themes #1 verify + #4 observability into REQ-22/23 — this continues the proven method.)*
-   See `ANALYSIS_crp-index-review-wisdom-into-grammar.md`.
+1. **CRP-theme metabolization** 🥇 — ✅ **INVESTIGATED (four parallel agents, 2026-08-17)** → `SYNTHESIS_crp-theme-metabolization-four-investigations.md`. Mined the top ~1,700 of 7,299 accepted suggestions (themes #2 ambiguity · #3 schema · #6 lifecycle · error/security/concurrency/determinism) into concrete fact/candidate-split `extract.py` lints. **THE CLASS (ATM Phase-1.5 convergence):** all four themes land at ONE seam — the *draft-time firing wire* — whose absence IS the re-seeking dormancy (thread #5). **Ship-ready backlog:** (1) ambiguity fact-rungs (placeholder/open-enum/unresolved-binary — 542 rows, near-1.0 precision, reuses `user_outcome_verify_advisory`); (2) concurrency atomic-write lint (lowest-FP); (3) security mitigation-vocab lint (reuses REQ-25 `verify_file`); (4) **REQ-30/REQ-31** = schema `Emits:` + lifecycle `Lifecycle:` fields; park all judgment-rungs per REQ-07 FR-7. **The fix = two wires** (CRP-prompt injection + `extract.py` content-lints) + complete `REQ-01 FR-4` + `pattern_catalog sync`; proposed **LOOP_CATALOG #8** (cross-kit family). *(Continues the proven REQ-22/23 method — themes #1/#4 already metabolized.)*
 2. **Concept-embedding mining** — re-mine the 6 corpora by *meaning* not keyword (kaizen scored 0% on grounding
    despite being about it); would honestly re-measure the Craft-Grammar claim.
 3. **Two-IR twin reconciliation** — a note reconciling Lesson↔SARIF + CRP-log↔SARIF onto one findings representation,
    *before* det-crp-kit + the retrospective build fork it.
 4. **Cross-corpus universality** — extend the grammar census to legal + benchmark + household (universal vs local).
-5. **The re-seeking dormancy** — investigate why `PATTERN-CATALOG`/the Phase-4.5 lookup under-fuels draft-time (a
-   dormant cross-doc-memory value path; feeds the retrospective/metabolize loop).
+5. **The re-seeking dormancy** — ✅ **DIAGNOSED (2026-08-17, Investigation D):** verdict = **DORMANT, worse than stated** — the "Phase 4.5/4.6 keyed lookup" the analysis assumed exists is **not in the CRP path at all**; it's an unbuilt reflective-loop hook (`REQ-01 FR-4`, *Partial*), and `PATTERN-CATALOG` PC-16..18 self-report "not yet wired as a draft-time check." **It is the SAME missing wire as thread #1's convergence** — fix them together (the two wires in the SYNTHESIS §4). Also found: the general metabolizer is **not bespoke** — it already exists in assembled form (census + catalog + `/metabolize-finding` + `extract.py`), wired at routing by LOOP_CATALOG #7; only the firing seam is missing.
 
 **Fold-into-a-REQ:** OQ-1/OQ-4 → the realization-facet REQ (§2.5) · OQ-R4/R6 → the general retrospective-bridge.
 **Watch:** convention-promotion tracking — re-census after the next corpus.
