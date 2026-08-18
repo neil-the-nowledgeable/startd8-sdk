@@ -1,7 +1,10 @@
 # Prime generation-ledger portfolio dashboard (dbrd-cr8r direct-JSON path — raw PromQL, no mixin).
-# Datasource path: `startd8 prime-ledger metrics --out <dir>/generation-ledger.prom` writes the
-# gen_ledger_* textfile; point a Prometheus textfile collector at it, then provision this dashboard.
+# Datasource path (two options, both emit the same gen_ledger_* metrics):
+#   live   — `startd8 prime-ledger metrics --push`  → OTLP gauges → Alloy(4317) → Mimir (renders now)
+#   $0     — `startd8 prime-ledger metrics --out <dir>/generation-ledger.prom` → Prometheus textfile
 # Generate:  python3 ~/.claude/skills/dbrd-cr8r/scripts/direct_json_generator.py <this-file> -o <dir>
+# Provision: python3 ~/.claude/skills/dbrd-cr8r/scripts/provision_dashboard.py <json> --grafana-url ...
+# LIVE at /d/cc-primeledger-portfolio (Mimir datasource) — verified against the real 5-project portfolio.
 title: "Prime Generation Ledger — Portfolio"
 uid: cc-primeledger-portfolio
 description: "Every project the Prime Contractor has worked on: cost, runs, and the $0-local (Micro Prime) cost-efficiency signal."

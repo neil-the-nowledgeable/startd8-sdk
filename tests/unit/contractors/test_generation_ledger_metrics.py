@@ -55,3 +55,19 @@ def test_empty_ledger_emits_zero_portfolio(tmp_path):
     text = glm.export_ledger_metrics(str(tmp_path / "empty-home"))
     assert "gen_ledger_portfolio_projects 0" in text
     assert "gen_ledger_portfolio_cost_usd 0" in text
+
+
+def test_ledger_observations_shape(tmp_path):
+    home = str(tmp_path / "home")
+    _record(tmp_path, home)
+    obs = glm._ledger_observations(home)
+    assert obs["portfolio_projects"] == 1
+    assert obs["portfolio_cost"] == 2.9375809999999993
+    # one (value, {project}) pair per project; one (value, {project,run}) per run
+    assert obs["project_cost"][0][1] == {"project": "portal-v2"}
+    assert obs["run_ratio"][0][0] == 0.6875 and "run" in obs["run_ratio"][0][1]
+
+
+def test_push_function_is_importable():
+    # the OTLP push is integration-verified against a live stack; here just guard the symbol exists
+    assert callable(glm.push_ledger_metrics_otlp)

@@ -269,18 +269,36 @@ def metrics(
     out: str = typer.Option(
         "generation-ledger.prom",
         "--out",
-        help="Output .prom path for a Prometheus textfile collector (Grafana datasource path).",
+        help="Output .prom path for a Prometheus textfile collector (the $0/offline datasource path).",
+    ),
+    push: bool = typer.Option(
+        False,
+        "--push",
+        help="Push OTLP gauges → Alloy → Mimir (the live datasource path) instead of a textfile.",
+    ),
+    endpoint: str = typer.Option(
+        "localhost:4317", "--endpoint", help="OTLP gRPC endpoint for --push."
     ),
     home: Optional[str] = typer.Option(
         None, "--home", help="Override the ledger home."
     ),
 ) -> None:
-    """Export the portfolio as Prometheus textfile metrics (the $0 datasource path for the dashboard)."""
+    """Export the portfolio as Prometheus metrics (the datasource path for the Grafana dashboard).
+
+    Default writes a ``.prom`` textfile ($0/offline); ``--push`` sends OTLP gauges to a live
+    Alloy→Mimir stack so the dashboard renders immediately.
+    """
     from . import generation_ledger_metrics as glm
 
-    result = glm.write_ledger_metrics(out, home=home)
-    console.print(
-        f"[green]wrote[/green] {result['series']} metric series → {result['path']} "
-        "(point a Prometheus textfile collector here)"
-    )
+    if push:
+        result = glm.push_ledger_metrics_otlp(home=home, endpoint=endpoint)
+        console.print(
+            f"[green]pushed[/green] {result['series']} gauge series via OTLP → {result['endpoint']}"
+        )
+    else:
+        result = glm.write_ledger_metrics(out, home=home)
+        console.print(
+            f"[green]wrote[/green] {result['series']} metric series → {result['path']} "
+            "(point a Prometheus textfile collector here)"
+        )
     raise typer.Exit(_EXIT_OK)

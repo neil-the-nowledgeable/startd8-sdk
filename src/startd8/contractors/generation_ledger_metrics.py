@@ -115,3 +115,97 @@ def write_ledger_metrics(
     n = sum(1 for ln in text.splitlines() if ln and not ln.startswith("#"))
     logger.info("Wrote %d generation-ledger metric series → %s", n, path)
     return {"path": str(path), "series": n}
+
+
+def _ledger_observations(home: Optional[str]) -> Dict[str, Any]:
+    """Gather the portfolio into (value, attributes) lists for the OTLP gauges (pure)."""
+    index = gl.load_index(home)
+    proj = index.projects
+    run_ratio: List[Any] = []
+    run_cost: List[Any] = []
+    for p in proj:
+        ledger = gl.load_project_ledger(p.get("project_id", ""), home=home)
+        for s in gl.project_trends(ledger)["runs"]:
+            attrs = {"project": p.get("project_id", ""), "run": s["run_id"]}
+            run_ratio.append((s["local_ratio"], attrs))
+            run_cost.append((s["cost_usd"], attrs))
+    return {
+        "portfolio_cost": sum(p.get("cumulative_cost_usd", 0.0) for p in proj),
+        "portfolio_projects": len(proj),
+        "project_cost": [
+            (p.get("cumulative_cost_usd", 0.0), {"project": p.get("project_id", "")})
+            for p in proj
+        ],
+        "project_runs": [
+            (p.get("runs", 0), {"project": p.get("project_id", "")}) for p in proj
+        ],
+        "project_features": [
+            (p.get("features_passed", 0), {"project": p.get("project_id", "")})
+            for p in proj
+        ],
+        "run_ratio": run_ratio,
+        "run_cost": run_cost,
+    }
+
+
+def push_ledger_metrics_otlp(
+    home: Optional[str] = None, endpoint: str = "localhost:4317"
+) -> Dict[str, Any]:
+    """Push the portfolio as OTLP gauges → Alloy → Mimir (the live datasource path).
+
+    The same metric names/labels as the textfile export, emitted as OTLP observable gauges so a live
+    Grafana dashboard (Mimir datasource) renders real numbers. Endpoint defaults to the SDK's standard
+    Alloy OTLP receiver (``localhost:4317``, insecure). Integration-verified against a live stack.
+    """
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+        OTLPMetricExporter,
+    )
+    from opentelemetry.metrics import Observation
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
+
+    obs = _ledger_observations(home)
+
+    def _multi(pairs):
+        return lambda _options: [Observation(v, a) for v, a in pairs]
+
+    exporter = OTLPMetricExporter(endpoint=endpoint, insecure=True)
+    reader = PeriodicExportingMetricReader(exporter, export_interval_millis=60000)
+    provider = MeterProvider(
+        resource=Resource.create({"service.name": "startd8.generation-ledger"}),
+        metric_readers=[reader],
+    )
+    meter = provider.get_meter("startd8.generation_ledger")
+    meter.create_observable_gauge(
+        "gen_ledger_portfolio_cost_usd",
+        callbacks=[lambda _o: [Observation(obs["portfolio_cost"])]],
+    )
+    meter.create_observable_gauge(
+        "gen_ledger_portfolio_projects",
+        callbacks=[lambda _o: [Observation(obs["portfolio_projects"])]],
+    )
+    meter.create_observable_gauge(
+        "gen_ledger_project_cost_usd", callbacks=[_multi(obs["project_cost"])]
+    )
+    meter.create_observable_gauge(
+        "gen_ledger_project_runs", callbacks=[_multi(obs["project_runs"])]
+    )
+    meter.create_observable_gauge(
+        "gen_ledger_project_features_passed",
+        callbacks=[_multi(obs["project_features"])],
+    )
+    meter.create_observable_gauge(
+        "gen_ledger_run_local_ratio", callbacks=[_multi(obs["run_ratio"])]
+    )
+    meter.create_observable_gauge(
+        "gen_ledger_run_cost_usd", callbacks=[_multi(obs["run_cost"])]
+    )
+
+    provider.force_flush()
+    provider.shutdown()
+    series = 2 + len(obs["project_cost"]) * 3 + len(obs["run_ratio"]) * 2
+    logger.info(
+        "Pushed %d generation-ledger gauge series via OTLP → %s", series, endpoint
+    )
+    return {"series": series, "endpoint": endpoint}
