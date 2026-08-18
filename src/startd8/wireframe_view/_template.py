@@ -564,6 +564,16 @@ __PLAN_DATA__
   var KITS = payload.kits || {};                              // EC-4: delivery-role kits (overlay metadata)
   var data, EU, s;   // (re)set by renderAll() for the currently-selected variant
   var _pagingHook=null;   // FR-9: re-applied after each renderAll so paging survives a lens/depth re-render
+  // ── FR-5 SEAM (unify-visibility-predicates) ──────────────────────────────────────────────────
+  // Card visibility is a conjunction of independent predicates: status ∧ search ∧ audience ∧ page.
+  // PRE_PAGING_REASONS is the ONE registration point for the pre-paging predicates that narrow what
+  // paging sees; each class is set by exactly ONE owner (never clobbered), and paging's own pg-hidden
+  // is applied LAST over the survivor set. To add a predicate (search's `srch-hidden`, Move 2's
+  // `aud-hidden`): register its class HERE and have its owner call applyVisibility() — no other
+  // handler changes. A card is shown iff it carries NO active hide-reason class (CSS: display:none).
+  var PRE_PAGING_REASONS=["pf-hidden","srch-hidden","aud-hidden"];   // pf=status; srch,aud reserved
+  // FR-1: the single visibility recompute point; reassigned in the paging block once applyPaging exists.
+  var applyVisibility=function(){};
 
   // EC-4: which base voice a role renders as (a kit → its declared base; a base voice → itself).
   function voiceOf(role){ return (KITS[role] && KITS[role].base) || role; }
@@ -719,23 +729,19 @@ __PLAN_DATA__
   var _activeFilter = null;   // current status key filter, null = show all
 
   function _applyFilter(key){
-    // Walk every .item in the outline, show/hide by data-status; hide empty sections.
+    // FR-3: the status predicate sets ONLY its own hide-reason class (`pf-hidden`), then defers the
+    // composed recompute (section emptiness + re-page the survivor set) to applyVisibility(). It never
+    // touches another predicate's class, so it cannot clobber paging/search/audience decisions (FR-2).
     var items = document.querySelectorAll("#outline .item[data-status]");
     items.forEach(function(it){
       var match = (key === null) || (it.getAttribute("data-status") === key);
       it.classList.toggle("pf-hidden", !match);
     });
-    // Collapse / dim sections that have no visible items under the active filter.
-    var secs = document.querySelectorAll("#outline details.sec");
-    secs.forEach(function(sec){
-      if(key === null){ sec.classList.remove("pf-empty"); return; }
-      var visible = sec.querySelectorAll(".item[data-status]:not(.pf-hidden)").length;
-      sec.classList.toggle("pf-empty", visible === 0);
-    });
-    // Sync chip active state.
+    // Sync chip active state (status-predicate-owned UI).
     document.querySelectorAll(".status-chip").forEach(function(ch){
       ch.classList.toggle("active", ch.getAttribute("data-chip-key") === key);
     });
+    applyVisibility();   // FR-1/FR-3: the single composed recompute (pf-empty from the union + re-page)
   }
 
   function _onChipClick(key){
@@ -1363,8 +1369,13 @@ __PLAN_DATA__
         page5=document.getElementById("page5"), page1=document.getElementById("page1"), _page=0;
     function pageSize(){ return page1.checked?1 : page5.checked?5 : page10.checked?10 : Infinity; }
     function pagedCards(){
+      // FR-4 (the bug fix): page only the SURVIVOR set — real cards (not the display template) carrying
+      // NO pre-paging hide-reason (status/search/audience). Before this, pagedCards ignored `pf-hidden`,
+      // so status filtering and paging didn't intersect ("showing X–Y of N" counted hidden cards). Now
+      // paging composes with the pre-paging predicates by construction (the FR-5 seam is the single source).
       return Array.prototype.filter.call(document.querySelectorAll("#outline .item"),
-        function(el){ return !el.closest(".vd-template"); });   // real cards only, not the display template
+        function(el){ return !el.closest(".vd-template") &&
+          !PRE_PAGING_REASONS.some(function(r){ return el.classList.contains(r); }); });
     }
     function applyPaging(){
       var bar=document.getElementById("pagebar"), cards=pagedCards(), sz=pageSize();
@@ -1392,8 +1403,25 @@ __PLAN_DATA__
       if(nx) nx.onclick=function(){ _page++; applyPaging(); };
     }
     pageAll.onchange=page10.onchange=page5.onchange=page1.onchange=function(){ _page=0; applyPaging(); };
-    // renderAll re-applies paging + the per-cell inspector after rebuilding the cards (FR-9/FR-10).
-    _pagingHook=function(){ applyPaging(); syncInspect(inspectCells.checked); };
+    // FR-1: the single visibility recompute point (now that applyPaging is in scope). Sole authority for
+    // card shown/hidden = the union of hide-reason classes (CSS display:none per class). It recomputes the
+    // composed PRE-PAGING section emptiness (dim a section with no pre-paging survivor — preserving the
+    // status filter's collapse), then re-pages the survivor set so paging composes with status/search/aud.
+    applyVisibility=function(){
+      var secs=document.querySelectorAll("#outline details.sec");
+      secs.forEach(function(sec){
+        var cards=sec.querySelectorAll(".item[data-status]"), any=false;
+        cards.forEach(function(c){
+          if(c.closest(".vd-template")) return;
+          if(!PRE_PAGING_REASONS.some(function(r){ return c.classList.contains(r); })) any=true;
+        });
+        sec.classList.toggle("pf-empty", cards.length>0 && !any);   // dim when no pre-paging survivor
+      });
+      applyPaging();   // re-page over the fresh survivor set (pg-hidden applied LAST)
+    };
+    // FR-6: renderAll re-applies the COMPOSED visibility (status ∧ page) + the per-cell inspector after
+    // rebuilding the cards — so the composition survives a lens/depth variant re-render, as paging did.
+    _pagingHook=function(){ applyVisibility(); syncInspect(inspectCells.checked); };
     // `--source frame`: reflect the requirement-free frame in the picker so toggling back works.
     if(payload.frame){ viewDef.checked=true; viewReq.checked=false; }
     syncView();
