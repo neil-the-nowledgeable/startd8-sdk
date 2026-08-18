@@ -65,6 +65,7 @@ _SEVERITY_ADVISORY = "advisory"
 # stage-0 build-readiness gate (lifted from navigator_spec_delivery_loop -- Kagami: one home)
 # --------------------------------------------------------------------------- #
 
+
 def gate_spec(path: Path) -> Dict[str, Any]:
     """Run the deterministic build-readiness checks on one det-req spec (Spec Delivery Loop stage 0).
 
@@ -85,38 +86,82 @@ def gate_spec(path: Path) -> Dict[str, Any]:
     handle = _HANDLE.search(text)
     semname = _SEMNAME.search(text)
     name_ok = bool(handle and semname)
-    checks.append(("name-block", name_ok,
-                   f"handle={handle.group(1).strip() if handle else 'MISSING'}"
-                   if name_ok else "no deterministic name block (Readable handle + Semantic name)"))
+    checks.append(
+        (
+            "name-block",
+            name_ok,
+            (
+                f"handle={handle.group(1).strip() if handle else 'MISSING'}"
+                if name_ok
+                else "no deterministic name block (Readable handle + Semantic name)"
+            ),
+        )
+    )
 
     frs = parse_fr_lines(text)
     marker_count = len(_FR_MARKER.findall(text))
     parse_ok = len(frs) > 0 and len(frs) == marker_count
-    checks.append(("frs-parse", parse_ok,
-                   f"{len(frs)} FR(s) parse, {marker_count} bullet marker(s)"
-                   + ("" if parse_ok else " -- MISMATCH: a hard-wrapped FR is dropping fields")))
+    checks.append(
+        (
+            "frs-parse",
+            parse_ok,
+            f"{len(frs)} FR(s) parse, {marker_count} bullet marker(s)"
+            + (
+                "" if parse_ok else " -- MISMATCH: a hard-wrapped FR is dropping fields"
+            ),
+        )
+    )
 
     missing_name = [f["id"] for f in frs if not f.get("name")]
     named_ok = bool(frs) and not missing_name
-    checks.append(("frs-named", named_ok,
-                   "every FR has a deterministic Name:" if named_ok
-                   else f"FRs missing Name: {', '.join(missing_name) or '(no FRs)'}"))
+    checks.append(
+        (
+            "frs-named",
+            named_ok,
+            (
+                "every FR has a deterministic Name:"
+                if named_ok
+                else f"FRs missing Name: {', '.join(missing_name) or '(no FRs)'}"
+            ),
+        )
+    )
 
     missing_verify = [f["id"] for f in frs if not f.get("verify")]
     verify_ok = bool(frs) and not missing_verify
-    checks.append(("frs-verify", verify_ok,
-                   "every FR has an acceptance Verify:" if verify_ok
-                   else f"FRs missing Verify: {', '.join(missing_verify) or '(no FRs)'}"))
+    checks.append(
+        (
+            "frs-verify",
+            verify_ok,
+            (
+                "every FR has an acceptance Verify:"
+                if verify_ok
+                else f"FRs missing Verify: {', '.join(missing_verify) or '(no FRs)'}"
+            ),
+        )
+    )
 
     missing_serves = [f["id"] for f in frs if not f.get("serves")]
     serves_ok = bool(frs) and not missing_serves
-    checks.append(("frs-serves", serves_ok,
-                   "every FR links an objective Serves:" if serves_ok
-                   else f"FRs missing Serves: {', '.join(missing_serves) or '(no FRs)'}"))
+    checks.append(
+        (
+            "frs-serves",
+            serves_ok,
+            (
+                "every FR links an objective Serves:"
+                if serves_ok
+                else f"FRs missing Serves: {', '.join(missing_serves) or '(no FRs)'}"
+            ),
+        )
+    )
 
     ok = all(c[1] for c in checks)
-    return {"path": path, "ok": ok, "checks": checks, "frs": len(frs),
-            "blocked": [c[0] for c in checks if not c[1]]}
+    return {
+        "path": path,
+        "ok": ok,
+        "checks": checks,
+        "frs": len(frs),
+        "blocked": [c[0] for c in checks if not c[1]],
+    }
 
 
 @dataclass
@@ -131,8 +176,12 @@ class Finding:
     ref: str = ""  # optional dangling ref / path
 
     def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {"check": self.check, "severity": self.severity, "doc": self.doc,
-                             "message": self.message}
+        d: Dict[str, Any] = {
+            "check": self.check,
+            "severity": self.severity,
+            "doc": self.doc,
+            "message": self.message,
+        }
         if self.fr:
             d["fr"] = self.fr
         if self.ref:
@@ -200,6 +249,7 @@ class GovernReport:
 # per-doc checks (each reuses a shared primitive -- FR-9)
 # --------------------------------------------------------------------------- #
 
+
 def _check_name_block(path: Path, text: str) -> List[Finding]:
     """FR-1 -- every doc carries the deterministic NAME BLOCK, and every FR bullet carries a `Name:`.
 
@@ -218,46 +268,63 @@ def _check_name_block(path: Path, text: str) -> List[Finding]:
     if not semname:
         missing.append("Semantic name")
     if missing:
-        findings.append(Finding(
-            "FR-1", _SEVERITY_FAIL, path.name,
-            f"{path.name}: name block missing {', '.join(missing)} -- "
-            "add the deterministic NAME BLOCK (Readable handle + Semantic name) "
-            "per NAMING_CONVENTION.md (a doc identified by integer+type alone is the anti-pattern).",
-        ))
+        findings.append(
+            Finding(
+                "FR-1",
+                _SEVERITY_FAIL,
+                path.name,
+                f"{path.name}: name block missing {', '.join(missing)} -- "
+                "add the deterministic NAME BLOCK (Readable handle + Semantic name) "
+                "per NAMING_CONVENTION.md (a doc identified by integer+type alone is the anti-pattern).",
+            )
+        )
     # Canonical ref is the ADDED check (gate_spec doesn't assert it). Degraded to ADVISORY so it
     # never fails a doc that predates the canonical-ref convention (FR-8 precision gate: a heuristic
     # that cannot reach zero false positives on the current corpus degrades, never fails the build).
     elif not canonical:
-        findings.append(Finding(
-            "FR-1", _SEVERITY_ADVISORY, path.name,
-            f"{path.name}: name block has no `Canonical ref:` -- add "
-            "`cc:intent:<initiative>:<kind>:<key>` for a stable, wording-independent machine identity.",
-        ))
+        findings.append(
+            Finding(
+                "FR-1",
+                _SEVERITY_ADVISORY,
+                path.name,
+                f"{path.name}: name block has no `Canonical ref:` -- add "
+                "`cc:intent:<initiative>:<kind>:<key>` for a stable, wording-independent machine identity.",
+            )
+        )
     # every FR bullet must carry an authored Name: (reuse the shared parser, not a new one)
     frs = parse_fr_lines(text)
     unnamed = [f["id"] for f in frs if not f.get("name")]
     for fid in unnamed:
-        findings.append(Finding(
-            "FR-1", _SEVERITY_FAIL, path.name,
-            f"{path.name}: {fid} has no `Name:` field -- add a semantic Name: "
-            "(actor.action.object.outcome) so it is not identified by its integer key alone.",
-            fr=fid,
-        ))
+        findings.append(
+            Finding(
+                "FR-1",
+                _SEVERITY_FAIL,
+                path.name,
+                f"{path.name}: {fid} has no `Name:` field -- add a semantic Name: "
+                "(actor.action.object.outcome) so it is not identified by its integer key alone.",
+                fr=fid,
+            )
+        )
     return findings
 
 
 def _check_single_line_fr(path: Path, text: str) -> List[Finding]:
     """FR-2 -- every FR bullet is one physical line (the same marker-count-vs-parse dogfood the loop
-    stage-0 gate uses verbatim: a hard-wrapped bullet drops the fields the per-line parser can't see)."""
+    stage-0 gate uses verbatim: a hard-wrapped bullet drops the fields the per-line parser can't see).
+    """
     frs = parse_fr_lines(text)
     marker_count = len(_FR_MARKER.findall(text))
     if marker_count and len(frs) != marker_count:
-        return [Finding(
-            "FR-2", _SEVERITY_FAIL, path.name,
-            f"{path.name}: {marker_count} FR bullet marker(s) but only {len(frs)} parse -- "
-            "a hard-wrapped FR is silently dropping Name:/Touches:/Lives:/Verify:; "
-            "put each FR on ONE physical line.",
-        )]
+        return [
+            Finding(
+                "FR-2",
+                _SEVERITY_FAIL,
+                path.name,
+                f"{path.name}: {marker_count} FR bullet marker(s) but only {len(frs)} parse -- "
+                "a hard-wrapped FR is silently dropping Name:/Touches:/Lives:/Verify:; "
+                "put each FR on ONE physical line.",
+            )
+        ]
     return []
 
 
@@ -280,14 +347,17 @@ def _own_deliverable_paths(text: str) -> set:
                 own.add(tok.strip().strip("`").lstrip("./"))
     # The "Library seams (Touches file paths): a, b, c" block names the deliverable files too.
     seam_block = re.search(
-        r"Library seams[^:]*:\s*(.+?)(?:\n\n|Primitives reused|\Z)", text, re.DOTALL)
+        r"Library seams[^:]*:\s*(.+?)(?:\n\n|Primitives reused|\Z)", text, re.DOTALL
+    )
     if seam_block:
         for tok in _PATH_TOKEN.findall(seam_block.group(1)):
             own.add(tok.strip().strip("`").lstrip("./"))
     return {p for p in own if p}
 
 
-def _check_dangling_xref(path: Path, text: str, corpus_keys: set, repo_root: Path) -> List[Finding]:
+def _check_dangling_xref(
+    path: Path, text: str, corpus_keys: set, repo_root: Path
+) -> List[Finding]:
     """FR-3 -- intra-corpus cross-references resolve.
 
     - A local-scheme ``REQ-0N`` citation (REQ-01..09) that names no ``REQ-0N-*.md`` in the corpus is
@@ -308,12 +378,16 @@ def _check_dangling_xref(path: Path, text: str, corpus_keys: set, repo_root: Pat
             continue
         seen_keys.add(key)
         if key not in corpus_keys:
-            findings.append(Finding(
-                "FR-3", _SEVERITY_FAIL, path.name,
-                f"{path.name}: cites {key} but no {key}-*.md exists in the corpus -- "
-                "a dangling cross-ref (the doc was renamed away or never existed).",
-                ref=key,
-            ))
+            findings.append(
+                Finding(
+                    "FR-3",
+                    _SEVERITY_FAIL,
+                    path.name,
+                    f"{path.name}: cites {key} but no {key}-*.md exists in the corpus -- "
+                    "a dangling cross-ref (the doc was renamed away or never existed).",
+                    ref=key,
+                )
+            )
 
     # (b) cited repo-relative paths (in `backticks`) resolve to a repo file, excluding own deliverables
     path_seen: set = set()
@@ -331,12 +405,16 @@ def _check_dangling_xref(path: Path, text: str, corpus_keys: set, repo_root: Pat
             continue  # the doc's own to-be-built deliverable -- no self-fail
         if (repo_root / tok).exists():
             continue
-        findings.append(Finding(
-            "FR-3", _SEVERITY_ADVISORY, path.name,
-            f"{path.name}: cites path `{tok}` that does not resolve to a repo file "
-            "(and is not this doc's own declared deliverable) -- verify it wasn't moved/renamed.",
-            ref=tok,
-        ))
+        findings.append(
+            Finding(
+                "FR-3",
+                _SEVERITY_ADVISORY,
+                path.name,
+                f"{path.name}: cites path `{tok}` that does not resolve to a repo file "
+                "(and is not this doc's own declared deliverable) -- verify it wasn't moved/renamed.",
+                ref=tok,
+            )
+        )
     return findings
 
 
@@ -353,23 +431,33 @@ def _check_coverage(path: Path, summary: Dict[str, Any]) -> List[Finding]:
         return []
     try:
         v = ReqView(nodes_from_requirements(path))
-    except Exception:  # pragma: no cover - defensive; the index already degraded it to 'info' above
+    except (
+        Exception
+    ):  # pragma: no cover - defensive; the index already degraded it to 'info' above
         return []
     if not v.frs:
-        findings.append(Finding(
-            "FR-4", _SEVERITY_FAIL, path.name,
-            f"{path.name}: declares no FRs -- a REQ needs >=1 functional requirement.",
-        ))
+        findings.append(
+            Finding(
+                "FR-4",
+                _SEVERITY_FAIL,
+                path.name,
+                f"{path.name}: declares no FRs -- a REQ needs >=1 functional requirement.",
+            )
+        )
         return findings
     # High-confidence coverage: every FR needs an acceptance Verify: (the loop gate's frs-verify,
     # asserted through the same parser). This is a FAIL — it never false-fires on the current corpus.
     no_verify = [f.key for f in v.frs if not attr(f, "verify").strip()]
     for fid in no_verify:
-        findings.append(Finding(
-            "FR-4", _SEVERITY_FAIL, path.name,
-            f"{path.name}: {fid} has no `Verify:` -- every FR needs an acceptance test.",
-            fr=fid,
-        ))
+        findings.append(
+            Finding(
+                "FR-4",
+                _SEVERITY_FAIL,
+                path.name,
+                f"{path.name}: {fid} has no `Verify:` -- every FR needs an acceptance test.",
+                fr=fid,
+            )
+        )
     # Serves-based traceability (broken Serves / unserved objective) rides on objective-NODE parsing,
     # which the shared source-projection does not extract reliably across the whole corpus (many docs
     # declare `## Objectives` yet project 0 objective nodes). Serves is itself OPTIONAL (det-req §5),
@@ -377,21 +465,29 @@ def _check_coverage(path: Path, summary: Dict[str, Any]) -> List[Finding]:
     # mirrors the corpus index, which shows a health glyph for the same signal but does not gate on it.
     orphans = v.orphan_frs()
     for f in orphans:
-        findings.append(Finding(
-            "FR-4", _SEVERITY_ADVISORY, path.name,
-            f"{path.name}: {f.key} Serves an objective this doc does not declare as a node "
-            "(broken Serves, or the objective section did not project) -- verify the objective exists.",
-            fr=f.key,
-        ))
+        findings.append(
+            Finding(
+                "FR-4",
+                _SEVERITY_ADVISORY,
+                path.name,
+                f"{path.name}: {f.key} Serves an objective this doc does not declare as a node "
+                "(broken Serves, or the objective section did not project) -- verify the objective exists.",
+                fr=f.key,
+            )
+        )
     if v.uses_serves() and v.objectives:
         unserved = [o.key for o in v.objectives if not v.frs_for(o.key)]
         for okey in unserved:
-            findings.append(Finding(
-                "FR-4", _SEVERITY_ADVISORY, path.name,
-                f"{path.name}: objective {okey} is served by no FR "
-                "(a doc that uses Serves: should serve every objective).",
-                fr=okey,
-            ))
+            findings.append(
+                Finding(
+                    "FR-4",
+                    _SEVERITY_ADVISORY,
+                    path.name,
+                    f"{path.name}: objective {okey} is served by no FR "
+                    "(a doc that uses Serves: should serve every objective).",
+                    fr=okey,
+                )
+            )
     return findings
 
 
@@ -407,17 +503,25 @@ def _check_index_freshness(spec_dir: Path, docs: List[Path]) -> List[Finding]:
     would_link = {p.name for p in sorted(spec_dir.glob("REQ-*.md"))}
     on_disk = {p.name for p in docs}
     for extra in sorted(on_disk - would_link):
-        findings.append(Finding(
-            "FR-5", _SEVERITY_ADVISORY, extra,
-            f"{extra}: present on disk but the corpus index would not link it -- "
-            "regenerate the index (`startd8 navigator index --dir <corpus> --out ...`).",
-        ))
+        findings.append(
+            Finding(
+                "FR-5",
+                _SEVERITY_ADVISORY,
+                extra,
+                f"{extra}: present on disk but the corpus index would not link it -- "
+                "regenerate the index (`startd8 navigator index --dir <corpus> --out ...`).",
+            )
+        )
     for stale in sorted(would_link - on_disk):
-        findings.append(Finding(
-            "FR-5", _SEVERITY_ADVISORY, stale,
-            f"{stale}: the corpus index would link it but it is not in the governed doc set -- "
-            "a stale index link (the doc was removed).",
-        ))
+        findings.append(
+            Finding(
+                "FR-5",
+                _SEVERITY_ADVISORY,
+                stale,
+                f"{stale}: the corpus index would link it but it is not in the governed doc set -- "
+                "a stale index link (the doc was removed).",
+            )
+        )
     return findings
 
 
@@ -442,17 +546,22 @@ def _check_orphans(spec_dir: Path, docs: List[Path]) -> List[Finding]:
         key = m.group(1)
         referenced = any(key in body for name, body in texts.items() if name != p.name)
         if not referenced:
-            findings.append(Finding(
-                "FR-3", _SEVERITY_ADVISORY, p.name,
-                f"{p.name}: orphan doc -- {key} is referenced by no sibling in the corpus.",
-                ref=key,
-            ))
+            findings.append(
+                Finding(
+                    "FR-3",
+                    _SEVERITY_ADVISORY,
+                    p.name,
+                    f"{p.name}: orphan doc -- {key} is referenced by no sibling in the corpus.",
+                    ref=key,
+                )
+            )
     return findings
 
 
 # --------------------------------------------------------------------------- #
 # the governor
 # --------------------------------------------------------------------------- #
+
 
 def check_determinism_regression(nodes, provenance, doc: str = "") -> List[Finding]:
     """REQ-19 FR-6 — planned-vs-realized self-monitoring: a node whose *planned* regime (the declared
@@ -466,37 +575,54 @@ def check_determinism_regression(nodes, provenance, doc: str = "") -> List[Findi
 
     findings: List[Finding] = []
     for n in nodes:
-        planned = node_regime(n, None)              # declared = the plan
-        measured = node_regime(n, provenance)       # what construction actually did
-        if planned == RealizationRegime.DETERMINISTIC and measured == RealizationRegime.LLM:
-            findings.append(Finding(
-                "FR-6", _SEVERITY_FAIL, doc or n.key,
-                f"{doc or n.key}: node {n.key!r} was PLANNED deterministic (`$0`) but MEASURED llm — a "
-                f"determinism regression (its realization drifted from its plan). Investigate the "
-                f"generation path or re-route.",
-                fr=n.key,
-            ))
+        planned = node_regime(n, None)  # declared = the plan
+        measured = node_regime(n, provenance)  # what construction actually did
+        if (
+            planned == RealizationRegime.DETERMINISTIC
+            and measured == RealizationRegime.LLM
+        ):
+            findings.append(
+                Finding(
+                    "FR-6",
+                    _SEVERITY_FAIL,
+                    doc or n.key,
+                    f"{doc or n.key}: node {n.key!r} was PLANNED deterministic (`$0`) but MEASURED llm — a "
+                    f"determinism regression (its realization drifted from its plan). Investigate the "
+                    f"generation path or re-route.",
+                    fr=n.key,
+                )
+            )
     return findings
 
 
 def check_auto_revise_audit(audits, doc: str = "") -> List[Finding]:
     """REQ-21 FR-6 — autonomy with a trail: every auto-applied revise MUST carry a complete audit record
     (lesson · target · byte-identity guard result · timestamp · revert reference). An incomplete/silent
-    record is a named finding — an unaudited autonomous change is exactly what the auto-tier forbids."""
+    record is a named finding — an unaudited autonomous change is exactly what the auto-tier forbids.
+    """
     findings: List[Finding] = []
     for a in audits:
         d = a.to_dict() if hasattr(a, "to_dict") else dict(a)
-        missing = [k for k in ("lesson", "target", "guard_result", "timestamp", "revert_ref")
-                   if not d.get(k) and d.get(k) is not False]
+        missing = [
+            k
+            for k in ("lesson", "target", "guard_result", "timestamp", "revert_ref")
+            if not d.get(k) and d.get(k) is not False
+        ]
         if not d.get("revert_ref"):
-            missing = list(dict.fromkeys(missing + ["revert_ref"]))  # a revert_ref is mandatory (reversible)
+            missing = list(
+                dict.fromkeys(missing + ["revert_ref"])
+            )  # a revert_ref is mandatory (reversible)
         if missing:
-            findings.append(Finding(
-                "FR-6", _SEVERITY_FAIL, doc or str(d.get("lesson", "?")),
-                f"auto-applied revise from lesson {d.get('lesson', '?')!r} has an incomplete audit record "
-                f"(missing {', '.join(missing)}) — an auto-apply must never be silent or irreversible.",
-                fr=str(d.get("lesson", "")),
-            ))
+            findings.append(
+                Finding(
+                    "FR-6",
+                    _SEVERITY_FAIL,
+                    doc or str(d.get("lesson", "?")),
+                    f"auto-applied revise from lesson {d.get('lesson', '?')!r} has an incomplete audit record "
+                    f"(missing {', '.join(missing)}) — an auto-apply must never be silent or irreversible.",
+                    fr=str(d.get("lesson", "")),
+                )
+            )
     return findings
 
 
@@ -512,10 +638,18 @@ def _gate_liveness(node) -> tuple:
         return ("no-gate", "", "")
     kind, argv, reason = _classify_clause(gate)
     if kind != KIND_COMMAND or argv is None:
-        return ("dead-structural", gate, reason)          # present but does not resolve → a FACT (gap)
+        return (
+            "dead-structural",
+            gate,
+            reason,
+        )  # present but does not resolve → a FACT (gap)
     missing = _referenced_missing_path(argv)
     if missing:
-        return ("unrunnable-provenance", gate, f"missing input {missing}")  # a provenance CANDIDATE
+        return (
+            "unrunnable-provenance",
+            gate,
+            f"missing input {missing}",
+        )  # a provenance CANDIDATE
     return ("live", gate, "")
 
 
@@ -525,29 +659,44 @@ def check_verify_liveness(nodes, doc: str = "") -> List[Finding]:
     longer resolves to a runnable command) ships as a **GAP** (a fact, ``_SEVERITY_FAIL``); a gate that
     resolves but can't run for a provenance reason ships as a precision-governed **candidate**
     (``_SEVERITY_ADVISORY``) — the absence-vs-error move (FR-4). Only realized nodes (``lives`` present)
-    are checked — an un-built node's liveness is unknown (the invariant-9 activation gate). Advisory (NR-1)."""
+    are checked — an un-built node's liveness is unknown (the invariant-9 activation gate). Advisory (NR-1).
+    """
     findings: List[Finding] = []
     for n in nodes:
         if not getattr(n, "lives", None):
             continue
         state, gate, reason = _gate_liveness(n)
         if state == "dead-structural":
-            findings.append(Finding(
-                "FR-2", _SEVERITY_FAIL, doc or n.key,
-                f"{doc or n.key}: node {n.key!r} claims a verify gate {gate!r} that does NOT resolve to a "
-                f"runnable command ({reason}) — present but DEAD (a durable green carrying no truth). Fix "
-                f"the gate or route to a retrospective revision.",
-                fr=n.key, ref="gap:structural"))
+            findings.append(
+                Finding(
+                    "FR-2",
+                    _SEVERITY_FAIL,
+                    doc or n.key,
+                    f"{doc or n.key}: node {n.key!r} claims a verify gate {gate!r} that does NOT resolve to a "
+                    f"runnable command ({reason}) — present but DEAD (a durable green carrying no truth). Fix "
+                    f"the gate or route to a retrospective revision.",
+                    fr=n.key,
+                    ref="gap:structural",
+                )
+            )
         elif state == "unrunnable-provenance":
-            findings.append(Finding(
-                "FR-2", _SEVERITY_ADVISORY, doc or n.key,
-                f"{doc or n.key}: node {n.key!r} gate {gate!r} resolves but can't run ({reason}) — "
-                f"unrunnable-here for a provenance reason (not a territory failure). A precision candidate.",
-                fr=n.key, ref="candidate:provenance"))
+            findings.append(
+                Finding(
+                    "FR-2",
+                    _SEVERITY_ADVISORY,
+                    doc or n.key,
+                    f"{doc or n.key}: node {n.key!r} gate {gate!r} resolves but can't run ({reason}) — "
+                    f"unrunnable-here for a provenance reason (not a territory failure). A precision candidate.",
+                    fr=n.key,
+                    ref="candidate:provenance",
+                )
+            )
     return findings
 
 
-def recheck_verify_liveness_on_drift(nodes, changed_impl_keys, doc: str = "") -> List[Finding]:
+def recheck_verify_liveness_on_drift(
+    nodes, changed_impl_keys, doc: str = ""
+) -> List[Finding]:
     """REQ-22 FR-5 (the drift move) — when the implementation a gate depends on changes provenance
     (``changed_impl_keys`` = the impl node keys whose provenance moved), re-check the liveness of gates
     that depend on it (via a derivation edge or a lives ref to that impl), catching a gate-voiding refactor
@@ -557,8 +706,10 @@ def recheck_verify_liveness_on_drift(nodes, changed_impl_keys, doc: str = "") ->
     def _depends_on_changed(n) -> bool:
         if any(e.from_key in changed for e in getattr(n, "derivation", ()) or ()):
             return True
-        return any(ev.ref in changed or ev.ref.split(":")[-1] in changed
-                   for ev in getattr(n, "lives", ()) or ())
+        return any(
+            ev.ref in changed or ev.ref.split(":")[-1] in changed
+            for ev in getattr(n, "lives", ()) or ()
+        )
 
     return check_verify_liveness([n for n in nodes if _depends_on_changed(n)], doc)
 
@@ -573,13 +724,22 @@ def check_target_unmeasured(outcome_nodes, doc: str = "") -> List[Finding]:
         if getattr(n, "category", "") != "objective":
             continue
         attrs = getattr(n, "attributes", {}) or {}
-        if attrs.get("target", "").strip() and not attrs.get("target_signal", "").strip():
-            findings.append(Finding(
-                "FR-2", _SEVERITY_FAIL, doc or n.key,
-                f"{doc or n.key}: objective {n.key!r} carries a target but NO bound live signal — an "
-                f"unmeasured target is a claim with no attestation. Bind a `Signal:` to a live measurement "
-                f"or route to a retrospective revision.",
-                fr=n.key, ref="liveness:target-unmeasured"))
+        if (
+            attrs.get("target", "").strip()
+            and not attrs.get("target_signal", "").strip()
+        ):
+            findings.append(
+                Finding(
+                    "FR-2",
+                    _SEVERITY_FAIL,
+                    doc or n.key,
+                    f"{doc or n.key}: objective {n.key!r} carries a target but NO bound live signal — an "
+                    f"unmeasured target is a claim with no attestation. Bind a `Signal:` to a live measurement "
+                    f"or route to a retrospective revision.",
+                    fr=n.key,
+                    ref="liveness:target-unmeasured",
+                )
+            )
     return findings
 
 
@@ -592,10 +752,13 @@ def _fr_verify_is_dead(fr) -> bool:
 def check_served_by_dead_fr(fr_nodes, doc: str = "") -> List[Finding]:
     """REQ-23 FR-3 — verify-liveness (REQ-22) rolled up the serves-edge: an outcome that is SERVED (≥1 FR
     names it in ``Serves:``) but ALL of whose realized serving FRs fail verify-liveness is a GAP — served-
-    on-paper while its guarantee is dead. Min-rolls-up: ≥1 live serving FR ⇒ clean. Reuses REQ-22 (NR-2)."""
+    on-paper while its guarantee is dead. Min-rolls-up: ≥1 live serving FR ⇒ clean. Reuses REQ-22 (NR-2).
+    """
     by_objective: Dict[str, List] = {}
     for fr in fr_nodes:
-        for served in (getattr(fr, "attributes", {}) or {}).get("serves", "").split(","):
+        for served in (
+            (getattr(fr, "attributes", {}) or {}).get("serves", "").split(",")
+        ):
             served = served.strip()
             if served:
                 by_objective.setdefault(served, []).append(fr)
@@ -603,12 +766,18 @@ def check_served_by_dead_fr(fr_nodes, doc: str = "") -> List[Finding]:
     for objective, frs in sorted(by_objective.items()):
         realized = [f for f in frs if getattr(f, "lives", None)]
         if realized and all(_fr_verify_is_dead(f) for f in realized):
-            findings.append(Finding(
-                "FR-3", _SEVERITY_FAIL, doc or objective,
-                f"{doc or objective}: outcome {objective!r} is served by {len(realized)} realized FR(s) but "
-                f"ALL of them fail verify-liveness (dead gates) — served-on-paper while its guarantee is "
-                f"dead. Repair a serving FR's verify or route to a retrospective revision.",
-                fr=objective, ref="liveness:served-by-a-dead-fr"))
+            findings.append(
+                Finding(
+                    "FR-3",
+                    _SEVERITY_FAIL,
+                    doc or objective,
+                    f"{doc or objective}: outcome {objective!r} is served by {len(realized)} realized FR(s) but "
+                    f"ALL of them fail verify-liveness (dead gates) — served-on-paper while its guarantee is "
+                    f"dead. Repair a serving FR's verify or route to a retrospective revision.",
+                    fr=objective,
+                    ref="liveness:served-by-a-dead-fr",
+                )
+            )
     return findings
 
 
@@ -623,18 +792,29 @@ def check_served_by_dead_fr(fr_nodes, doc: str = "") -> List[Finding]:
 # inert until a labeled fixture set un-parks it (NR-6).
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 
-_LANG_BY_EXT = {".py": "python", ".go": "go", ".js": "javascript", ".ts": "typescript",
-                ".java": "java", ".cs": "csharp"}
+_LANG_BY_EXT = {
+    ".py": "python",
+    ".go": "go",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".java": "java",
+    ".cs": "csharp",
+}
 
 
 def _first_code_lives(node, repo_root=None) -> "Path | None":
     """The first ``lives`` evidence ref that resolves to an EXISTING code file (the realized artifact the
     fact-rungs inspect). ``ref`` may be ``type:path`` or a bare path; joined under ``repo_root`` when given.
-    Returns ``None`` when the node cites no on-disk code (un-realized → its liveness is unknown, not dead)."""
+    Returns ``None`` when the node cites no on-disk code (un-realized → its liveness is unknown, not dead).
+    """
     root = Path(repo_root) if repo_root else None
     for ev in getattr(node, "lives", ()) or ():
         raw = (getattr(ev, "ref", "") or "").strip()
-        cand = raw.split(":", 1)[1] if ":" in raw and not raw.split(":", 1)[0].isdigit() else raw
+        cand = (
+            raw.split(":", 1)[1]
+            if ":" in raw and not raw.split(":", 1)[0].isdigit()
+            else raw
+        )
         for p in ((root / cand) if root else Path(cand), Path(cand)):
             if p.suffix in _LANG_BY_EXT and p.is_file():
                 return p
@@ -644,8 +824,10 @@ def _first_code_lives(node, repo_root=None) -> "Path | None":
 def _ast_imports(src: str) -> List[str]:
     """Every imported module name in a Python source (reuse the ``ast`` machinery — NR-2). Records the
     module AND, for ``from X import Y``, both ``X`` and the fully-qualified ``X.Y`` — so a ban on ``Y``
-    catches ``from X import Y`` (which records module ``X`` alone). A syntax error → ``[]`` (never crash)."""
+    catches ``from X import Y`` (which records module ``X`` alone). A syntax error → ``[]`` (never crash).
+    """
     import ast
+
     try:
         tree = ast.parse(src)
     except SyntaxError:
@@ -665,6 +847,7 @@ def _ast_imports(src: str) -> List[str]:
 # ``security_mitigation`` attribute a node declares.
 def _mitigation_check_type(mitig: str):
     from startd8.query_prime.models import SecurityCheckType
+
     return {
         "injection": SecurityCheckType.INJECTION,
         "credential": SecurityCheckType.CREDENTIAL_LEAKAGE,
@@ -678,10 +861,13 @@ def check_mitigation_inert(nodes, repo_root=None, doc: str = "") -> List[Finding
     (``attributes['security_mitigation']`` ∈ injection|credentials|lifecycle) whose realized code the
     ``query_prime/security`` verifier reports the mitigation ABSENT for (a finding of that class) → GAP —
     the mitigation is present in the spec but not live in the code. REUSES ``verify_file`` (NR-2, no new
-    checker). Only realized nodes (a lives code file). Never crashes (a bad file → skip). Advisory (NR-1)."""
+    checker). Only realized nodes (a lives code file). Never crashes (a bad file → skip). Advisory (NR-1).
+    """
     findings: List[Finding] = []
     for n in nodes:
-        mitig = str((getattr(n, "attributes", {}) or {}).get("security_mitigation", "")).strip()
+        mitig = str(
+            (getattr(n, "attributes", {}) or {}).get("security_mitigation", "")
+        ).strip()
         check_type = _mitigation_check_type(mitig) if mitig else None
         if check_type is None:
             continue
@@ -691,28 +877,48 @@ def check_mitigation_inert(nodes, repo_root=None, doc: str = "") -> List[Finding
         try:
             from startd8.query_prime.models import DatabaseType
             from startd8.query_prime.security import verify_file
-            result = verify_file(path.read_text(encoding="utf-8"), str(path), DatabaseType.SQLITE,
-                                 _LANG_BY_EXT.get(path.suffix, "python"))
-        except Exception:  # pragma: no cover - the verifier is defensive; a bad file never aborts the sweep
+
+            result = verify_file(
+                path.read_text(encoding="utf-8"),
+                str(path),
+                DatabaseType.SQLITE,
+                _LANG_BY_EXT.get(path.suffix, "python"),
+            )
+        except (
+            Exception
+        ):  # pragma: no cover - the verifier is defensive; a bad file never aborts the sweep
             continue
-        if any(getattr(f, "check_type", None) == check_type for f in getattr(result, "findings", ()) or ()):
-            findings.append(Finding(
-                "FR-1", _SEVERITY_FAIL, doc or n.key,
-                f"{doc or n.key}: node {n.key!r} declares the security mitigation {mitig!r} but the verifier "
-                f"reports it ABSENT in {path} — present in the spec, not live in the code (mitigation-inert). "
-                f"Repair the mitigation or route to a retrospective revision.",
-                fr=n.key, ref="liveness:mitigation-inert"))
+        if any(
+            getattr(f, "check_type", None) == check_type
+            for f in getattr(result, "findings", ()) or ()
+        ):
+            findings.append(
+                Finding(
+                    "FR-1",
+                    _SEVERITY_FAIL,
+                    doc or n.key,
+                    f"{doc or n.key}: node {n.key!r} declares the security mitigation {mitig!r} but the verifier "
+                    f"reports it ABSENT in {path} — present in the spec, not live in the code (mitigation-inert). "
+                    f"Repair the mitigation or route to a retrospective revision.",
+                    fr=n.key,
+                    ref="liveness:mitigation-inert",
+                )
+            )
     return findings
 
 
 def check_non_goal_violated(nodes, repo_root=None, doc: str = "") -> List[Finding]:
     """REQ-25 FR-2 — the ``non-goal-violated`` FACT-rung: a node whose ``wont`` declares a structural import
     ban (``no-import:<module>``) that its realized Python code VIOLATES (AST imports the banned module) →
-    GAP. REUSES the import/AST machinery (NR-2). Non-Python lives are skipped (AST is Python). Advisory."""
+    GAP. REUSES the import/AST machinery (NR-2). Non-Python lives are skipped (AST is Python). Advisory.
+    """
     findings: List[Finding] = []
     for n in nodes:
-        bans = [w.split("no-import:", 1)[1].strip()
-                for w in (getattr(n, "wont", ()) or ()) if "no-import:" in w]
+        bans = [
+            w.split("no-import:", 1)[1].strip()
+            for w in (getattr(n, "wont", ()) or ())
+            if "no-import:" in w
+        ]
         if not bans:
             continue
         path = _first_code_lives(n, repo_root)
@@ -724,16 +930,24 @@ def check_non_goal_violated(nodes, repo_root=None, doc: str = "") -> List[Findin
             continue
         violated = sorted({b for b in bans if any(b in m for m in imported)})
         if violated:
-            findings.append(Finding(
-                "FR-2", _SEVERITY_FAIL, doc or n.key,
-                f"{doc or n.key}: node {n.key!r} declares the non-goal 'no-import: {', '.join(violated)}' but "
-                f"{path} imports it — a structural non-goal the code violates. Remove the import or route to "
-                f"a retrospective revision.",
-                fr=n.key, ref="liveness:non-goal-violated"))
+            findings.append(
+                Finding(
+                    "FR-2",
+                    _SEVERITY_FAIL,
+                    doc or n.key,
+                    f"{doc or n.key}: node {n.key!r} declares the non-goal 'no-import: {', '.join(violated)}' but "
+                    f"{path} imports it — a structural non-goal the code violates. Remove the import or route to "
+                    f"a retrospective revision.",
+                    fr=n.key,
+                    ref="liveness:non-goal-violated",
+                )
+            )
     return findings
 
 
-def check_touches_provenance_changed(nodes, changed_provenance_keys, doc: str = "") -> List[Finding]:
+def check_touches_provenance_changed(
+    nodes, changed_provenance_keys, doc: str = ""
+) -> List[Finding]:
     """REQ-25 FR-3 — the ``touches-dead`` FACT-trigger: a node whose Touches'd/lives file's realization
     provenance CHANGED since its last attestation (``changed_provenance_keys`` = the REQ-19 provenance-
     change signal, reused exactly as ``recheck_verify_liveness_on_drift`` consumes ``changed_impl_keys``)
@@ -744,15 +958,26 @@ def check_touches_provenance_changed(nodes, changed_provenance_keys, doc: str = 
         return []
     findings: List[Finding] = []
     for n in nodes:
-        hit = sorted({ev.ref for ev in (getattr(n, "lives", ()) or ())
-                      if ev.ref in changed or ev.ref.split(":")[-1] in changed})
+        hit = sorted(
+            {
+                ev.ref
+                for ev in (getattr(n, "lives", ()) or ())
+                if ev.ref in changed or ev.ref.split(":")[-1] in changed
+            }
+        )
         if hit:
-            findings.append(Finding(
-                "FR-3", _SEVERITY_FAIL, doc or n.key,
-                f"{doc or n.key}: node {n.key!r} Touches file(s) {hit} whose realization provenance CHANGED "
-                f"since last attestation — a re-judge trigger: re-verify whether the claim still holds "
-                f"against the changed code, or route to a retrospective revision.",
-                fr=n.key, ref="liveness:touches-provenance-changed"))
+            findings.append(
+                Finding(
+                    "FR-3",
+                    _SEVERITY_FAIL,
+                    doc or n.key,
+                    f"{doc or n.key}: node {n.key!r} Touches file(s) {hit} whose realization provenance CHANGED "
+                    f"since last attestation — a re-judge trigger: re-verify whether the claim still holds "
+                    f"against the changed code, or route to a retrospective revision.",
+                    fr=n.key,
+                    ref="liveness:touches-provenance-changed",
+                )
+            )
     return findings
 
 
@@ -768,11 +993,16 @@ class JudgmentRung:
     """A cell's SEMANTIC judgment-rung — the residual judgment its fact-rung can't make deterministically.
     Parked by default: it executes ONLY when it clears the precision threshold on a labeled fixture set
     (``precision``) AND its LLM-judge is verify-live (``judge_verify_live``, FR-6 — the judge is itself
-    LLM-realized ⇒ invariant 9 ⇒ must carry a live verify, so the checker never trips its own class)."""
+    LLM-realized ⇒ invariant 9 ⇒ must carry a live verify, so the checker never trips its own class).
+    """
 
     cell: str
-    precision: "float | None" = None      # measured on a labeled fixture set; None → no baseline → parked
-    judge_verify_live: bool = False       # FR-6: the judge carries a live verify (invariant 9)
+    precision: "float | None" = (
+        None  # measured on a labeled fixture set; None → no baseline → parked
+    )
+    judge_verify_live: bool = (
+        False  # FR-6: the judge carries a live verify (invariant 9)
+    )
 
 
 def judgment_rung_for(cell: str, *, precision=None, judge=None) -> JudgmentRung:
@@ -786,10 +1016,16 @@ def judgment_rung_for(cell: str, *, precision=None, judge=None) -> JudgmentRung:
 def is_unparked(rung: JudgmentRung) -> bool:
     """FR-4/FR-6 — a judgment-rung executes ONLY when it clears the precision threshold AND its judge is
     verify-live. Default (no baseline / non-live judge) → parked (``False``)."""
-    return (rung.precision is not None and rung.precision >= PRECISION_THRESHOLD and rung.judge_verify_live)
+    return (
+        rung.precision is not None
+        and rung.precision >= PRECISION_THRESHOLD
+        and rung.judge_verify_live
+    )
 
 
-def run_judgment_rung(rung: JudgmentRung, candidates=(), doc: str = "") -> List[Finding]:
+def run_judgment_rung(
+    rung: JudgmentRung, candidates=(), doc: str = ""
+) -> List[Finding]:
     """FR-4/FR-5 — a PARKED rung executes nothing (returns ``[]``, NR-3). An UN-PARKED rung emits precision-
     governed CANDIDATES (``_SEVERITY_ADVISORY``, evidence-citing, dismissible-in-one-glance) — NEVER a GAP
     (NR-4: a false judgment is dismissible, not trusted as a fact). Each ``candidate`` is a mapping with
@@ -799,11 +1035,17 @@ def run_judgment_rung(rung: JudgmentRung, candidates=(), doc: str = "") -> List[
     out: List[Finding] = []
     for c in candidates:
         key = str(c.get("key", ""))
-        out.append(Finding(
-            "FR-5", _SEVERITY_ADVISORY, doc or key,
-            f"{doc or key}: candidate ({rung.cell}) — {c.get('evidence', '')}. A precision-governed "
-            f"judgment (precision {rung.precision}), dismissible in one glance; NOT a fact.",
-            fr=key, ref=f"candidate:{rung.cell}"))
+        out.append(
+            Finding(
+                "FR-5",
+                _SEVERITY_ADVISORY,
+                doc or key,
+                f"{doc or key}: candidate ({rung.cell}) — {c.get('evidence', '')}. A precision-governed "
+                f"judgment (precision {rung.precision}), dismissible in one glance; NOT a fact.",
+                fr=key,
+                ref=f"candidate:{rung.cell}",
+            )
+        )
     return out
 
 
@@ -814,10 +1056,12 @@ def run_judgment_rung(rung: JudgmentRung, candidates=(), doc: str = "") -> List[
 # precision, not recall). Only a measured precision at/above the threshold — AND a verify-live judge (FR-6)
 # — un-parks the rung. The fixtures are the residual SEMANTIC cases the deterministic fact-rung can't catch.
 
+
 @dataclass(frozen=True)
 class JudgmentFixture:
     """One labeled evaluation case for a hypothesis cell's judgment-rung. ``label`` is the ground truth for
-    the POSITIVE class (``True`` = inert / violated / dead). ``input`` is the case a candidate judge sees."""
+    the POSITIVE class (``True`` = inert / violated / dead). ``input`` is the case a candidate judge sees.
+    """
 
     cell: str
     id: str
@@ -833,16 +1077,25 @@ def load_judgment_fixtures(path) -> List["JudgmentFixture"]:
     keeps every rung parked, which is the safe default)."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     rows = data.get("fixtures", data) if isinstance(data, dict) else data
-    return [JudgmentFixture(cell=str(d["cell"]), id=str(d["id"]), label=bool(d["label"]),
-                            input=dict(d.get("input", {})), name=str(d.get("name", "")),
-                            rationale=str(d.get("rationale", ""))) for d in rows]
+    return [
+        JudgmentFixture(
+            cell=str(d["cell"]),
+            id=str(d["id"]),
+            label=bool(d["label"]),
+            input=dict(d.get("input", {})),
+            name=str(d.get("name", "")),
+            rationale=str(d.get("rationale", "")),
+        )
+        for d in rows
+    ]
 
 
 def measure_precision(fixtures, judge) -> "float | None":
     """Precision — ``TP / (TP + FP)`` — of a candidate ``judge`` (``input -> bool``, ``True`` = predicts the
     positive class) over labeled ``fixtures``. NR-4 gates on PRECISION, not recall: a false positive is a
     durable-red-carrying-no-truth, so a judge that cries wolf scores low and stays parked. Returns ``None``
-    when the judge predicts NO positives (precision undefined → un-provable → parked)."""
+    when the judge predicts NO positives (precision undefined → un-provable → parked).
+    """
     tp = fp = 0
     for fx in fixtures:
         if judge(getattr(fx, "input", {})):
@@ -853,11 +1106,14 @@ def measure_precision(fixtures, judge) -> "float | None":
     return (tp / (tp + fp)) if (tp + fp) else None
 
 
-def measured_judgment_rung(cell: str, fixtures, judge, *, judge_node=None) -> "JudgmentRung":
+def measured_judgment_rung(
+    cell: str, fixtures, judge, *, judge_node=None
+) -> "JudgmentRung":
     """FR-4 grounding — build a :class:`JudgmentRung` whose ``precision`` is MEASURED over the ``cell``'s
     labeled fixtures (not a hand-passed float), with ``judge_verify_live`` derived from ``judge_node``'s own
     verify gate (FR-6 dogfood). The rung un-parks (via :func:`is_unparked`) iff that measured precision
-    clears :data:`PRECISION_THRESHOLD` AND the judge is verify-live — so un-parking is grounded in data."""
+    clears :data:`PRECISION_THRESHOLD` AND the judge is verify-live — so un-parking is grounded in data.
+    """
     cell_fx = [f for f in fixtures if f.cell == cell]
     precision = measure_precision(cell_fx, judge)
     live = bool(judge_node is not None and _gate_liveness(judge_node)[0] == "live")
@@ -865,8 +1121,13 @@ def measured_judgment_rung(cell: str, fixtures, judge, *, judge_node=None) -> "J
 
 
 def check_liveness_layer(
-    fr_nodes, outcome_nodes=(), doc: str = "", *,
-    repo_root=None, changed_provenance_keys=(), judgment_rungs=(),
+    fr_nodes,
+    outcome_nodes=(),
+    doc: str = "",
+    *,
+    repo_root=None,
+    changed_provenance_keys=(),
+    judgment_rungs=(),
 ) -> List[Finding]:
     """REQ-23 FR-5 + REQ-25 FR-7 — the single ``liveness`` govern layer: run every present-but-dead cell
     (REQ-22 verify-liveness + REQ-23 target-unmeasured/served-by-a-dead-FR + REQ-25 mitigation-inert/
@@ -877,7 +1138,9 @@ def check_liveness_layer(
     with the default (no security_mitigation / no-import wont / no changed provenance / no rungs) → the new
     cells add nothing (byte-identical, FR-8)."""
     layer: List[Finding] = [
-        Finding(f.check, f.severity, f.doc, f.message, f.fr, ref="liveness:verify-liveness")
+        Finding(
+            f.check, f.severity, f.doc, f.message, f.fr, ref="liveness:verify-liveness"
+        )
         for f in check_verify_liveness(fr_nodes, doc)
     ]
     layer += check_target_unmeasured(outcome_nodes, doc)
@@ -898,9 +1161,12 @@ def lessons_from_liveness_layer(findings, *, confidence=None) -> List["Any"]:
     precision judgment) are NOT routed — only facts become proposed revisions. Reuses REQ-22's
     ``build_lesson_from_liveness_gap`` (NR-2)."""
     from .sources_retrospective import build_lesson_from_liveness_gap
-    return [build_lesson_from_liveness_gap(f, confidence=confidence)
-            for f in findings
-            if f.severity == _SEVERITY_FAIL and str(f.ref).startswith("liveness:")]
+
+    return [
+        build_lesson_from_liveness_gap(f, confidence=confidence)
+        for f in findings
+        if f.severity == _SEVERITY_FAIL and str(f.ref).startswith("liveness:")
+    ]
 
 
 def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
@@ -912,13 +1178,17 @@ def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
     findings: List[Finding] = []
     for n in nodes:
         if getattr(n, "category", "") == LESSON_CATEGORY and not is_grounded(n):
-            findings.append(Finding(
-                "FR-2", _SEVERITY_FAIL, doc or n.key,
-                f"{doc or n.key}: Lesson {n.key!r} is ungrounded — it proposes a revision without a "
-                f"`derived-from` edge + `lives` citing its outcome. A belief is cruft until grounded; "
-                f"add its grounding or drop it.",
-                fr=n.key,
-            ))
+            findings.append(
+                Finding(
+                    "FR-2",
+                    _SEVERITY_FAIL,
+                    doc or n.key,
+                    f"{doc or n.key}: Lesson {n.key!r} is ungrounded — it proposes a revision without a "
+                    f"`derived-from` edge + `lives` citing its outcome. A belief is cruft until grounded; "
+                    f"add its grounding or drop it.",
+                    fr=n.key,
+                )
+            )
     return findings
 
 
@@ -944,17 +1214,40 @@ def check_realization_invariant(nodes, doc: str = "") -> List[Finding]:
             continue
         for e in getattr(n, "derivation", ()):
             if resolve_edge_regime(n, e) == RealizationRegime.LLM:
-                why = ("is empty" if not verify
-                       else "is present but DEAD (its gate does not resolve to a runnable command)")
-                findings.append(Finding(
-                    "FR-5", _SEVERITY_FAIL, doc or n.key,
-                    f"{doc or n.key}: node {n.key!r} is realized by an llm-regime edge "
-                    f"(from {e.from_key!r}) but its verify (acceptance oracle) {why} — invariant 9 "
-                    f"(REQ-22-strengthened) requires a stochastic edge's target to carry a LIVE verify.",
-                    fr=n.key,
-                ))
+                why = (
+                    "is empty"
+                    if not verify
+                    else "is present but DEAD (its gate does not resolve to a runnable command)"
+                )
+                findings.append(
+                    Finding(
+                        "FR-5",
+                        _SEVERITY_FAIL,
+                        doc or n.key,
+                        f"{doc or n.key}: node {n.key!r} is realized by an llm-regime edge "
+                        f"(from {e.from_key!r}) but its verify (acceptance oracle) {why} — invariant 9 "
+                        f"(REQ-22-strengthened) requires a stochastic edge's target to carry a LIVE verify.",
+                        fr=n.key,
+                    )
+                )
                 break  # one finding per node
     return findings
+
+
+def _is_generated_projection(path: Path) -> bool:
+    """True iff *path* is a det-doc-kit `$0` GENERATED projection (not an authored REQ).
+
+    Fast-path on the ``.projected.md`` suffix; otherwise the machine marker ``<!-- GENERATED det-`` in
+    the head (a det-plan/det-handoff/det-howto render carries it). A generated projection is exempt from
+    the authoring-convention checks its source REQ owns.
+    """
+    if path.name.endswith(".projected.md"):
+        return True
+    try:
+        head = path.read_text(encoding="utf-8")[:400]
+    except (OSError, UnicodeDecodeError):
+        return False
+    return "<!-- GENERATED det-" in head
 
 
 def govern_corpus(spec_dir: Path, *, realization_provenance=None) -> GovernReport:
@@ -968,7 +1261,13 @@ def govern_corpus(spec_dir: Path, *, realization_provenance=None) -> GovernRepor
     measured signal to compare against), so the default battery is unchanged.
     """
     spec_dir = Path(spec_dir)
-    docs = sorted(spec_dir.glob("REQ-*.md"))
+    # Govern audits AUTHORED requirement docs. A det-doc-kit `$0` GENERATED projection (a det-plan /
+    # det-handoff / det-howto output, e.g. `REQ-01-…​.projected.md`) matches the `REQ-*.md` glob but is
+    # not an authored REQ — it carries the machine marker `<!-- GENERATED det-` and is exempt (a
+    # generated projection can't be held to the authoring conventions its source REQ owns).
+    docs = sorted(
+        p for p in spec_dir.glob("REQ-*.md") if not _is_generated_projection(p)
+    )
     corpus_keys = set()
     for p in docs:
         m = re.match(r"(REQ-0[1-9])", p.stem)
@@ -983,8 +1282,11 @@ def govern_corpus(spec_dir: Path, *, realization_provenance=None) -> GovernRepor
             text = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             # one unreadable doc degrades to a single advisory, never aborts the sweep
-            report.findings.append(Finding(
-                "FR-1", _SEVERITY_ADVISORY, p.name, f"{p.name}: unreadable ({exc})."))
+            report.findings.append(
+                Finding(
+                    "FR-1", _SEVERITY_ADVISORY, p.name, f"{p.name}: unreadable ({exc})."
+                )
+            )
             continue
         report.findings.extend(_check_name_block(p, text))
         report.findings.extend(_check_single_line_fr(p, text))
@@ -1006,13 +1308,22 @@ def govern_corpus(spec_dir: Path, *, realization_provenance=None) -> GovernRepor
             # on the current corpus (FR-8) while making the cells reachable from `navigator govern` (no
             # seam-fuel). The verify-liveness / target-unmeasured / served-by-dead cells stay OUT of the
             # default sweep (a REQ-22/23-scope wiring — the corpus isn't authored with Signals/gates yet).
-            report.findings.extend(check_mitigation_inert(_req_nodes, repo_root, p.name))
-            report.findings.extend(check_non_goal_violated(_req_nodes, repo_root, p.name))
+            report.findings.extend(
+                check_mitigation_inert(_req_nodes, repo_root, p.name)
+            )
+            report.findings.extend(
+                check_non_goal_violated(_req_nodes, repo_root, p.name)
+            )
             # REQ-19 FR-6: planned-vs-realized regression, only when a measured provenance source is given.
             if realization_provenance is not None:
                 report.findings.extend(
-                    check_determinism_regression(_req_nodes, realization_provenance, p.name))
-        except Exception:  # pragma: no cover - projection is itself defensive; never abort the sweep
+                    check_determinism_regression(
+                        _req_nodes, realization_provenance, p.name
+                    )
+                )
+        except (
+            Exception
+        ):  # pragma: no cover - projection is itself defensive; never abort the sweep
             pass
 
     report.findings.extend(_check_orphans(spec_dir, docs))
@@ -1033,12 +1344,15 @@ def _repo_root(spec_dir: Path) -> Path:
 # renderers (text + json) -- no CSS/HTML (NR-7)
 # --------------------------------------------------------------------------- #
 
+
 def render_govern_text(report: GovernReport) -> str:
     """Human-readable governance report: per-check verdict + per-finding doc/fr/ref/fix."""
     L: List[str] = []
     banner = "CLEAN" if report.clean else "DRIFT"
-    L.append(f"=== corpus governance -- {banner} "
-             f"({len(report.docs)} docs, govern_score {report.govern_score()}) ===")
+    L.append(
+        f"=== corpus governance -- {banner} "
+        f"({len(report.docs)} docs, govern_score {report.govern_score()}) ==="
+    )
     L.append(f"corpus: {report.corpus}")
     L.append("")
     summary = report.checks_summary()
@@ -1053,8 +1367,9 @@ def render_govern_text(report: GovernReport) -> str:
         ok = counts["fail"] == 0
         glyph = "PASS" if ok else "FAIL"
         adv = f", {counts['advisory']} advisory" if counts["advisory"] else ""
-        L.append(f"  [{glyph}] {fr:5} {labels.get(fr, ''):22} "
-                 f"{counts['fail']} fail{adv}")
+        L.append(
+            f"  [{glyph}] {fr:5} {labels.get(fr, ''):22} " f"{counts['fail']} fail{adv}"
+        )
     L.append("")
     if report.fail_findings:
         L.append(f"FAIL ({len(report.fail_findings)}):")
@@ -1067,17 +1382,23 @@ def render_govern_text(report: GovernReport) -> str:
     if report.clean and not report.advisory_findings:
         L.append("no findings -- the corpus obeys its discipline.")
     L.append("")
-    L.append(f"-> exit {report.exit_code} "
-             + ("(clean)" if report.exit_code == 0 else "(drift -- see FAIL above)"))
+    L.append(
+        f"-> exit {report.exit_code} "
+        + ("(clean)" if report.exit_code == 0 else "(drift -- see FAIL above)")
+    )
     return "\n".join(L)
 
 
 def render_govern_json(report: GovernReport) -> str:
     """Machine-readable governance report (stable key order, ascii-safe)."""
-    return json.dumps(report.to_dict(), indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    return (
+        json.dumps(report.to_dict(), indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    )
 
 
-def recurring_finding_classes(report: GovernReport, *, threshold: int = 2) -> Dict[str, int]:
+def recurring_finding_classes(
+    report: GovernReport, *, threshold: int = 2
+) -> Dict[str, int]:
     """FR-7 -- finding-classes recurring across >=``threshold`` docs, routable to ``/metabolize-finding``.
 
     A check firing on many docs is a class to metabolize into a structural guard, not to re-file
@@ -1086,4 +1407,8 @@ def recurring_finding_classes(report: GovernReport, *, threshold: int = 2) -> Di
     per_check_docs: Dict[str, set] = {}
     for f in report.fail_findings:
         per_check_docs.setdefault(f.check, set()).add(f.doc)
-    return {check: len(docs) for check, docs in per_check_docs.items() if len(docs) >= threshold}
+    return {
+        check: len(docs)
+        for check, docs in per_check_docs.items()
+        if len(docs) >= threshold
+    }
