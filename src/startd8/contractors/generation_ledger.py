@@ -348,6 +348,79 @@ def build_run_row(
     }
 
 
+def find_project_root(start: str) -> Optional[Path]:
+    """Walk up from *start* to the nearest ancestor holding ``.startd8/generation-manifest.json`` (I6).
+
+    Lets the postmortem hook resolve the project root robustly from a run/ledger path without fragile
+    parent-counting. Returns ``None`` when no generated project is found on the way up.
+    """
+    p = Path(start).resolve()
+    for cand in [p, *p.parents]:
+        if (cand / ".startd8" / "generation-manifest.json").is_file():
+            return cand
+    return None
+
+
+@dataclasses.dataclass
+class LedgerFinding:
+    """One advisory finding from the liveness oracle (FR-6)."""
+
+    project_id: str
+    run_id: str
+    kind: str  # "PHANTOM" (a cited artifact path is gone) | "DRIFT" (recorded cost != source)
+    detail: str
+
+
+def verify_project(ledger: ProjectGenerationLedger) -> List[LedgerFinding]:
+    """Re-check a project's recorded runs against reality (FR-6, advisory, never mutating).
+
+    PHANTOM: a non-null ``artifacts{}`` path no longer resolves on disk.
+    DRIFT: the recorded ``cost_usd`` no longer matches the run's ``generation-manifest.json``.
+    """
+    findings: List[LedgerFinding] = []
+    for batch in ledger.batches:
+        for run in batch.get("runs", []):
+            rid = run.get("run_id", "")
+            artifacts = run.get("artifacts", {}) or {}
+            for role, path in artifacts.items():
+                if path is None:
+                    continue
+                if not Path(path).exists():
+                    findings.append(
+                        LedgerFinding(
+                            ledger.project_id, rid, "PHANTOM", f"{role}: {path}"
+                        )
+                    )
+            gm = artifacts.get("generation_manifest")
+            if gm and Path(gm).is_file():
+                try:
+                    manifest = json.loads(Path(gm).read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                recorded = run.get("cost_usd")
+                source = manifest.get("total_cost_usd")
+                if recorded != source:
+                    findings.append(
+                        LedgerFinding(
+                            ledger.project_id,
+                            rid,
+                            "DRIFT",
+                            f"cost_usd recorded={recorded} != manifest={source}",
+                        )
+                    )
+    return findings
+
+
+def verify_all(home: Optional[str] = None) -> List[LedgerFinding]:
+    """Verify every project in the cross-project index (FR-6)."""
+    findings: List[LedgerFinding] = []
+    for row in load_index(home).projects:
+        findings.extend(
+            verify_project(load_project_ledger(row.get("project_id", ""), home=home))
+        )
+    return findings
+
+
 def record_run(
     project_root: str, *, home: Optional[str] = None
 ) -> ProjectGenerationLedger:

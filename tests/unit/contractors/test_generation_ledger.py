@@ -199,3 +199,86 @@ def test_fr1_identity_prefers_project_context_yaml(tmp_path):
     )
     pid, _ = resolve_project_identity(str(root))
     assert pid == "canonical-id"
+
+
+# ── I6 (FR-5 helper): find_project_root walks up to the generated project ──────────────────────────
+
+
+def test_find_project_root_walks_up(tmp_path):
+    root = _install_portal_v2(tmp_path)  # has .startd8/generation-manifest.json
+    deep = root / ".cap-dev-pipe" / "pipeline-output" / "portal-v2-preview"
+    deep.mkdir(parents=True)
+    assert gl.find_project_root(str(deep)) == root.resolve()
+    assert gl.find_project_root(str(tmp_path / "nowhere")) is None
+
+
+# ── I4 (FR-6): the liveness oracle — PHANTOM / DRIFT / clean ────────────────────────────────────────
+
+
+def _complete_artifacts(root: Path, run_id: str) -> None:
+    """Materialize every conventional artifact the run row cites, so verify is clean."""
+    for rel in [
+        ".startd8/prime-postmortem-report.json",
+        ".startd8/prime-postmortem-summary.md",
+        ".startd8/kaizen-metrics.json",
+        ".startd8/forward-manifest.json",
+        f".cap-dev-pipe/pipeline-output/{run_id}/run-provenance.json",
+        f".cap-dev-pipe/pipeline-output/{run_id}/{run_id}-artifact-manifest.yaml",
+        f".cap-dev-pipe/pipeline-output/{run_id}/project-context.yaml",
+    ]:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{}", encoding="utf-8")
+
+
+def test_fr6_pristine_project_verifies_clean(tmp_path):
+    root = _install_portal_v2(tmp_path)
+    _complete_artifacts(root, "portal-v2-preview")
+    home = str(tmp_path / "home")
+    ledger = gl.record_run(str(root), home=home)
+    assert gl.verify_project(ledger) == []
+
+
+def test_fr6_missing_artifact_is_phantom(tmp_path):
+    root = _install_portal_v2(tmp_path)
+    _complete_artifacts(root, "portal-v2-preview")
+    home = str(tmp_path / "home")
+    gl.record_run(str(root), home=home)
+    (root / ".startd8" / "kaizen-metrics.json").unlink()  # remove a cited artifact
+    findings = gl.verify_project(gl.load_project_ledger("portal-v2", home=home))
+    assert any(f.kind == "PHANTOM" and "kaizen_metrics" in f.detail for f in findings)
+
+
+def test_fr6_edited_cost_is_drift(tmp_path):
+    root = _install_portal_v2(tmp_path)
+    _complete_artifacts(root, "portal-v2-preview")
+    home = str(tmp_path / "home")
+    gl.record_run(str(root), home=home)
+    # tamper the recorded cost in the persisted ledger → drift vs the manifest
+    pfile = gl.project_ledger_path("portal-v2", home)
+    data = json.loads(pfile.read_text())
+    data["batches"][0]["runs"][0]["cost_usd"] = 999.99
+    pfile.write_text(json.dumps(data), encoding="utf-8")
+    findings = gl.verify_project(gl.load_project_ledger("portal-v2", home=home))
+    assert any(f.kind == "DRIFT" for f in findings)
+
+
+def test_fr6_verify_all_spans_projects(tmp_path):
+    home = str(tmp_path / "home")
+    r1 = _install_portal_v2(tmp_path)
+    _complete_artifacts(r1, "portal-v2-preview")
+    gl.record_run(str(r1), home=home)
+    gl.record_run(
+        str(
+            _mini_project(
+                tmp_path / "other-app",
+                cost=0.5,
+                run_id="other-run",
+                batch_id="batch-oth123",
+            )
+        ),
+        home=home,
+    )
+    # other-app cites artifacts that don't exist → verify_all surfaces its phantoms
+    findings = gl.verify_all(home)
+    assert any(f.project_id == "other-app" for f in findings)

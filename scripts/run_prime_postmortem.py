@@ -179,6 +179,14 @@ def main():
             "from run-metadata.json / env vars / directory names (F-AC-05)."
         ),
     )
+    parser.add_argument(
+        "--no-generation-ledger",
+        action="store_true",
+        help=(
+            "Skip recording this run into the cross-project generation ledger "
+            "(~/.startd8/generation-ledger). Batch-only runs are unaffected either way (FR-5)."
+        ),
+    )
     args = parser.parse_args()
 
     # Discover or use explicit paths
@@ -193,7 +201,9 @@ def main():
         queue_state_path = args.queue_state
 
     if not result_path or not result_path.is_file():
-        print("ERROR: No result file found. Use --result or --run-dir.", file=sys.stderr)
+        print(
+            "ERROR: No result file found. Use --result or --run-dir.", file=sys.stderr
+        )
         sys.exit(1)
 
     # Load artifacts
@@ -255,6 +265,7 @@ def main():
                 output_dir=output_dir,
                 batch_ledger_dir=args.batch_ledger_dir,
                 run_id=run_id,
+                record_generation_ledger=not args.no_generation_ledger,
             )
         except Exception as exc:
             print(f"  Batch post-mortem failed (non-fatal): {exc}", file=sys.stderr)
@@ -294,6 +305,7 @@ def _run_batch_postmortem(
     output_dir: Path,
     batch_ledger_dir: Path | None,
     run_id: str | None = None,
+    record_generation_ledger: bool = True,
 ) -> None:
     """Run batch-aware cross-run post-mortem analysis."""
     # 1. Compute batch identity
@@ -335,6 +347,7 @@ def _run_batch_postmortem(
     # 6. Append current run (F-AC-05: use pre-resolved run_id)
     run_id = run_id or _resolve_run_id(output_dir)
     import datetime
+
     timestamp = datetime.datetime.now().isoformat()
 
     ledger = append_run_to_ledger(
@@ -343,6 +356,31 @@ def _run_batch_postmortem(
 
     # 7. Save ledger
     save_ledger(ledger, ledger_path)
+
+    # 7b. Record the run into the cross-project generation ledger (FR-5). Additive + opt-out; the
+    # project layer re-derives the run from its real artifacts and updates ~/.startd8/generation-ledger.
+    # Non-fatal: a project without a generation-manifest.json (or no resolvable root) is simply skipped.
+    if record_generation_ledger:
+        try:
+            from startd8.contractors.generation_ledger import (
+                find_project_root,
+                record_run,
+            )
+
+            root = find_project_root(ledger_path) or find_project_root(str(output_dir))
+            if root is not None:
+                led = record_run(str(root))
+                print(
+                    f"    Generation ledger: recorded {led.project_id} ({led.cumulative()['runs']} run(s))"
+                )
+            else:
+                print(
+                    "    Generation ledger: no generation-manifest.json found — skipped"
+                )
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the ledger is advisory; never break the postmortem
+            print(f"    Generation ledger: skipped (non-fatal): {exc}", file=sys.stderr)
 
     # 8. Evaluate batch post-mortem
     evaluator = BatchPostMortemEvaluator()
@@ -529,6 +567,7 @@ def _copy_query_security_standalone(output_dir: Path) -> None:
         if src.is_file() and src != dest:
             try:
                 import shutil
+
                 shutil.copy2(str(src), str(dest))
                 return
             except OSError:
@@ -539,7 +578,8 @@ def _copy_query_security_standalone(output_dir: Path) -> None:
 
 
 def _merge_query_security_from_project_root(
-    metrics: dict, output_dir: Path,
+    metrics: dict,
+    output_dir: Path,
 ) -> None:
     """REQ-QPA-100: Merge query_security from project-root kaizen-metrics.json.
 
@@ -625,7 +665,9 @@ def _copy_security_artifacts_to_pipeline_output(output_dir: Path) -> None:
     candidate = output_dir
     project_root = None
     for _ in range(10):
-        if (candidate / ".contextcore.yaml").exists() or (candidate / "pyproject.toml").exists():
+        if (candidate / ".contextcore.yaml").exists() or (
+            candidate / "pyproject.toml"
+        ).exists():
             project_root = candidate
             break
         candidate = candidate.parent
@@ -645,7 +687,9 @@ def _copy_security_artifacts_to_pipeline_output(output_dir: Path) -> None:
                 pass
 
 
-def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = None) -> None:
+def _emit_kaizen_metrics(
+    report: object, output_dir: Path, run_id: str | None = None
+) -> None:
     """Extract standardized Kaizen metrics from post-mortem report (REQ-KZ-300)."""
     run_id = run_id or _resolve_run_id(output_dir)
     kaizen_enabled = os.environ.get("KAIZEN_ENABLED", "false").lower() == "true"
@@ -679,9 +723,7 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
         "fail_count": getattr(report, "failed_features", 0) or 0,
         "total_features": total,
         "total_cost_usd": getattr(cost, "total_usd", 0.0) if cost else 0.0,
-        "cost_per_success_usd": (
-            cost.total_usd / max(passed, 1) if cost else 0.0
-        ),
+        "cost_per_success_usd": (cost.total_usd / max(passed, 1) if cost else 0.0),
         "verdict": getattr(report, "aggregate_verdict", ""),
         "aggregate_score": getattr(report, "aggregate_score", 0.0),
         "top_root_causes": _extract_top_root_causes(report),
@@ -727,7 +769,9 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
             features_with_errors.append(fpm.feature_id)
         if "semantic" in (getattr(fpm, "verdict", "") or ""):
             verdict_downgrades += 1
-        for issue in getattr(getattr(fpm, "disk_compliance", None), "semantic_issues", []) or []:
+        for issue in (
+            getattr(getattr(fpm, "disk_compliance", None), "semantic_issues", []) or []
+        ):
             if isinstance(issue, dict):
                 cat = issue.get("category", "unknown")
                 sev = issue.get("severity", "warning")
@@ -790,7 +834,9 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
 # ---------------------------------------------------------------------------
 
 
-def _emit_kaizen_suggestions(report: object, output_dir: Path, run_id: str | None = None) -> None:
+def _emit_kaizen_suggestions(
+    report: object, output_dir: Path, run_id: str | None = None
+) -> None:
     """Generate structured improvement suggestions from cross-feature patterns (REQ-KZ-501)."""
     suggestions = generate_kaizen_suggestions(report)
 
@@ -816,7 +862,9 @@ _MIN_KAIZEN_KEEP = 5
 _MAX_KAIZEN_KEEP = 200
 
 
-def _update_kaizen_index(output_dir: Path, keep: int = _DEFAULT_KAIZEN_KEEP, run_id: str | None = None) -> None:
+def _update_kaizen_index(
+    output_dir: Path, keep: int = _DEFAULT_KAIZEN_KEEP, run_id: str | None = None
+) -> None:
     """Append current run to kaizen-index.json and prune old entries.
 
     Args:
@@ -902,7 +950,9 @@ def _update_kaizen_index(output_dir: Path, keep: int = _DEFAULT_KAIZEN_KEEP, run
     tmp = Path(str(index_path) + ".tmp")
     tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
     tmp.replace(index_path)
-    print(f"  [kaizen] Index updated: {index_path} ({len(index['runs'])} runs, max {keep})")
+    print(
+        f"  [kaizen] Index updated: {index_path} ({len(index['runs'])} runs, max {keep})"
+    )
 
 
 if __name__ == "__main__":
