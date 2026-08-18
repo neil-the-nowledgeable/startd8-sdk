@@ -1,6 +1,6 @@
 # Forensic — Prime's default path is degraded (Micro Prime + complexity routing OFF)
 
-**Date:** 2026-08-18 · **Type:** forensic findings + conscious-decision record · **Status:** findings landed; the restoration is a DEFERRED design decision (owner: user)
+**Date:** 2026-08-18 · **Type:** forensic findings + conscious-decision record · **Status:** ✅ RESOLVED — the two-step decouple landed (Step 1 `e3eff6c1` · Step 2 `abacf207`). A normal run is now full-quality by default; `--benchmark-mode` forces micro-prime + routing off via its own config. Verified end-to-end (dry-run: normal=on, benchmark=off).
 **Scope:** why a normal `run_prime_workflow.py` run (no flags) generates more expensively / more coarsely than it could, and whether the Summer-2026 benchmark caused it.
 
 > **One-line verdict:** The user's intuition is correct — a normal Prime run *is* degraded by default — but the **cause is not the benchmark**. The benchmark's desired posture (Micro Prime off, complexity routing off) is the **global default**, and normal runs silently inherit it. The two are the *same knob*; that coupling is the real defect.
@@ -49,7 +49,17 @@ The benchmark then *coupled* to this default (via the mutual-exclusion). Refacto
 
 ---
 
-## 5. Recommended conscious restoration (two-step decouple — NOT yet executed)
+## 5. The two-step decouple — ✅ DONE
+
+> **Landed 2026-08-18** — Step 1 `e3eff6c1`, Step 2 `abacf207`. A key discovery from the Haiku pilot
+> refined the safety case: **Micro Prime is INERT without a forward-manifest** (it needs a per-file
+> `ForwardFileSpec` skeleton to generate elements locally; with none, it 100% bypasses to the cloud
+> fallback — `prime_adapter.py` FR-DFA-001). So default-on is *safe* — manifest-less runs are unchanged;
+> manifest-bearing runs (the cap-dev-pipe pipeline) get the $0-simple-features economics the portal-v2
+> ledger measured (11/16 features on Ollama at $0). The element-path bug surface `d2bee926` feared only
+> materializes in manifest-bearing runs — a bounded, testable surface. **All 4 default sites live in
+> `prime_contractor_config.py`; `prime_contractor.py` was NOT touched** (instance defaults at :720/724 are
+> pre-enable baselines the `pc_config` path overrides).
 
 To get the intended shape — benchmark disables via *its own* config, normal runs full-quality by default, zero coupling:
 
