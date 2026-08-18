@@ -262,3 +262,25 @@ def trends(
             "a rising local ratio + falling cost is the decouple's Micro Prime win"
         )
     raise typer.Exit(_EXIT_OK)
+
+
+@prime_ledger_app.command("metrics")
+def metrics(
+    out: str = typer.Option(
+        "generation-ledger.prom",
+        "--out",
+        help="Output .prom path for a Prometheus textfile collector (Grafana datasource path).",
+    ),
+    home: Optional[str] = typer.Option(
+        None, "--home", help="Override the ledger home."
+    ),
+) -> None:
+    """Export the portfolio as Prometheus textfile metrics (the $0 datasource path for the dashboard)."""
+    from . import generation_ledger_metrics as glm
+
+    result = glm.write_ledger_metrics(out, home=home)
+    console.print(
+        f"[green]wrote[/green] {result['series']} metric series → {result['path']} "
+        "(point a Prometheus textfile collector here)"
+    )
+    raise typer.Exit(_EXIT_OK)

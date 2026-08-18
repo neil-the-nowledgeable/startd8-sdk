@@ -1,0 +1,97 @@
+# Prime generation-ledger portfolio dashboard (dbrd-cr8r direct-JSON path — raw PromQL, no mixin).
+# Datasource path: `startd8 prime-ledger metrics --out <dir>/generation-ledger.prom` writes the
+# gen_ledger_* textfile; point a Prometheus textfile collector at it, then provision this dashboard.
+# Generate:  python3 ~/.claude/skills/dbrd-cr8r/scripts/direct_json_generator.py <this-file> -o <dir>
+title: "Prime Generation Ledger — Portfolio"
+uid: cc-primeledger-portfolio
+description: "Every project the Prime Contractor has worked on: cost, runs, and the $0-local (Micro Prime) cost-efficiency signal."
+tags: [startd8, prime, generation-ledger, portfolio]
+
+panels:
+  - type: stat
+    title: "Portfolio LLM Cost"
+    expr: "gen_ledger_portfolio_cost_usd"
+    gridPos: {h: 5, w: 6, x: 0, y: 0}
+    unit: currencyUSD
+    thresholds:
+      - {value: 0, color: blue}
+    options:
+      colorMode: value
+      graphMode: area
+      reduceOptions: {calcs: [lastNotNull]}
+
+  - type: stat
+    title: "Projects Prime Has Built"
+    expr: "gen_ledger_portfolio_projects"
+    gridPos: {h: 5, w: 6, x: 6, y: 0}
+    unit: short
+    thresholds:
+      - {value: 0, color: green}
+    options:
+      colorMode: value
+      reduceOptions: {calcs: [lastNotNull]}
+
+  - type: barchart
+    title: "Cost by Project"
+    targets:
+      - expr: "sort_desc(gen_ledger_project_cost_usd)"
+        format: table
+        instant: true
+        legendFormat: "{{project}}"
+        refId: A
+    gridPos: {h: 10, w: 12, x: 0, y: 5}
+    unit: currencyUSD
+    options:
+      orientation: horizontal
+      showValue: auto
+      legend: {showLegend: false}
+    transformations:
+      - id: sortBy
+        options: {sort: [{field: Value, desc: true}]}
+
+  - type: barGauge
+    title: "Micro Prime $0-Local Ratio by Run (higher = cheaper)"
+    targets:
+      - expr: "gen_ledger_run_local_ratio"
+        format: table
+        instant: true
+        legendFormat: "{{project}} / {{run}}"
+        refId: A
+    gridPos: {h: 10, w: 12, x: 12, y: 5}
+    unit: percentunit
+    fieldConfig:
+      defaults:
+        min: 0
+        max: 1
+    thresholds:
+      - {value: 0, color: red}
+      - {value: 0.5, color: yellow}
+      - {value: 0.8, color: green}
+    options:
+      orientation: horizontal
+      displayMode: gradient
+      reduceOptions: {calcs: [lastNotNull]}
+
+  - type: barchart
+    title: "Features Passed by Project"
+    targets:
+      - expr: "sort_desc(gen_ledger_project_features_passed)"
+        format: table
+        instant: true
+        legendFormat: "{{project}}"
+        refId: A
+    gridPos: {h: 8, w: 12, x: 0, y: 15}
+    unit: short
+    options:
+      orientation: horizontal
+      showValue: auto
+      legend: {showLegend: false}
+
+  - type: timeseries
+    title: "Portfolio Cost Over Time"
+    targets:
+      - expr: "gen_ledger_portfolio_cost_usd"
+        legendFormat: "portfolio cost"
+        refId: A
+    gridPos: {h: 8, w: 12, x: 12, y: 15}
+    unit: currencyUSD
