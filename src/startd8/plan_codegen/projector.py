@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..contractors.queue import FeatureQueue
 from ..navigator.det_req import parse_fr_lines
+from ..navigator import req_header as H
 from ..navigator.naming import name_forms
 from ..navigator.realization import RealizationRegime
 from .models import (
@@ -95,15 +96,9 @@ _DEPENDS_SPAN = re.compile(
 _FR_ID = re.compile(r"FR-[\w-]+")
 _FR_LINE = re.compile(r"^- \*\*(FR-[\w-]+)\s*[—-]")
 
-# Header fields (the DIDL block + the Pairs-with companion declaration).
-_SEMANTIC_NAME = re.compile(
-    r"^>\s*\*\*Semantic name:\*\*\s*\*?(?P<n>.+?)\*?\s*$", re.MULTILINE
-)
-_CANONICAL_REF = re.compile(
-    r"^>\s*\*\*Canonical ref:\*\*\s*`?(?P<r>[^`\n]+?)`?\s*$", re.MULTILINE
-)
-_PAIRS_WITH = re.compile(r"^\*\*Pairs with:\*\*\s*(?P<p>.+?)\s*$", re.MULTILINE)
-_TITLE = re.compile(r"^#\s+(?P<t>.+?)\s*$", re.MULTILINE)
+# Header fields: the shared DIDL/Pairs-with parsing lives in ``navigator.req_header`` (H) — extracted
+# when the second projector (handoff_codegen) needed the same helpers. Only the PLAN-specific token
+# stays local.
 _PLAN_REF = re.compile(r"PLAN-[\w./-]+")
 
 
@@ -112,14 +107,9 @@ _PLAN_REF = re.compile(r"PLAN-[\w./-]+")
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-def _first(pattern: re.Pattern, text: str, group: str) -> str:
-    m = pattern.search(text)
-    return m.group(group).strip() if m else ""
-
-
 def pairs_with_line(req_text: str) -> str:
     """The req's ``**Pairs with:**`` declaration (empty when absent)."""
-    return _first(_PAIRS_WITH, req_text, "p")
+    return H.pairs_with_line(req_text)
 
 
 def is_plan_owed(req_text: str) -> bool:
@@ -141,7 +131,7 @@ def is_plan_owed(req_text: str) -> bool:
 
 def _req_key(req_text: str, req_path: Optional[Path]) -> str:
     """The canonical key for the plan's DIDL ref — the req's ``…:req-NN`` tail, else its filename."""
-    ref = _first(_CANONICAL_REF, req_text, "r")
+    ref = H.canonical_ref(req_text)
     if ref:
         return ref.rsplit(":", 1)[-1].strip()
     if req_path is not None:
@@ -407,11 +397,7 @@ def project_plan(
     # Reuse/phantom audit (§4): each authored Touches/Lives ref + whether it resolves on disk.
     reuse_refs = _reuse_audit(frs, req_path)
 
-    name = (
-        _first(_SEMANTIC_NAME, req_text, "n")
-        or _first(_TITLE, req_text, "t")
-        or "projected plan"
-    )
+    name = H.semantic_name(req_text) or H.title(req_text) or "projected plan"
     key = _req_key(req_text, req_path)
     forms = name_forms(name, key, initiative="requirements-visualization", kind="plan")
 
@@ -442,7 +428,7 @@ def _reuse_audit(
     repo root inferred from the req path; when no root is available every ref is reported unresolved
     (honest — we cannot claim presence we cannot check).
     """
-    root = _repo_root(req_path)
+    root = H.repo_root(req_path)
     seen: List[str] = []
     out: List[Tuple[str, bool]] = []
     refs: List[str] = []
@@ -459,13 +445,3 @@ def _reuse_audit(
         resolved = bool(root) and (root / ref).exists()
         out.append((ref, resolved))
     return tuple(out)
-
-
-def _repo_root(req_path: Optional[Path]) -> Optional[Path]:
-    """Infer the repo root from the req path (walk up to a dir containing ``src/startd8``)."""
-    if req_path is None:
-        return None
-    for parent in [req_path.resolve()] + list(req_path.resolve().parents):
-        if (parent / "src" / "startd8").is_dir():
-            return parent
-    return None

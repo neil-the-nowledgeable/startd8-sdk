@@ -1002,6 +1002,128 @@ def _emit_or_check_artifacts(
     raise typer.Exit(0)
 
 
+@generate_app.command("handoff")
+def handoff(
+    requirements: Path = typer.Option(
+        ..., "--requirements", "-r", help="Path to the det-req doc to project a det-handoff/0.1 from."
+    ),
+    ledger: Optional[Path] = typer.Option(
+        None, "--ledger",
+        help="Path to the delivery ledger (e.g. SESSION_LEDGER). Drives the solo-vs-gap gate: a REQ "
+        "the ledger marks fully delivered with no open follow-ons owes no handoff.",
+    ),
+    base: Optional[str] = typer.Option(
+        None, "--base", help="The git base sha the handoff work starts from (→ the `base:` line)."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out",
+        help="Output path for the projected det-handoff/0.1 markdown. Absent → print to stdout.",
+    ),
+    check: bool = typer.Option(
+        False, "--check",
+        help="Drift-check an on-disk handoff against a fresh projection. Exit 0=in-sync, 1=drift, 2=error.",
+    ),
+    sarif: Optional[Path] = typer.Option(
+        None, "--sarif", help="Also write the conformance + liveness findings as SARIF 2.1.0 here."
+    ),
+) -> None:
+    """Project a det-req (+ optional ledger) into a det-handoff/0.1 — deterministic, $0 (no LLM).
+
+    The second det-doc-kit projector: the spine (spec, build order ← FRs, exit criteria ← Verify,
+    prerequisite audit, pointers, hand-back ← objectives) derives from the REQ + ledger; the Gotchas
+    and framing are human-residue placeholders. Fires only on a REQ that owes a handoff; a delivered
+    REQ with no open follow-ons projects nothing (reported skipped, exit 0). Stamped maturity 0.1.
+    """
+    from .handoff_codegen import (
+        NotHandoffOwedError,
+        findings_to_sarif,
+        project_handoff,
+        render_handoff,
+        validate_handoff,
+    )
+
+    try:
+        req_text = requirements.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read requirements {requirements}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+    ledger_text: Optional[str] = None
+    if ledger is not None:
+        try:
+            ledger_text = ledger.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read ledger {ledger}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        det_handoff = project_handoff(
+            req_text, req_path=requirements, ledger_text=ledger_text, base_sha=base
+        )
+    except NotHandoffOwedError as exc:
+        console.print(f"[yellow]skipped[/yellow]: {requirements.name} owes no handoff — {exc}")
+        raise typer.Exit(0)
+    except ValueError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    rendered = render_handoff(det_handoff)
+    fr_ids = {s.fr for s in det_handoff.build_order}
+    findings = validate_handoff(
+        det_handoff, req_fr_ids=fr_ids, base_dir=requirements.resolve().parent
+    )
+
+    if sarif is not None:
+        try:
+            sarif.parent.mkdir(parents=True, exist_ok=True)
+            sarif.write_text(
+                json.dumps(findings_to_sarif(findings, corpus=requirements.name), indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write sarif {sarif}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        console.print(f"[green]wrote[/green] SARIF ({len(findings)} finding(s)) → {sarif}")
+
+    errors = [f for f in findings if f.severity == "error"]
+    for f in findings:
+        color = "red" if f.severity == "error" else "yellow"
+        console.print(f"[{color}]{f.severity}[/{color}] ({f.check}): {f.message}")
+
+    if check:
+        try:
+            ondisk = out.read_text(encoding="utf-8") if (out and out.exists()) else None
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read {out}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        if ondisk is None:
+            console.print(f"[yellow]drift[/yellow]: no handoff on disk at {out}")
+            raise typer.Exit(1)
+        if ondisk != rendered:
+            console.print(f"[yellow]drift[/yellow]: {out} differs from a fresh projection")
+            raise typer.Exit(1)
+        console.print(f"[green]in_sync[/green]: {out} matches the projection")
+        raise typer.Exit(2 if errors else 0)
+
+    if errors:
+        console.print(f"[red]{len(errors)} conformance error(s)[/red] — not writing a nonconformant handoff")
+        raise typer.Exit(1)
+
+    if out is None:
+        console.print(rendered)
+        raise typer.Exit(0)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot write {out}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+    console.print(
+        f"[green]wrote[/green] {out}  ({len(det_handoff.build_order)} build step(s), maturity "
+        f"{det_handoff.maturity})"
+    )
+    raise typer.Exit(0)
+
+
 @generate_app.command("plan")
 def plan(
     requirements: Path = typer.Option(
