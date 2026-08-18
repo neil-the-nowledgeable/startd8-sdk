@@ -8,12 +8,19 @@
 
 ## 0. Where the effort stands — one paragraph
 
-The NLPS document layer is formalized end-to-end on paper: a `$0`-derivation cascade from a human-gated
-requirement to code, bracketed by two human bookends, findings-grounded in both the **map** (SARIF) and the
-**territory** (feature/AI o11y). The **Node-IR arc** (REQ-16→24) is *built*; the **liveness column** and the
-**det-doc-kit family** are *spec'd*; the **research→spec pipeline** resolved most open questions into REQs, leaving
-a small themed research backlog. What remains is **building** (out of the emeritus lane) and a few **cross-repo
-coordinations** (owners' calls).
+> **Reconciled 2026-08-18 — the det-doc-kit family is no longer "spec'd", it's BUILT.** This session shipped
+> **three working `$0` projectors** (det-plan `plan_codegen`, det-handoff `handoff_codegen`, det-howto
+> `howto_codegen` — built independently from the STANDARD), the **det-crp format+lint kit** (`crp_lint`), the
+> extracted+**independently-replicated** `STANDARD_det-doc-kit-projector-pattern.md`, and `scripts/verify_ledger.py`.
+> §1/§2/§6/§7 below are updated; the old "build REQ-29 first" is DONE. Verify the greens with `verify_ledger.py`.
+
+The NLPS document layer is formalized end-to-end on paper AND the family's SDK-side realization is built: a
+`$0`-derivation cascade from a human-gated requirement to code, bracketed by two human bookends, findings-grounded
+in both the **map** (SARIF) and the **territory** (feature/AI o11y). The **Node-IR arc** (REQ-16→24) is *built*;
+the **det-doc-kit family** (3 projectors + crp lint + a proven standard) is *built SDK-side*; the **liveness column**
+is *spec'd/partly-built*; the **research→spec pipeline** resolved most open questions into REQs. What remains is the
+**cross-repo kit-dir adoption** (dev-os), the **grammar-field batch** (REQ-30/31/32 + `Depends:` G-1), and the
+**card-browse UX arc** (Move 3 shipped; search + Move 2 next).
 
 ## 1. Full-arc state table
 
@@ -28,25 +35,29 @@ coordinations** (owners' calls).
 | **REQ-26** | a11y as a cross-topology lens (the FF-1 analogue) | 📄 spec · build-ready | build |
 | **REQ-27** | self-dogfood `verify.gate` on our own corpus | 📄 spec · build-ready | build |
 | **REQ-28** | runtime o11y grounding (feature + AI o11y → SARIF/seam) | 📄 spec · build-ready | build |
-| **REQ-29** | the `$0` REQ→PLAN projector (det-plan-kit's generator) | 📄 spec · **has build handoff** | **build first** (§2.1) |
+| **REQ-29** | the `$0` REQ→PLAN projector (det-plan-kit's generator) | ✅ **built + HTH-hardened** (`35e75c89`; `plan_codegen`) | — (extracted the STANDARD below) |
+| **det-handoff projector** | the `$0` REQ+ledger→HANDOFF projector (2nd projector) | ✅ **built** (`5ba7eb48`; `handoff_codegen`) — adoption gate PASSED | — |
+| **det-howto projector** | the `$0` REQ→HOWTO command-reference (3rd projector) | ✅ **built INDEPENDENTLY** (`2baf4de0`; `howto_codegen`) — replication gate PASSED | — |
+| **STANDARD** det-doc projector pattern | the 5-part shape + Part-6 + §0 + golden-diff method | ✅ **extracted + INDEPENDENTLY REPLICATED** | governs projectors 4+ (det-ledger) |
+| **verify_ledger.py** | mechanized done-census (UNLANDED/PHANTOM) | ✅ **built** (`72fdd740`) | wire into CI (optional) |
 | **REQ-32** | the draft-time firing wire (the convergence unlock — 2 wires + REQ-01 FR-4 + LOOP_CATALOG #8) | 📄 **spec** · build-ready | build (cross-repo: dev-os + CRP generator) — **prereq for the theme lints** |
-| **REQ-30/31** | schema `Emits:` · lifecycle `Lifecycle:` FR-field grammar (themes #3/#6) | ⬜ named, not yet specced | spec after REQ-32 (they fire through it) |
+| **REQ-30/31** | schema `Emits:` · lifecycle `Lifecycle:` FR-field grammar (themes #3/#6) | 📄 **specced** (`REQ-30-schema-emits-field.md` · `REQ-31-lifecycle-field.md`) | build after REQ-32's firing seam (cross-repo det-req-kit) |
 | **ambiguity / atomic-write / security fact-rungs** | the top-3 ship-ready theme lints | ⬜ backlog (SYNTHESIS §3) | author each as one predicate once REQ-32's seam exists |
 | **CHARTER** det-doc-kit family | 7 invariants + audit-hardened §5 | ✅ directed | governs every kit build |
-| **SCHEMA** det-plan/0.1 | the plan format | 📄 spec | adopt into `dev-os/det-plan-kit/SCHEMA.md` |
+| **SCHEMA** det-plan/0.1 · det-handoff/0.1 · det-howto/0.1 · det-crp/0.1 | the four formats | ✅ **authored + hardened** (SDK design corpus) | adopt into `dev-os/det-*-kit/` dirs (cross-repo) |
 | **realization-facet REQ** | fill the reserved `regime` slot + determinism-% rollup | ⬜ **not yet specced** | spec it (folds OQ-1/OQ-4) |
-| **det-crp-kit** | thin: version focus + review-log schemas + `crp_lint.py` | ◐ assessed · ⬜ not specced | spec it |
+| **det-crp-kit** | thin: focus + review-log schemas + `crp_lint.py` | ✅ **format + lint BUILT** (`SCHEMA_det-crp-0.1` · `crp_lint`, `639dea4b`; dogfooded clean over 26 docs) | adopt the kit dir into dev-os |
 | **det-req-kit cleanup** | relocate 8 process docs; one shared SARIF renderer | ✅ flagged (`dev-os` commit `5431229`) | det-req-kit owner |
 
 ## 2. Build backlog — detailed, dependency-ordered
 
-### 2.1 REQ-29 — the det-plan projector (BUILD FIRST) 🥇
-- **Why first:** all deps built (`det_req`/`queue`/`realization`/`findings_sarif`); the format (`SCHEMA_det-plan-0.1`)
-  is authored; the demand is grounded (26 companionless REQs); it's the det-doc-kit family's first realized member.
-- **Runbook:** `HANDOFF_build-REQ-29-projector-and-pilot.md` — 8 FRs, the **five-pilot golden-first matrix**
-  (REQ-08 + REQ-01 golden-parity · REQ-03 negative-gate · REQ-16/17 demand), the golden-diff fold-back method.
-- **Guards:** `$0`/never-inferred · charter §5 essentials-only (import `findings_sarif`, no `new.py`/vendor/process-docs).
-- **Deliverable:** the projector + the pilot report (the two golden deltas + dispositions) = the reflective-adoption fold-back into `det-plan/0.1`.
+### 2.1 REQ-29 — the det-plan projector ✅ DONE (and the whole projector family with it)
+- **BUILT + HTH-hardened** (`35e75c89` → `72fdd740`): `plan_codegen` + the five-pilot golden-first run + the
+  `/reflective-adoption` fold-back into `det-plan/0.1` (G-1/G-2/G-3). Then the arc continued *past* REQ-29:
+  the **STANDARD** was extracted (retrospective), **det-handoff** adopted it (gate passed), **det-howto** was built
+  **independently** from the standard alone (replication gate passed), and **det-crp** got its **format+lint**
+  (`crp_lint`). The one open det-doc tail: **cross-repo kit-dir adoption into dev-os** (§2.2) + the grammar-field
+  batch (below). Pilot/standard/report all in the SDK design corpus. **Nothing here is "next" — it's shipped.**
 
 ### 2.2 det-plan-kit dev-os dir (cross-repo, after 2.1)
 - Adopt `SCHEMA_det-plan-0.1` → `dev-os/det-plan-kit/SCHEMA.md` + `plan.schema.json` + `extract.py` (imports the one
@@ -64,9 +75,13 @@ coordinations** (owners' calls).
   rollup**; enforce invariant 9. **Spec it folding OQ-1 (planned-vs-realized delta) + OQ-4 (rollup semantics)** from
   the research agenda. Deps built (REQ-18/19).
 
-### 2.6 det-crp-kit (needs a spec first — now census-grounded)
-- Thin: version the focus-file + Appendix-A/B/C review-log schemas out of the agent guide; add `crp_lint.py`; **cite**
-  `new-cnvrg-rvw-prmpt` as the `$0` compiler. Complements det-plan (the mirror-asymmetric cell).
+### 2.6 det-crp-kit ✅ format + lint BUILT (SDK-side)
+- **DONE** (`639dea4b`): `SCHEMA_det-crp-0.1` (focus + Appendix-A/B/C review-log schemas) + `crp_lint`
+  (`src/startd8/crp_lint/` + `scripts/crp_lint.py`), citing `new-cnvrg-rvw-prmpt` as the `$0` compiler (no
+  projector — thin format+lint). **Dogfooded clean over the 26-doc corpus.** Fold-back: id-uniqueness is
+  authoring-time not lint-time (references ≠ duplicates); header checks conditional-on-presence. Remaining:
+  adopt the kit dir into `dev-os/det-crp-kit/` (cross-repo) + work the 213 weak-Appendix review-logs the
+  `dev-os/CRP-INDEX.md` census flagged (the lint's real backlog).
 - **Grounded in `dev-os/CRP-INDEX.md`** (the findings-half twin of the reflective-pairs index): 1033 review-logs +
   33 saved prompts = the corpus; strong/medium/weak Appendix conformance (802/243/**213 weak** = `crp_lint`'s backlog).
   Cite it in the spec exactly as det-plan cites reflective-pairs. See `ANALYSIS_crp-index-review-wisdom-into-grammar.md`.
@@ -106,27 +121,31 @@ coordinations** (owners' calls).
 - **`$0`/never-inferred** · **anti-inflation** (projected artifact starts `0.1`) · **propose-don't-dispose** at every generative seam.
 - **Byte-identical** default render · **advisory not blocking** for every liveness/o11y check · **absence-vs-error** (never read absent as 0).
 
-## 6. The critical path
+## 6. The critical path (reconciled 2026-08-18 — the projector spine is BUILT)
 
 ```
-REQ-29 (build) ──▶ det-plan-kit dev-os dir ──▶ det-crp-kit (spec+build)
-   │  (parallel, independent of the above)
-   ├─ REQ-25 · REQ-28 (liveness + o11y builds)
-   ├─ REQ-26 · REQ-27 (lens + self-dogfood)
-   └─ realization-facet REQ (spec folding OQ-1/4) ──▶ build
-Research (parallel): concept-embedding · twin-seam note · cross-corpus universality
-Cross-repo (owners): det-req-kit cleanup · NODE-SCHEMA §1 · ContextCore mirror · kit dirs · origin-push (your call)
+✅ det-doc-kit SDK spine BUILT: det-plan → STANDARD → det-handoff → det-howto (indep) + det-crp (format+lint)
+   remaining forks (all independent, none blocked by the above):
+   ├─ grammar-field batch: REQ-32 draft-time firing wire → REQ-30/31 (Emits:/Lifecycle:) + `Depends:` G-1
+   │     (cross-repo: det-req-kit grammar; G-1 makes det-plan's dependsOn REAL) — HIGHEST strategic leverage
+   ├─ card-browse UX: Move 3 ✅ shipped → search (consumes Move 3's seam) → Move 2 (audience tiers)
+   ├─ cross-repo kit-dir adoption: dev-os/det-{plan,handoff,howto,crp}-kit/ (essentials-only, charter §5)
+   ├─ liveness + o11y: REQ-25 residual · REQ-28 · whole-liveness-layer govern wiring
+   ├─ REQ-26 (a11y-as-lens) · REQ-27 (self-dogfood verify.gate) · realization-facet REQ (spec first)
+   └─ Cross-repo (owners): NODE-SCHEMA §1 · ContextCore mirror · origin-push (your call)
 ```
 
-## 7. If you do ONE thing next
+## 7. If you do ONE thing next (reconciled 2026-08-18)
 
-**Build REQ-29** (the det-plan projector) via its handoff — it's the family's first realized member, fully
-grounded, with a golden-first pilot set whose deltas *are* the reflective-adoption fold-back. It turns the whole
-det-doc-kit family from paper into a running `$0` generator, and its pilot immediately hardens `det-plan/0.1`.
+The old "build REQ-29" is **done** (+ the whole projector family). The current highest-leverage picks:
 
-**If you'd rather research than build:** point one agent at **concept-embedding mining** — it re-measures the
-Craft-Grammar claim (the cross-repo thesis's foundation) honestly, beating the vocabulary bias, and it's a clean
-one-agent pickup with a ready prompt in the research agenda.
+- **Strategic:** the **grammar-field batch** — **REQ-32** (the draft-time firing wire every metabolized theme queues
+  at) then **REQ-30/31** (`Emits:`/`Lifecycle:`) + **`Depends:` G-1**. G-1 makes the det-plan projector's `dependsOn`
+  *real* (empty today), and the four fields share one firing seam. Cross-repo (det-req-kit grammar) — owner coordination.
+- **Clean in-repo pickup:** **search** (`REQ-freetext-search-on-navigator-card-browse`) — Move 3 shipped its seam, so
+  search's FR-5 collapses to "register `srch-hidden`" (the paging bug is already fixed). BUILD-READY, S–M.
+- **Research lane:** extend **concept-embedding mining** to the other 5 corpora (the CRP corpus is done, 2026-08-18).
 
-**The one-line close:** *everything analyzed this session is built, spec'd-with-a-handoff, or on a grounded research
-thread with a named next-agent — nothing scattered, nothing lost; the loop is closed on paper and waits only on hands.*
+**The one-line close:** *the det-doc-kit projector family is built and proven by independent replication; what's left
+is the cross-repo kit-dir adoption, the grammar-field batch that makes the projections richer, and the card-browse UX
+arc — all independent, none blocked. Verify the greens with `verify_ledger.py`, not this list.*
