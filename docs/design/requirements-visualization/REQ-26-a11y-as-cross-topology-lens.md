@@ -1,7 +1,7 @@
 # A11y as a Cross-Topology Lens (the fourth RenderProfile moment) — Requirements
 
 **Project:** startd8-sdk   **Criticality:** high
-**Version:** 0.1   **Date:** 2026-08-17
+**Version:** 0.2 (Post-planning — self-reflective update)   **Date:** 2026-08-18
 **Format:** det-req/0.1
 **Backend:** python-cli-surface
 **Pairs with:** *(plan deferred — spec-only; delivered via the Spec Delivery Loop)* · **`ANALYSIS_corpus-self-study-five-threads.md` Thread 4 (the empty cell this fills)** · `REQ-03` (the a11y renderer + `check_no_bleed`) · `REQ-04` (the lens-lift pattern this repeats) · `REQ-09` (shared-lens adoption) · `VISUALIZATION_VARIANTS_ANALYSIS.md` (FF-1)
@@ -14,7 +14,28 @@
 > **Semantic name:** *SDK navigator lifts accessibility from a standalone flat renderer into a cross-topology lens so the tree graph and diff topologies each render an accessible semantic view reusing the no-bleed check, closing the FF-1 pattern for a11y so adding a renderer never re-forks the accessible view while the flat a11y case stays byte-identical.*
 > **Canonical ref:** `cc:intent:requirements-visualization:feature:req-26`
 
-## 0. Why this exists — a11y is welded to one topology (FF-1, again)
+## 0. Planning Insights (Self-Reflective Update — v0.1 → v0.2)
+
+> The Spec Delivery Loop planning pass (grounded against the live navigator renderers, 2026-08-18)
+> falsified two mechanism assumptions. The **objectives (O-1/O-2/O-3) are unchanged** — only the *how*.
+
+| v0.1 Assumption | Planning Discovery | Impact |
+|-----------------|--------------------|--------|
+| FR-1: "lift a11y **into `node_lenses.py`** as a lens value" | `node_lenses.py` is a **data-label transform** (`Gⱼ ∘ apply_node_lenses ∘ Fᵢ`) with a deliberate import firewall — it humanises labels, flags jargon, computes the gap floor, and imports *only* `delivery_roles` + lazily `Node` (never a renderer). a11y is a different axis — **PRESENTATION/modality** (roles, landmarks, headings, edges-as-spoken-text), not AUDIENCE (labels). Putting a11y HTML construction in `node_lenses.py` would violate its independence constraint. **Same class of error as Move 2's "audience = a predicate" falsification.** | a11y's home is a **cross-topology projection** `a11y_view_of_nodes(...)` in `render_a11y.py`, NOT `node_lenses.py`. The two axes *compose*: the a11y view still routes labels **through** `node_lenses.project_nodes` (audience × a11y), but a11y itself is the modality. FR-1 re-homed accordingly. |
+| FR-4/O-1: "compose `--format a11y` with `--renderer diff`" | `diff` is a **separate typer command** (`navigator diff --before --after`), not a `--renderer` value; `--renderer` is `wireframe\|tree\|graph`. | a11y-of-diff is wired via `navigator diff --format a11y` (its own command), not `--renderer diff`. The composition point is per-topology. |
+| Tree exposes a reusable hierarchy structure to consume | The tree renderer bakes its hierarchy into recursive HTML — **no** intermediate artifact. But `Node.child_keys` (the same primitive the tree uses) is directly walkable. Graph **does** expose `nodes_to_graph()`→`{nodes, edges}` pre-layout; diff **does** expose the `NodeDiff` dataclass. | a11y-of-tree walks `child_keys` directly; a11y-of-graph consumes `nodes_to_graph()` edges (skips `_layout`); a11y-of-diff consumes `NodeDiff`. All feasible; confirmed. |
+| FR-6 "no re-fork" needs per-topology a11y code | The **true FF-1 closure** is a *single generic* `a11y_view_of_nodes(nodes, *, edges=None)`: any renderer that already has a `List[Node]` (tree and graph both do) gets an accessible view with **zero a11y-specific code**. Nesting from `child_keys`; an optional edge list enumerated as spoken relations. | FR-6 is satisfied by the generic projection being the single chokepoint — tree/graph are thin call-sites; the synthetic "new renderer" literally calls `a11y_view_of_nodes` and inherits a11y. |
+
+**Corrected mechanism (v0.2):** one generic cross-topology projection `a11y_view_of_nodes` + a shared
+topology-agnostic document shell (`_a11y_shell` — skip-link/nav-toc/main/status-as-word, the single
+no-fork chokepoint) in `render_a11y.py`, reusing the flat renderer's CSS/`esc`/`status`/`check_no_bleed`
+primitives and routing labels through `node_lenses.project_nodes`. The flat path (`render_a11y_to_file`,
+`render_html`) is **untouched** → byte-identical (FR-7).
+
+*v0.2 — Post-planning self-reflective update. 0 requirements dropped; FR-1 re-homed (node_lenses → a
+cross-topology projection), FR-4 re-wired (diff command, not --renderer), FR-6 mechanism sharpened.*
+
+## 0.1 Why this exists — a11y is welded to one topology (FF-1, again)
 
 The axis-coverage refresh (self-study Thread 4) found the corpus's empty cells have migrated *up the stack*:
 the highest-leverage gap is that **accessibility is welded to the flat topology** — `render_a11y.py` renders

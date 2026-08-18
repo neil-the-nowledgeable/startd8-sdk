@@ -22,7 +22,11 @@ from .govern import (
 )
 from .ground import write_grounding
 from .project import nodes_from_json, nodes_to_json, render_nodes_html
-from .render_a11y import render_a11y_to_file
+from .render_a11y import (
+    render_a11y_graph_to_file,
+    render_a11y_to_file,
+    render_a11y_tree_to_file,
+)
 from .render_diff import render_navigator_diff_html
 from .render_graph import render_navigator_graph_html
 from .render_index import render_index_to_file
@@ -345,18 +349,44 @@ def build(
         raise typer.Exit(_EXIT_OK)
 
     if fmt == "a11y":
-        # Standalone semantic accessible view (REQ-03 FR-1). Requires --out, like html.
+        # REQ-26: a11y is a cross-topology lens — it composes with --renderer. The flat/requirement view
+        # (renderer wireframe|None) is byte-identical (REQ-03 FR-7); tree|graph render the accessible
+        # semantic view of that topology. Requires --out, like html.
         if out is None:
             console.print("[red]error:[/red] --out is required for --format a11y")
             raise typer.Exit(_EXIT_ERR)
-        try:
-            render_a11y_to_file(
-                list(nodes), out, title=f"{source}", role=role, fluency=fluency
+        if renderer not in (None, "wireframe", "tree", "graph"):
+            console.print(
+                f"[red]error:[/red] unknown --renderer {renderer!r} for a11y "
+                "(expected wireframe|tree|graph)"
             )
+            raise typer.Exit(_EXIT_ERR)
+        try:
+            if renderer == "tree":
+                render_a11y_tree_to_file(
+                    list(nodes),
+                    out,
+                    title=f"Node tree — {source}",
+                    role=role,
+                    fluency=fluency,
+                )
+            elif renderer == "graph":
+                render_a11y_graph_to_file(
+                    list(nodes),
+                    out,
+                    title=f"Node graph — {source}",
+                    role=role,
+                    fluency=fluency,
+                )
+            else:  # wireframe / None — the flat requirement view (byte-identical, FR-7)
+                render_a11y_to_file(
+                    list(nodes), out, title=f"{source}", role=role, fluency=fluency
+                )
         except OSError as exc:
             console.print(f"[red]error:[/red] {exc}")
             raise typer.Exit(_EXIT_ERR)
-        console.print(f"wrote {out} ({len(nodes)} nodes, a11y)")
+        _topo = renderer if renderer in ("tree", "graph") else "flat"
+        console.print(f"wrote {out} ({len(nodes)} nodes, a11y/{_topo})")
         raise typer.Exit(_EXIT_OK)
 
     console.print(
@@ -644,6 +674,12 @@ def diff(
         "--json",
         help="Emit the machine-readable NodeDiff (for CI) instead of HTML",
     ),
+    a11y: bool = typer.Option(
+        False,
+        "--a11y",
+        help="REQ-26: render the delta as an accessible semantic view (added/removed/changed + "
+        "status transitions as navigable regions) instead of the visual delta HTML",
+    ),
     max_detail: Optional[int] = typer.Option(
         None,
         "--max-detail",
@@ -697,14 +733,23 @@ def diff(
         console.print("[red]error:[/red] --out is required (unless --json)")
         raise typer.Exit(_EXIT_ERR)
     try:
-        render_navigator_diff_html(
-            delta,
-            out,
-            title=f"Node Corpus Delta — {before.name} → {after.name}",
-            max_detail=max_detail,
-            role=role,
-            fluency=fluency,
-        )
+        if a11y:  # REQ-26 FR-4 — the accessible cross-topology view of the diff
+            from .render_a11y import render_a11y_diff_to_file
+
+            render_a11y_diff_to_file(
+                delta,
+                out,
+                title=f"Corpus delta — {before.name} → {after.name}",
+            )
+        else:
+            render_navigator_diff_html(
+                delta,
+                out,
+                title=f"Node Corpus Delta — {before.name} → {after.name}",
+                max_detail=max_detail,
+                role=role,
+                fluency=fluency,
+            )
     except OSError as exc:
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERR)

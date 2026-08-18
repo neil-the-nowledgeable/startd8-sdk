@@ -13,14 +13,16 @@ NR-3: the base `ReqView` + a11y view only — the Tier-2/3 lesson·principle val
 NOT ported. XSS mitigations (CC #398/#400) reuse REQ-02's already-tested `_safe_href`/`_safe_color`.
 The whole document (CSS inlined, no JS required to read it) opens offline.
 """
+
 from __future__ import annotations
 
 import html
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .models import Node
+
 # Decision-1 (locked): reuse REQ-02's already-tested XSS helper. Every href goes through
 # `_safe_href`. This renderer has NO user-controlled colour sink (all colours come from the fixed
 # CSS palette, not from source), so `_safe_color` is not needed here — the index reuses `_safe_href`
@@ -88,7 +90,8 @@ def _lens_labels(
     hands it to the shared aggregate, and keys the lensed ``label`` back to ``Node.key`` positionally.
     Label = ``node.does`` (not ``"{key} — {does}"``) so the humanised text substitutes ONLY the ``does``
     portion of the a11y renderer's own ``{key} — {does}`` layout. Soft dependency: transform absent or
-    ``role`` None → ``{}`` → the caller falls back to raw ``does(node)`` → byte-identical (FR-5)."""
+    ``role`` None → ``{}`` → the caller falls back to raw ``does(node)`` → byte-identical (FR-5).
+    """
     if apply_node_lenses is None or role is None:
         return {}
     voice = effective_voice(role) if effective_voice is not None else role
@@ -103,7 +106,9 @@ def _lens_labels(
     ]
     try:
         lensed = apply_node_lenses(views, role=role, fluency=fluency, voice=voice)
-    except Exception:  # pragma: no cover - defensive; a broken lens never breaks the render
+    except (
+        Exception
+    ):  # pragma: no cover - defensive; a broken lens never breaks the render
         return {}
     out: Dict[str, str] = {}
     for n, view in zip(nodes, lensed):
@@ -133,10 +138,14 @@ def _evidence_lines(f: Node) -> List[str]:
     lines: List[str] = []
     if attr(f, "fr_health") == "unknown":
         ann = attr(f, "verify") or "done"
-        lines.append(f"evidence: UNKNOWN — verify ({ann}); done-claim without Lives locator")
+        lines.append(
+            f"evidence: UNKNOWN — verify ({ann}); done-claim without Lives locator"
+        )
         return lines
     lives = getattr(f, "lives", ()) or ()
-    authored = [ev for ev in lives if getattr(ev, "note", "") in ("authored", "honest-skip")]
+    authored = [
+        ev for ev in lives if getattr(ev, "note", "") in ("authored", "honest-skip")
+    ]
     show = authored or list(lives)[:1]
     for ev in show:
         et = getattr(ev, "type", "") or ""
@@ -159,14 +168,16 @@ _ICON_PATHS = {
     "decisions": '<path d="M4.2 2.2v11.6"/><path d="M4.2 3h7l-1.6 2.3L11.2 7.6H4.2z"/>',
     "floor": '<circle cx="8" cy="8" r="6"/><path d="M4 4l8 8"/>',
     "trace": '<circle cx="4" cy="8" r="1.5"/><circle cx="12" cy="4.5" r="1.5"/>'
-             '<circle cx="12" cy="11.5" r="1.5"/><path d="M5.4 7.3l5.2-2.3M5.4 8.7l5.2 2.3"/>',
+    '<circle cx="12" cy="11.5" r="1.5"/><path d="M5.4 7.3l5.2-2.3M5.4 8.7l5.2 2.3"/>',
 }
 
 
 def _ico(name: str) -> str:
-    return (f'<svg class="ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" '
-            f'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" '
-            f'stroke-linejoin="round">{_ICON_PATHS.get(name, "")}</svg>')
+    return (
+        f'<svg class="ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" '
+        f'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" '
+        f'stroke-linejoin="round">{_ICON_PATHS.get(name, "")}</svg>'
+    )
 
 
 def _touch_tags(frs) -> list:
@@ -180,7 +191,9 @@ def _touch_tags(frs) -> list:
             ref = (getattr(ev, "ref", "") or "").strip("` ")
             if not ref:
                 continue
-            if ref.startswith(("~", "/")):  # home/abs → the file, not the '~'/'' path prefix
+            if ref.startswith(
+                ("~", "/")
+            ):  # home/abs → the file, not the '~'/'' path prefix
                 area = Path(ref).stem
             else:
                 parts = ref.split("/")
@@ -193,12 +206,15 @@ def _touch_tags(frs) -> list:
 
 def _row(sid: str, icon: str, health: str, name: str, verdict_html: str) -> str:
     """A status-line <summary>: [type-icon muted] Name — [health-glyph] verdict.
-    health ∈ ok|call|risk|warn|info; colour lives on the glyph + left rail, never alone."""
+    health ∈ ok|call|risk|warn|info; colour lives on the glyph + left rail, never alone.
+    """
     g = _HEALTH_GLYPH.get(health, "•")
-    return (f'<summary id="{esc(sid)}" class="row {esc(health)}">{_ico(icon)}'
-            f'<span class="nm">{esc(name)}</span>'
-            f'<span class="vd"> — <b class="g" aria-hidden="true">{g}</b> {verdict_html}</span>'
-            f'</summary>')
+    return (
+        f'<summary id="{esc(sid)}" class="row {esc(health)}">{_ico(icon)}'
+        f'<span class="nm">{esc(name)}</span>'
+        f'<span class="vd"> — <b class="g" aria-hidden="true">{g}</b> {verdict_html}</span>'
+        f"</summary>"
+    )
 
 
 def _inline_md(text: str) -> str:
@@ -315,7 +331,9 @@ def render_text(v: ReqView, title: str = "") -> str:
     L.append("")
 
     # (d) DECISIONS FOR YOU — high risks in FULL + owned fields
-    L.append(f"DECISIONS FOR YOU ({len(v.high_risks)} high risk(s) + {len(v.owned)} owned field(s))")
+    L.append(
+        f"DECISIONS FOR YOU ({len(v.high_risks)} high risk(s) + {len(v.owned)} owned field(s))"
+    )
     for r in v.high_risks:
         L.append(
             f"  [{status_label(r)}] {attr(r, 'priority').upper()} · {attr(r, 'risk_type')} "
@@ -332,7 +350,7 @@ def render_text(v: ReqView, title: str = "") -> str:
     # (e) THE FLOOR — non-goals (guard rails)
     L.append(f"THE FLOOR ({len(v.nongoals)} non-goal(s) — what this will NOT do)")
     for ng in v.nongoals:
-        floor = (ng.wont[0] if ng.wont else attr(ng, "description"))
+        floor = ng.wont[0] if ng.wont else attr(ng, "description")
         L.append(f"  ✗ {floor}")
     return "\n".join(L)
 
@@ -481,8 +499,10 @@ def render_html(
     P.append('<nav class="toc" aria-label="Sections">')
     P.append("<ul>")
     for anchor, label in [
-        ("outcomes", "Outcomes"), ("trace", "Traceability"),
-        ("capabilities", "Capabilities"), ("decisions", "Decisions"),
+        ("outcomes", "Outcomes"),
+        ("trace", "Traceability"),
+        ("capabilities", "Capabilities"),
+        ("decisions", "Decisions"),
         ("floor", "The floor"),
     ]:
         P.append(f'<li><a class="href" href="#{esc(anchor)}">{esc(label)}</a></li>')
@@ -501,11 +521,13 @@ def render_html(
     else:
         _oh, _ov = "ok", "all have a target"
     P.append(f'<details class="drill {_oh}" open>')
-    P.append(_row("outcomes", "outcomes", _oh, f"Outcomes ({len(v.objectives)})", esc(_ov)))
+    P.append(
+        _row("outcomes", "outcomes", _oh, f"Outcomes ({len(v.objectives)})", esc(_ov))
+    )
     P.append("<ul>")
     for o in v.objectives:
         tgt = attr(o, "target")
-        head = f'{tag(o)}<strong>{esc(o.key)}</strong>'
+        head = f"{tag(o)}<strong>{esc(o.key)}</strong>"
         _o_does = _lensed(o, labels) or does(o)
         P.append(f"<li>{head} — {esc(tgt) if tgt else esc(_o_does)}")
         if tgt:
@@ -518,35 +540,49 @@ def render_html(
     _n_served = len([o for o in v.objectives if v.frs_for(o.key)])
     _orph = v.orphan_frs()
     if not _traced:
-        _thealth, _tv = "info", "Serves not declared (optional) — FRs grouped by section"
+        _thealth, _tv = (
+            "info",
+            "Serves not declared (optional) — FRs grouped by section",
+        )
     elif _orph or _n_served < len(v.objectives):
         _thealth = "risk"
-        _tv = (f"{_n_served}/{len(v.objectives)} outcomes served"
-               + (f" · {len(_orph)} broken ref(s)" if _orph else ""))
+        _tv = f"{_n_served}/{len(v.objectives)} outcomes served" + (
+            f" · {len(_orph)} broken ref(s)" if _orph else ""
+        )
     else:
         _thealth, _tv = "ok", f"{_n_served}/{len(v.objectives)} outcomes served"
     P.append(f'<details class="drill {_thealth}">')
     P.append(_row("trace", "trace", _thealth, "Traceability", esc(_tv)))
     P.append('<table class="trace">')
-    P.append('<caption>Each outcome and the capabilities that serve it (via the optional Serves: '
-             'field). An outcome with no capability, or a capability with a missing outcome, '
-             'is a spine gap.</caption>')
-    P.append('<thead><tr><th scope="col">Outcome</th><th scope="col">Served by</th>'
-             '<th scope="col">Status</th></tr></thead><tbody>')
+    P.append(
+        "<caption>Each outcome and the capabilities that serve it (via the optional Serves: "
+        "field). An outcome with no capability, or a capability with a missing outcome, "
+        "is a spine gap.</caption>"
+    )
+    P.append(
+        '<thead><tr><th scope="col">Outcome</th><th scope="col">Served by</th>'
+        '<th scope="col">Status</th></tr></thead><tbody>'
+    )
     for o in v.objectives:
         serving = v.frs_for(o.key)
-        chips = " ".join(f'<span class="chip">{esc(f.key)}</span>' for f in serving) or "—"
+        chips = (
+            " ".join(f'<span class="chip">{esc(f.key)}</span>' for f in serving) or "—"
+        )
         if serving:
             st, rc = "✓ served", ""
         elif _traced:
             st, rc = "⚠ no capability", ' class="warn"'
         else:
             st, rc = "○ not traced", ""
-        P.append(f'<tr{rc}><th scope="row">{esc(o.key)}</th><td>{chips}</td><td>{esc(st)}</td></tr>')
+        P.append(
+            f'<tr{rc}><th scope="row">{esc(o.key)}</th><td>{chips}</td><td>{esc(st)}</td></tr>'
+        )
     if _orph:
         chips = " ".join(f'<span class="chip warn">{esc(f.key)}</span>' for f in _orph)
-        P.append(f'<tr class="warn"><th scope="row">broken</th><td>{chips}</td>'
-                 f'<td>⚠ serve a missing outcome</td></tr>')
+        P.append(
+            f'<tr class="warn"><th scope="row">broken</th><td>{chips}</td>'
+            f"<td>⚠ serve a missing outcome</td></tr>"
+        )
     P.append("</tbody></table></details>")
 
     # ---- TOUCHES — counted-chip facet of the subsystems this requirement spans ----
@@ -554,34 +590,60 @@ def render_html(
     if _tags:
         P.append('<details class="drill info">')
         _span = ", ".join(a for a, _ in _tags[:6]) + ("…" if len(_tags) > 6 else "")
-        P.append(_row("touches", "trace", "info", f"Touches ({len(_tags)} areas)",
-                      "spans " + esc(_span)))
+        P.append(
+            _row(
+                "touches",
+                "trace",
+                "info",
+                f"Touches ({len(_tags)} areas)",
+                "spans " + esc(_span),
+            )
+        )
         P.append('<ul class="tags">')
         for area, n in _tags:
             P.append(f'<li class="tagchip">{esc(area)} <b>{n}</b></li>')
         P.append("</ul></details>")
 
     # ---- CAPABILITIES — grouped by served outcome ----
-    _ch = "risk" if (v.orphan_frs() or [f for f in v.frs if not attr(f, "verify").strip()]) else "ok"
-    _cv = ("all have a verify" + (" & serve an outcome" if v.uses_serves() else "")
-           if _ch == "ok" else "has a verify / broken-Serves gap")
+    _ch = (
+        "risk"
+        if (v.orphan_frs() or [f for f in v.frs if not attr(f, "verify").strip()])
+        else "ok"
+    )
+    _cv = (
+        "all have a verify" + (" & serve an outcome" if v.uses_serves() else "")
+        if _ch == "ok"
+        else "has a verify / broken-Serves gap"
+    )
     P.append(f'<details class="drill {_ch}" open>')
-    P.append(_row("capabilities", "capabilities", _ch, f"Capabilities ({len(v.frs)})", esc(_cv)))
+    P.append(
+        _row(
+            "capabilities",
+            "capabilities",
+            _ch,
+            f"Capabilities ({len(v.frs)})",
+            esc(_cv),
+        )
+    )
 
     def _emit_cap(f: Node) -> None:
         P.append(
             f'<li class="cap" id="cap-{esc(f.key)}">{tag(f)}'
-            f'<strong>{esc(f.key)}</strong> — {esc(_lensed(f, labels) or f.does)}'
+            f"<strong>{esc(f.key)}</strong> — {esc(_lensed(f, labels) or f.does)}"
         )
         ver = attr(f, "verify")
         if ver:
             P.append(f'<div class="field"><em>verify:</em> {_inline_md(ver)}</div>')
         for el in _evidence_lines(f):
             if el.startswith("evidence: UNKNOWN"):
-                P.append(f'<div class="field warn"><em>evidence:</em> '
-                         f'{esc(el[len("evidence:"):].strip())}</div>')
+                P.append(
+                    f'<div class="field warn"><em>evidence:</em> '
+                    f'{esc(el[len("evidence:"):].strip())}</div>'
+                )
             elif el.startswith("lives: "):
-                P.append(f'<div class="field"><em>lives:</em> {esc(el[len("lives: "):])}</div>')
+                P.append(
+                    f'<div class="field"><em>lives:</em> {esc(el[len("lives: "):])}</div>'
+                )
             else:
                 P.append(f'<div class="field">{esc(el)}</div>')
         P.append("</li>")
@@ -590,14 +652,19 @@ def render_html(
         serving = v.frs_for(o.key)
         if not serving:
             continue
-        P.append(f"<h3>Serves {esc(o.key)} — {esc(_lensed(o, labels) or does(o))}</h3><ul>")
+        P.append(
+            f"<h3>Serves {esc(o.key)} — {esc(_lensed(o, labels) or does(o))}</h3><ul>"
+        )
         for f in serving:
             _emit_cap(f)
         P.append("</ul>")
     unlinked = v.unlinked_frs()
     if unlinked:
-        _h = ("Not traced to an outcome (Serves optional)"
-              if not v.uses_serves() else "Unlinked to an outcome")
+        _h = (
+            "Not traced to an outcome (Serves optional)"
+            if not v.uses_serves()
+            else "Unlinked to an outcome"
+        )
         P.append(f"<h3>{esc(_h)}</h3><ul>")
         for f in unlinked:
             _emit_cap(f)
@@ -606,8 +673,14 @@ def render_html(
 
     # ---- DECISIONS FOR YOU ----
     _dh = "call" if (v.high_risks or v.owned) else "ok"
-    _dv = (f"{len(v.high_risks) + len(v.owned)} need you — "
-           f"{len(v.high_risks)} sign-off · {len(v.owned)} owned") if _dh == "call" else "none"
+    _dv = (
+        (
+            f"{len(v.high_risks) + len(v.owned)} need you — "
+            f"{len(v.high_risks)} sign-off · {len(v.owned)} owned"
+        )
+        if _dh == "call"
+        else "none"
+    )
     P.append(f'<details class="drill {_dh}">')
     P.append(_row("decisions", "decisions", _dh, "Decisions for you", esc(_dv)))
     for r in v.high_risks:
@@ -628,16 +701,25 @@ def render_html(
 
     # ---- THE FLOOR — non-goals ----
     P.append('<details class="drill info">')
-    P.append(_row("floor", "floor", "info", "The floor",
-                  esc(f"{len(v.nongoals)} non-goal(s) — will NOT do")))
+    P.append(
+        _row(
+            "floor",
+            "floor",
+            "info",
+            "The floor",
+            esc(f"{len(v.nongoals)} non-goal(s) — will NOT do"),
+        )
+    )
     P.append('<ul class="floor">')
     for ng in v.nongoals:
-        floor = (ng.wont[0] if ng.wont else attr(ng, "description"))
+        floor = ng.wont[0] if ng.wont else attr(ng, "description")
         P.append(f"<li>✗ {esc(floor)}</li>")
     P.append("</ul></details>")
 
-    P.append('<p class="legend">✓ ok · ⚠ needs attention · » your call — glyph + word '
-             '(grayscale + screen-reader legible; status is never colour-only).</p>')
+    P.append(
+        '<p class="legend">✓ ok · ⚠ needs attention · » your call — glyph + word '
+        "(grayscale + screen-reader legible; status is never colour-only).</p>"
+    )
     P.append("</main></body></html>")
     return "\n".join(P)
 
@@ -652,13 +734,19 @@ def check_no_bleed(html_text: str) -> Dict[str, object]:
     hits = [tok for tok in WIREFRAME_BLEED if tok in html_text]
     # a "0 / 0 / 0" shape row (any spacing) — the wireframe summary-chrome tell
     zero_shape = bool(re.search(r"\b0\s*/\s*0\s*/\s*0\b", html_text))
-    return {"leaked_tokens": hits, "zero_shape_row": zero_shape,
-            "pass": (not hits and not zero_shape)}
+    return {
+        "leaked_tokens": hits,
+        "zero_shape_row": zero_shape,
+        "pass": (not hits and not zero_shape),
+    }
 
 
 def render_a11y_to_file(
-    nodes: List[Node], out_path, title: str = "",
-    up_href: str = "", up_label: str = "",
+    nodes: List[Node],
+    out_path,
+    title: str = "",
+    up_href: str = "",
+    up_label: str = "",
     *,
     role: Optional[str] = None,
     fluency: str = "intermediate",
@@ -676,8 +764,354 @@ def render_a11y_to_file(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-        render_html(v, title=title, up_href=up_href, up_label=up_label,
-                    role=role, fluency=fluency),
+        render_html(
+            v,
+            title=title,
+            up_href=up_href,
+            up_label=up_label,
+            role=role,
+            fluency=fluency,
+        ),
+        encoding="utf-8",
+    )
+    return str(out_path)
+
+
+# =============================================================================
+# REQ-26 — A11Y AS A CROSS-TOPOLOGY LENS (the fourth RenderProfile moment)
+#
+# a11y is a PRESENTATION/modality axis, not the audience label-lens (node_lenses). The FF-1 closure is
+# ONE generic projection ``a11y_view_of_nodes`` over a ``List[Node]`` (+ optional semantic edge list),
+# wrapped by ONE topology-agnostic shell ``_a11y_shell`` (the no-fork chokepoint). Tree/graph/diff are
+# thin call-sites; a synthetic new renderer inherits a11y by calling ``a11y_view_of_nodes`` with zero
+# a11y-specific code (FR-6). Reuses the flat renderer's CSS / ``esc`` / status-word / ``_safe_href``
+# primitives and is guarded by the SAME ``check_no_bleed`` (FR-5). The flat path (``render_html`` /
+# ``render_a11y_to_file``) is untouched → byte-identical (FR-7).
+# =============================================================================
+
+# Requirement/build status word -> the ONE colour axis (health rail). Status is ALWAYS shown as a word
+# (``tag``); the rail is a redundant, never-sole cue (WCAG 1.4.1).
+_A11Y_RAIL = {
+    "goal": "ok",
+    "grounded": "ok",
+    "risk-high": "risk",
+    "risk-med": "risk",
+    "risk-low": "risk",
+    "needs-you": "call",
+    "awaiting": "call",
+    "do-next": "call",
+    "spec": "info",
+    "excluded": "info",
+    "unknown": "info",
+}
+
+
+def _rail_health(n: Node) -> str:
+    """Map a node's status word to the health rail class (ok/call/risk/info) — a redundant cue only."""
+    return _A11Y_RAIL.get(status_label(n), "info")
+
+
+def _a11y_shell(
+    title: str,
+    toc: List[Tuple[str, str]],
+    body: List[str],
+    *,
+    up_href: str = "",
+    up_label: str = "",
+) -> str:
+    """The single topology-agnostic accessible document shell (FR-6 no-fork chokepoint).
+
+    Emits the same offline, screen-reader-native chrome as the flat renderer — skip-link, breadcrumb,
+    a ``nav.toc`` landmark, ``main`` — reusing the flat ``CSS``. *toc* is a list of ``(anchor, label)``;
+    *body* is the already-rendered section HTML. Every renderer's a11y view goes through here, so no
+    per-topology chrome fork can exist.
+    """
+    title = esc(title or "view")
+    P: List[str] = [
+        "<!doctype html>",
+        '<html lang="en"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"<title>{title} — accessible view</title>",
+        f"<style>{CSS}</style></head><body>",
+        '<a class="skip-link" href="#main">Skip to the content</a>',
+    ]
+    if up_href:
+        _uh = _safe_href(up_href)
+        if _uh is not None:
+            P.append(
+                '<nav class="crumb" aria-label="Breadcrumb" '
+                'style="padding:.5rem 1rem;font-size:1.05rem;font-weight:600">'
+                f'<a class="href" href="{esc(_uh)}">{esc(up_label or "← Back")}</a></nav>'
+            )
+    P.append('<nav class="toc" aria-label="Sections"><ul>')
+    for anchor, label in toc:
+        P.append(f'<li><a class="href" href="#{esc(anchor)}">{esc(label)}</a></li>')
+    P.append("</ul></nav>")
+    P.append('<main id="main" tabindex="-1">')
+    P.append(f"<h1>{title}</h1>")
+    P.extend(body)
+    P.append(
+        '<p class="legend">✓ ok · ⚠ needs attention · » your call — status is a word + glyph, '
+        "never colour-only (WCAG 1.4.1).</p>"
+    )
+    P.append("</main></body></html>")
+    return "\n".join(P)
+
+
+def _node_region(
+    n: Node,
+    labels: Optional[Dict[str, str]],
+    *,
+    edges_out: Optional[List[Tuple[str, str]]] = None,
+    inner: Optional[List[str]] = None,
+) -> List[str]:
+    """One node as a keyboard-reachable semantic region: status WORD + label, key facets, spoken
+    relations (graph), and any nested children (tree). Anchored by ``id`` for the toc landmark.
+    """
+    h = _rail_health(n)
+    key = esc(n.key)
+    lab = _lensed(n, labels) or does(n)
+    P: List[str] = [f'<details class="drill {h}" id="n-{key}" open>']
+    P.append(
+        f'<summary class="row {h}"><span class="nm">{tag(n)}{key}</span> '
+        f'<span class="vd">{esc(lab)}</span></summary>'
+    )
+    for fld, lbl in (("verify", "verify"), ("target", "target")):
+        val = attr(n, fld)
+        if val:
+            P.append(f'<div class="field"><em>{lbl}:</em> {esc(val)}</div>')
+    for el in _evidence_lines(n):
+        P.append(f'<div class="field">{esc(el)}</div>')
+    if edges_out:
+        P.append('<div class="field"><em>relations:</em></div><ul>')
+        for rel, to in edges_out:
+            # each edge spoken as "<relation> → <target>" so the node-link structure is textual (inv. 8)
+            P.append(f"<li>{esc(rel)} → {esc(to)}</li>")
+        P.append("</ul>")
+    if inner:
+        P.extend(inner)
+    P.append("</details>")
+    return P
+
+
+def a11y_view_of_nodes(
+    nodes: Sequence[Node],
+    *,
+    title: str = "",
+    edges: Optional[List[Dict]] = None,
+    role: Optional[str] = None,
+    fluency: str = "intermediate",
+    up_href: str = "",
+    up_label: str = "",
+) -> str:
+    """The generic cross-topology a11y projection (FR-1). ANY renderer holding a ``List[Node]`` gets a
+    screen-reader-native view by calling this — with **zero** a11y-specific code (FR-6, FF-1 closed).
+
+    - No *edges* → **tree mode**: nodes nest by ``child_keys`` into heading-level drill regions (FR-2).
+    - *edges* given → **graph mode**: each node's outgoing edges are enumerated as spoken relations, a
+      navigable textual equivalent of the node-link structure (FR-3, NODE-SCHEMA inv. 8).
+
+    Labels route through the shared audience×fluency lens (``node_lenses``) exactly as the flat view
+    does; the two axes compose (audience × a11y). Guarded by ``check_no_bleed`` at the call sites (FR-5).
+    """
+    nodes = list(nodes)
+    labels = _lens_labels(nodes, role=role, fluency=fluency)
+
+    if edges is not None:
+        # graph mode — flat regions, each carrying its outgoing relations
+        by_src: Dict[str, List[Tuple[str, str]]] = {}
+        for e in edges:
+            by_src.setdefault(str(e.get("from", "")), []).append(
+                (str(e.get("label", "")), str(e.get("to", "")))
+            )
+        body: List[str] = []
+        for n in nodes:
+            body.extend(_node_region(n, labels, edges_out=by_src.get(n.key)))
+        toc = [(f"n-{n.key}", n.key) for n in nodes]
+        return _a11y_shell(
+            title or "Node graph", toc, body, up_href=up_href, up_label=up_label
+        )
+
+    # tree mode — nest by child_keys (the same primitive the tree renderer walks)
+    by_key = {n.key: n for n in nodes}
+    referenced: set = set()
+    for n in nodes:
+        for ck in getattr(n, "child_keys", ()) or ():
+            referenced.add(ck)
+    roots = [n for n in nodes if n.key not in referenced]
+    if (
+        not roots
+    ):  # all nodes reference each other (cycle) — treat every node as a root, no nesting
+        roots = nodes
+
+    def _subtree(n: Node, seen: set) -> List[str]:
+        if n.key in seen:  # cycle guard — a node is rendered once
+            return []
+        seen.add(n.key)
+        kids = [
+            by_key[ck] for ck in (getattr(n, "child_keys", ()) or ()) if ck in by_key
+        ]
+        inner: List[str] = []
+        for kid in kids:
+            inner.extend(_subtree(kid, seen))
+        return _node_region(n, labels, inner=inner or None)
+
+    seen: set = set()
+    body = []
+    for r in roots:
+        body.extend(_subtree(r, seen))
+    toc = [(f"n-{r.key}", r.key) for r in roots]
+    return _a11y_shell(
+        title or "Node tree", toc, body, up_href=up_href, up_label=up_label
+    )
+
+
+def a11y_view_of_diff(
+    diff,
+    *,
+    title: str = "Corpus delta",
+    up_href: str = "",
+    up_label: str = "",
+) -> str:
+    """FR-4 — the corpus diff as accessible semantic regions: added / removed / changed and status
+    transitions each a navigable landmark region. Consumes the ``NodeDiff`` dataclass (no HTML coupling),
+    goes through the shared ``_a11y_shell``."""
+
+    def _list_section(anchor: str, label: str, items, health: str) -> List[str]:
+        P = [f'<details class="drill {health}" id="{anchor}" open>']
+        P.append(
+            f'<summary class="row {health}"><span class="nm">{esc(label)}</span> '
+            f'<span class="vd">{len(items)}</span></summary>'
+        )
+        if items:
+            P.append("<ul>")
+            for n in items:
+                P.append(
+                    f"<li>{tag(n)}<strong>{esc(n.key)}</strong> — {esc(does(n))}</li>"
+                )
+            P.append("</ul>")
+        P.append("</details>")
+        return P
+
+    body: List[str] = []
+    body.extend(_list_section("added", "Added", diff.added, "ok"))
+    body.extend(_list_section("removed", "Removed", diff.removed, "risk"))
+
+    # changed — per node, its field deltas as before → after
+    changed = diff.changed
+    body.append('<details class="drill call" id="changed" open>')
+    body.append(
+        f'<summary class="row call"><span class="nm">Changed</span> '
+        f'<span class="vd">{len(changed)}</span></summary>'
+    )
+    for entry in changed:
+        key, _before, _after, deltas = entry
+        body.append(f"<h3>{esc(str(key))}</h3><dl>")
+        for d in deltas:
+            body.append(
+                f"<dt>{esc(str(d.field))}</dt>"
+                f"<dd>{esc(str(d.before))} → {esc(str(d.after))}</dd>"
+            )
+        body.append("</dl>")
+    body.append("</details>")
+
+    # status transitions
+    trans = getattr(diff, "status_transitions", ())
+    body.append('<details class="drill info" id="transitions" open>')
+    body.append(
+        f'<summary class="row info"><span class="nm">Status transitions</span> '
+        f'<span class="vd">{len(trans)}</span></summary>'
+    )
+    if trans:
+        body.append("<ul>")
+        for t in trans:
+            body.append(
+                f"<li><strong>{esc(str(t.key))}</strong>: "
+                f"{esc(str(t.before))} → {esc(str(t.after))}</li>"
+            )
+        body.append("</ul>")
+    body.append("</details>")
+
+    toc = [
+        ("added", "Added"),
+        ("removed", "Removed"),
+        ("changed", "Changed"),
+        ("transitions", "Status transitions"),
+    ]
+    return _a11y_shell(title, toc, body, up_href=up_href, up_label=up_label)
+
+
+def render_a11y_tree_to_file(
+    nodes: List[Node],
+    out_path,
+    title: str = "",
+    *,
+    role: Optional[str] = None,
+    fluency: str = "intermediate",
+    up_href: str = "",
+    up_label: str = "",
+) -> str:
+    """FR-2 — write the N-level tree topology as an accessible drill view (a11y lens over the tree)."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        a11y_view_of_nodes(
+            list(nodes),
+            title=title or "Node tree",
+            role=role,
+            fluency=fluency,
+            up_href=up_href,
+            up_label=up_label,
+        ),
+        encoding="utf-8",
+    )
+    return str(out_path)
+
+
+def render_a11y_graph_to_file(
+    nodes: List[Node],
+    out_path,
+    title: str = "",
+    *,
+    role: Optional[str] = None,
+    fluency: str = "intermediate",
+    up_href: str = "",
+    up_label: str = "",
+) -> str:
+    """FR-3 — write the dependency graph topology as a navigable textual equivalent (edges spoken)."""
+    from .graph_projection import nodes_to_graph
+
+    g = nodes_to_graph(list(nodes))
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        a11y_view_of_nodes(
+            list(nodes),
+            edges=g["edges"],
+            title=title or "Node graph",
+            role=role,
+            fluency=fluency,
+            up_href=up_href,
+            up_label=up_label,
+        ),
+        encoding="utf-8",
+    )
+    return str(out_path)
+
+
+def render_a11y_diff_to_file(
+    diff,
+    out_path,
+    title: str = "Corpus delta",
+    *,
+    up_href: str = "",
+    up_label: str = "",
+) -> str:
+    """FR-4 — write the corpus diff topology as accessible added/removed/changed regions."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        a11y_view_of_diff(diff, title=title, up_href=up_href, up_label=up_label),
         encoding="utf-8",
     )
     return str(out_path)
