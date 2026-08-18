@@ -182,11 +182,7 @@ def _parse_config(raw: dict[str, Any]) -> PrimeContractorConfig:
     if isinstance(bg, dict) and bg:
         defaults = BudgetConfig()
         tier_raw = bg.get("tier_multipliers")
-        tier_val = (
-            tier_raw
-            if isinstance(tier_raw, dict)
-            else defaults.tier_multipliers
-        )
+        tier_val = tier_raw if isinstance(tier_raw, dict) else defaults.tier_multipliers
         config.budget = BudgetConfig(
             spec_budget_tokens=bg.get(
                 "spec_budget_tokens", defaults.spec_budget_tokens
@@ -233,9 +229,7 @@ def _parse_config(raw: dict[str, Any]) -> PrimeContractorConfig:
             enrichment_budget_chars=bg.get(
                 "enrichment_budget_chars", defaults.enrichment_budget_chars
             ),
-            chars_per_token=bg.get(
-                "chars_per_token", defaults.chars_per_token
-            ),
+            chars_per_token=bg.get("chars_per_token", defaults.chars_per_token),
             tier_multipliers=tier_val,
         )
 
@@ -304,6 +298,7 @@ def apply_cli_overrides(
             # Sync to typed config
             if config.complexity_config is None:
                 from startd8.complexity.models import ComplexityRoutingConfig
+
                 config.complexity_config = ComplexityRoutingConfig()
             setattr(config.complexity_config, field_name, cli_val)
     if getattr(args, "tier3_agent", None):
@@ -350,6 +345,7 @@ def apply_cli_overrides(
     provider = getattr(args, "provider", None)
     if provider:
         from startd8.model_roles import resolve_role_spec
+
         config.default_provider = str(provider)
         for role in ("lead", "drafter", "tier3"):
             if getattr(config.agents, role) is None:
@@ -360,5 +356,16 @@ def apply_cli_overrides(
                 # the contractor's own default applies later).
                 if resolved.startswith(f"{provider}:"):
                     setattr(config.agents, role, resolved)
+
+    # Decouple, Step 1 — the benchmark OWNS its degradation via config instead of free-riding the
+    # shared default. `--benchmark-mode` measures raw model skill, so Micro Prime + complexity routing
+    # must be OFF (FR-1/FR-2/FR-27). Forcing them off HERE (last, so it wins over every override above)
+    # means a future flip of the *default* to full-quality-by-default (Step 2) can never silently turn
+    # them on for a benchmark run. No-op on today's behavior (both already default off); load-bearing
+    # only once the default flips. The `--benchmark-mode`×`--micro-prime` argparse mutual-exclusion
+    # stays as belt-and-suspenders.
+    if getattr(args, "benchmark_mode", False):
+        config.micro_prime_enabled = False
+        config.complexity_routing_enabled = False
 
     return config

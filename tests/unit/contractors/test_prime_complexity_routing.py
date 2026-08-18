@@ -3,9 +3,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from startd8.complexity import ComplexityRoutingConfig, ComplexityTier, TaskComplexitySignals
+from startd8.complexity import (
+    ComplexityRoutingConfig,
+    ComplexityTier,
+    TaskComplexitySignals,
+)
 from startd8.contractors.protocols import GenerationResult
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -37,7 +40,9 @@ def _make_workflow(**kwargs):
     return wf, mock_gen
 
 
-def _make_feature(name="test-feature", target_files=None, description="Implement foo", metadata=None):
+def _make_feature(
+    name="test-feature", target_files=None, description="Implement foo", metadata=None
+):
     """Build a mock FeatureSpec."""
     from startd8.contractors.queue import FeatureSpec
 
@@ -402,3 +407,38 @@ class TestDevelopFeatureRouting:
         micro_prime_gen.generate.assert_called_once()
         default_gen.generate.assert_not_called()
         assert feature.metadata["_complexity_tier"] == "simple"
+
+
+class TestBenchmarkModeDecouple:
+    """Decouple Step 1: ``--benchmark-mode`` OWNS its degradation — it forces Micro Prime + complexity
+    routing OFF via config (overriding any enable), so a future flip of the shared default to
+    full-quality-by-default (Step 2) can never silently turn them on for a benchmark run.
+    """
+
+    def _apply(self, **args):
+        from types import SimpleNamespace
+
+        from startd8.contractors.prime_contractor_config import (
+            PrimeContractorConfig,
+            apply_cli_overrides,
+        )
+
+        return apply_cli_overrides(PrimeContractorConfig(), SimpleNamespace(**args))
+
+    def test_benchmark_forces_both_off(self):
+        pc = self._apply(benchmark_mode=True)
+        assert pc.micro_prime_enabled is False
+        assert pc.complexity_routing_enabled is False
+
+    def test_benchmark_overrides_an_enable_attempt(self):
+        # applied last → benchmark wins even if micro-prime/routing were turned on upstream
+        pc = self._apply(benchmark_mode=True, micro_prime=True, complexity_routing=True)
+        assert pc.micro_prime_enabled is False
+        assert pc.complexity_routing_enabled is False
+
+    def test_non_benchmark_run_is_unaffected(self):
+        # the Step-1 block is inert without --benchmark-mode; an explicit enable still works
+        # (proves zero behavioral change to normal runs today)
+        pc = self._apply(micro_prime=True, complexity_routing=True)
+        assert pc.micro_prime_enabled is True
+        assert pc.complexity_routing_enabled is True
