@@ -61,18 +61,28 @@ coordinations** (owners' calls).
   rollup**; enforce invariant 9. **Spec it folding OQ-1 (planned-vs-realized delta) + OQ-4 (rollup semantics)** from
   the research agenda. Deps built (REQ-18/19).
 
-### 2.6 det-crp-kit (needs a spec first)
+### 2.6 det-crp-kit (needs a spec first — now census-grounded)
 - Thin: version the focus-file + Appendix-A/B/C review-log schemas out of the agent guide; add `crp_lint.py`; **cite**
   `new-cnvrg-rvw-prmpt` as the `$0` compiler. Complements det-plan (the mirror-asymmetric cell).
+- **Grounded in `dev-os/CRP-INDEX.md`** (the findings-half twin of the reflective-pairs index): 1033 review-logs +
+  33 saved prompts = the corpus; strong/medium/weak Appendix conformance (802/243/**213 weak** = `crp_lint`'s backlog).
+  Cite it in the spec exactly as det-plan cites reflective-pairs. See `ANALYSIS_crp-index-review-wisdom-into-grammar.md`.
 
 ## 3. Research backlog — detailed (from `RESEARCH_AGENDA_*`)
 
 **Research-now (emeritus lane, unblocked):**
-1. **Concept-embedding mining** 🥇 — re-mine the 6 corpora by *meaning* not keyword (kaizen scored 0% on grounding
-   despite being about it); would honestly re-measure the Craft-Grammar claim. Highest-signal.
-2. **Two-IR twin reconciliation** — a note reconciling Lesson↔SARIF + CRP-log↔SARIF onto one findings representation,
+1. **CRP-theme metabolization** 🥇 — `/audit-then-metabolize` on `CRP-INDEX.md`'s 7299 accepted suggestions: mine the
+   recurring themes, metabolize the top *un-metabolized* one into a det-req/det-plan grammar rule so drafts satisfy it
+   and reviews stop re-deriving it (shift-left). **Top pick: an "ambiguity" lint** (theme #2 — 158 docs, 542 rows).
+   *(We already metabolized themes #1 verify + #4 observability into REQ-22/23 — this continues the proven method.)*
+   See `ANALYSIS_crp-index-review-wisdom-into-grammar.md`.
+2. **Concept-embedding mining** — re-mine the 6 corpora by *meaning* not keyword (kaizen scored 0% on grounding
+   despite being about it); would honestly re-measure the Craft-Grammar claim.
+3. **Two-IR twin reconciliation** — a note reconciling Lesson↔SARIF + CRP-log↔SARIF onto one findings representation,
    *before* det-crp-kit + the retrospective build fork it.
-3. **Cross-corpus universality** — extend the grammar census to legal + benchmark + household (universal vs local).
+4. **Cross-corpus universality** — extend the grammar census to legal + benchmark + household (universal vs local).
+5. **The re-seeking dormancy** — investigate why `PATTERN-CATALOG`/the Phase-4.5 lookup under-fuels draft-time (a
+   dormant cross-doc-memory value path; feeds the retrospective/metabolize loop).
 
 **Fold-into-a-REQ:** OQ-1/OQ-4 → the realization-facet REQ (§2.5) · OQ-R4/R6 → the general retrospective-bridge.
 **Watch:** convention-promotion tracking — re-census after the next corpus.
