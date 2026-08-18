@@ -101,7 +101,7 @@ Formalizing a bookend doc is **false precision** — do not do it.
 |-----|------------|--------|--------|
 | **det-req-kit** | the REQUIREMENT (FRs) | **SHIPPED** | 🔴 thin source (the origin) |
 | **det-plan-kit** | the PLAN | **next** — grammar spec authored | 🟡 `$0` projection of REQ (schema already in det-req-kit §9) |
-| **det-crp-kit** | the CONVERGENT REVIEW (focus + Appendix-A/B/C review-log) | assessed → **thin** | 🟡 `$0` (compiler `new-cnvrg-rvw-prmpt` already runs) |
+| **det-crp-kit** | the CONVERGENT REVIEW (focus + Appendix-A/B/C review-log) | **thin — grammar spec authored** (`SCHEMA_det-crp-0.1`) | 🟡 `$0` (compiler `new-cnvrg-rvw-prmpt` already runs; **no projector** — format+lint only) |
 | **det-handoff-kit** | the HANDOFF | candidate | 🟡 `$0` projection of REQ+ledger |
 | **det-howto-kit** · **det-ledger-kit** | HOWTO/generated docs · the ledger | candidate (terminal, lower value) | 🟢 output/state projection |
 

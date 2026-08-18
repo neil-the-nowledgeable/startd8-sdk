@@ -4,7 +4,8 @@
 **Proved by:** REQ-29 — `src/startd8/plan_codegen/` (the det-plan projector), shipped `35e75c89`, hardened `33606c12`.
 **Hardened by:** a `/reflective-adoption` **cold-adopter dry-run** (2026-08-17) that tried to build the det-crp projector
 from this doc alone and found the gaps §0/§Part-6 below close.
-**Governs:** every future det-doc-kit **projector** (the `det-crp`, `det-handoff`, `det-howto`, `det-ledger` generators).
+**Governs:** every future det-doc-kit **projector** — `det-handoff` (`$0` REQ+ledger→HANDOFF), `det-howto`, `det-ledger`.
+**Does NOT govern:** `det-crp` — it is a **thin format+lint kit whose generator already exists** (the `new-cnvrg-rvw-prmpt` compiler); the review-log is human-*accreted*, not projected. See `SCHEMA_det-crp-0.1.md §9`. (Cold-adopter dry-run finding: not every det-doc-kit member is a projector.)
 **Grounded in:** the working code + `PILOT_REPORT_REQ-29-det-plan-projector.md`, not aspiration.
 
 > **One line:** a det-doc-kit projector is a `$0`, LLM-free, pure function of an upstream authored doc, shaped as a
@@ -14,9 +15,10 @@ from this doc alone and found the gaps §0/§Part-6 below close.
 
 ## Why this is a standard now (Mottainai — don't re-derive it)
 
-REQ-29 built the **first** projector in the det-doc-kit family. The next four members (`det-crp`, `det-handoff`,
-`det-howto`, `det-ledger`) will each need a projector. Rather than re-derive the shape from `backend_codegen`
-each time (and re-hit the same traps below), this codifies what the first build *actually proved*.
+REQ-29 built the **first** projector in the det-doc-kit family. The **projector** members (`det-handoff`,
+`det-howto`, `det-ledger`) will each need one; `det-crp` will **not** (its `$0` generator, the
+`new-cnvrg-rvw-prmpt` compiler, already runs — the dry-run corrected this). Rather than re-derive the shape from
+`backend_codegen` each time (and re-hit the same traps below), this codifies what the first build *actually proved*.
 
 ## §0. Preconditions — STEP 0 before any code (cold-adopter dry-run, GAP-A/B)
 
@@ -112,11 +114,11 @@ cell) is accepted by **§-conformance + zero findings** instead (REQ-16/17).
 - **Spread:** this standard is the input to the next `/reflective-requirements` for `det-crp-kit` /
   `det-handoff-kit`. Each builds the same 5-part shape; each runs its own golden-diff; each audits I-1 against its
   own source grammar first.
-- **Feed the forward loop:** the `det-crp` projector's source is the CRP focus + Appendix-A/B/C review-log — but the
-  cold-adopter dry-run found det-crp is **blocked on §0**: (a) no `SCHEMA_det-crp-0.1.md` exists yet, and (b) its source
-  is an *embedded* review-log section possibly produced by the `new-cnvrg-rvw-prmpt` **compiler** (generated, not
-  authored). Resolve §0.1 (author the format) and §0.2 (define the authored source) **before** writing det-crp's
-  `projector.py`; then audit its fields for I-1.
+- **Feed the forward loop:** the real *second projector* is **det-handoff** (`$0` REQ+ledger→HANDOFF). Before building
+  it, do §0: author `SCHEMA_det-handoff-0.1.md`, and name its single authored source (the REQ + the ledger state — audit
+  which fields are authored vs generated per I-1). **`det-crp` is NOT that test** — the cold-adopter dry-run found its
+  generator already exists; it became a thin format+lint kit instead (`SCHEMA_det-crp-0.1.md`, authored 2026-08-17,
+  cites the compiler, no projector).
 - **Convergence note:** the SDK-owns-projector / kit-owns-format split (I-2) independently matches
   `backend_codegen`'s provider pattern — cite, don't re-fork.
 
@@ -125,8 +127,8 @@ cell) is accepted by **§-conformance + zero findings** instead (REQ-16/17).
 | Adoption | Kind | Result | Friction folded back |
 |----------|------|--------|----------------------|
 | REQ-29 five-pilot (format, iter-1) | across req *instances* (same corpus) | format hardened | G-1/G-2/G-3 → `SCHEMA_det-plan-0.1 §2/§3` |
-| Cold-adopter dry-run → det-crp (2026-08-17) | simulated, single-agent | standard hardened | GAP-A/B → §0 preconditions; GAP-C/D/E/F → Part 6 |
-| *det-crp projector build* | **pending** — the first *real* second-consumer adoption | — | (the true `/reflective-adoption` gate) |
+| Cold-adopter dry-run → det-crp (2026-08-17) | simulated, single-agent | standard hardened **+ premise corrected** | GAP-A/B → §0; GAP-C/D/E/F → Part 6; **det-crp is not a projector** → `SCHEMA_det-crp-0.1.md` (thin format+lint kit, generator cited) |
+| *det-handoff projector build* | **pending** — the real second-*projector* adoption (`$0` REQ+ledger→HANDOFF) | — | (the true `/reflective-adoption` gate; needs `SCHEMA_det-handoff-0.1` first) |
 
 *proved-once + cold-adopter-hardened — one projector (det-plan) establishes the shape, and a simulated cold-adopter
 closed the shape→build-spec gap. It becomes a **full** standard only when a second projector (det-crp/det-handoff) is
