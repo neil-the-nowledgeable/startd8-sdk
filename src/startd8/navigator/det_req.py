@@ -20,16 +20,32 @@ _VERIFY_LABEL = re.compile(
     r"(?:\*\*)?\bVerify(?:\s*\((?P<ann>[^)]*)\))?:(?:\*\*)?\s*(?P<v>.*)$", re.DOTALL
 )
 _TOUCHES_LABEL = re.compile(r"(?:\*\*)?\bTouches(?:\s*\([^)]*\))?:(?:\*\*)?\s*")
-_LIVES_LABEL = re.compile(r"(?:\*\*)?\bLives(?:\s*\([^)]*\))?:(?:\*\*)?\s*", re.IGNORECASE)
+_LIVES_LABEL = re.compile(
+    r"(?:\*\*)?\bLives(?:\s*\([^)]*\))?:(?:\*\*)?\s*", re.IGNORECASE
+)
 _LIVES_STOP = re.compile(
     r"(?:\*\*)?\b(?:Verify|Touches|Serves|Depends|Attrs|Lives)(?:\s*\([^)]*\))?:",
     re.IGNORECASE,
 )
 _GIT_REF = re.compile(r"^git:[0-9a-f]{40}:\S+")
 _LIVES_SKIP_TYPES = frozenset({"owned_elsewhere", "declared_unimplemented"})
-_DONEISH_RE = re.compile(r"^(?:already\s+true|met|done|delivered|closed)\b", re.IGNORECASE)
+_DONEISH_RE = re.compile(
+    r"^(?:already\s+true|met|done|delivered|closed)\b", re.IGNORECASE
+)
+# REQ-feature-capability-composition-rollup FR-1: a Serves:/Composes: target is an objective `O-N`
+# OR a capability id — a `CAP-*` handle or a dotted capability_id (`startd8.provider.registry`) — so a
+# feature can declare the capability it composes up to. Backward-compatible: an all-`O-N` list parses
+# byte-for-byte as before (the O-N alternative is tried first).
+_SERVES_TOKEN = r"(?:O-\d+|CAP-[\w-]+|[A-Za-z_][\w]*(?:\.[\w]+)+)"
 _SERVES = re.compile(
-    r"(?:\*\*)?\bServes:(?:\*\*)?\s*((?:O-\d+)(?:\s*,\s*O-\d+)*)\.?", re.IGNORECASE
+    rf"(?:\*\*)?\bServes:(?:\*\*)?\s*({_SERVES_TOKEN}(?:\s*,\s*{_SERVES_TOKEN})*)\.?",
+    re.IGNORECASE,
+)
+# `Composes:` is a sibling label for the same attribute (a feature composes up to a capability); its
+# targets merge into `fr["serves"]` so the one `serves` graph edge draws them (no new edge kind).
+_COMPOSES = re.compile(
+    rf"(?:\*\*)?\bComposes:(?:\*\*)?\s*({_SERVES_TOKEN}(?:\s*,\s*{_SERVES_TOKEN})*)\.?",
+    re.IGNORECASE,
 )
 
 
@@ -133,7 +149,9 @@ def parse_was_aliases(rest: str) -> Tuple[str, Tuple[str, ...]]:
 
 # REQ-22 FR-1: the OPTIONAL runnable gate handle beside the prose Verify — a command / test id / named
 # fitness function. A plain field (no dispatch framework, NR-4); absent → verify is prose-only.
-_GATE = re.compile(r"(?:\*\*)?\bGate:(?:\*\*)?\s*(?P<g>.+?)(?:\.(?=\s|$)|$)", re.IGNORECASE)
+_GATE = re.compile(
+    r"(?:\*\*)?\bGate:(?:\*\*)?\s*(?P<g>.+?)(?:\.(?=\s|$)|$)", re.IGNORECASE
+)
 
 
 def parse_gate(rest: str) -> Tuple[str, str]:
@@ -146,10 +164,28 @@ def parse_gate(rest: str) -> Tuple[str, str]:
     return cleaned, gate
 
 
-def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dict[str, str]], Optional[str], Tuple[str, ...], Tuple[str, ...], str, str]:
+def split_fr_fields(
+    rest: str,
+) -> Tuple[
+    str,
+    List[str],
+    str,
+    List[str],
+    List[Dict[str, str]],
+    Optional[str],
+    Tuple[str, ...],
+    Tuple[str, ...],
+    str,
+    str,
+]:
     sm = _SERVES.search(rest)
     serves = [s.strip() for s in sm.group(1).split(",") if s.strip()] if sm else []
     rest = _SERVES.sub("", rest).strip()
+    # FR-1: a `Composes:` sibling merges into the same `serves` attribute (a composition target).
+    cm = _COMPOSES.search(rest)
+    if cm:
+        serves += [s.strip() for s in cm.group(1).split(",") if s.strip()]
+        rest = _COMPOSES.sub("", rest).strip()
     rest, approve_prompts = parse_approve_prompts(rest)
     rest, was_aliases = parse_was_aliases(rest)
     # REQ-22 FR-1: extract the optional Gate handle before the Lives/Verify split (same class as
@@ -178,7 +214,18 @@ def split_fr_fields(rest: str) -> Tuple[str, List[str], str, List[str], List[Dic
     else:
         behavior = rest[:verify_start].strip()
         touches = []
-    return behavior, touches, verify, serves, lives, verify_ann, approve_prompts, was_aliases, name, gate
+    return (
+        behavior,
+        touches,
+        verify,
+        serves,
+        lives,
+        verify_ann,
+        approve_prompts,
+        was_aliases,
+        name,
+        gate,
+    )
 
 
 def fr_health(fr: Dict[str, Any]) -> str:
@@ -254,7 +301,9 @@ def _frs_from_kit_doc(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         fr: Dict[str, Any] = {
             "id": str(raw.get("id", "")),
-            "title": str(raw.get("title") or raw.get("behavior") or raw.get("id") or ""),
+            "title": str(
+                raw.get("title") or raw.get("behavior") or raw.get("id") or ""
+            ),
             "name": str(raw.get("name") or ""),
             "behavior": str(raw.get("behavior") or raw.get("title") or ""),
             "touches": list(raw.get("touches") or []),
@@ -288,7 +337,9 @@ def parse_fr_lines_prefer_kit(text: str) -> List[Dict[str, Any]]:
         )
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location("startd8_det_req_kit_extract", extract_py)
+    spec = importlib.util.spec_from_file_location(
+        "startd8_det_req_kit_extract", extract_py
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load det-req-kit extract from {extract_py}")
     mod = importlib.util.module_from_spec(spec)

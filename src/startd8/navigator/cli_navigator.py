@@ -76,7 +76,7 @@ def build(
     source: str = typer.Option(
         ...,
         "--source",
-        help="Node source: capability-index | requirements | node-schema | pipeline | nodes-json",
+        help="Node source: capability-index | requirements | requirements+capabilities | node-schema | pipeline | nodes-json",
     ),
     fmt: str = typer.Option(
         "json", "--format", help="Output format: json | html | a11y"
@@ -128,6 +128,13 @@ def build(
         "--realization-provenance",
         help="REQ-19: an emitted realization-provenance JSON artifact; grounds the determinism-% as "
         "`measured` (else the declared fallback). Applies to --format html --renderer wireframe.",
+    ),
+    rank_direction: Optional[str] = typer.Option(
+        None,
+        "--rank-direction",
+        help="REQ-composition-rollup: graph layout rank. `ground-up` ranks capabilities above their "
+        "composing features (bottom-up rollup); default (unset) keeps the current layout byte-identical. "
+        "Applies to --renderer graph.",
     ),
     cross_link: Optional[List[str]] = typer.Option(
         None,
@@ -188,6 +195,22 @@ def build(
                 raise typer.Exit(_EXIT_ERR)
             # FR-17: masthead identity (eyebrow=key · headline=H1 title · sub=semantic name) derived
             # from THIS requirement, not the static 'This spec' / 'A first look at this spec' copy.
+            profile = requirements_profile_for(requirements)
+            project_root = str(requirements.parent)
+        elif source in ("requirements+capabilities", "requirements+capability"):
+            # REQ-feature-capability-composition-rollup FR-2: join the feature nodes and the capability
+            # nodes into ONE node set so a feature→capability `serves` edge has BOTH endpoints present
+            # (the add_semantic guard drops an edge whose target isn't in the graph). Neither source
+            # function is modified — this concatenates them (composition is additive).
+            if requirements is None:
+                console.print(
+                    "[red]error:[/red] --requirements is required for source=requirements+capabilities"
+                )
+                raise typer.Exit(_EXIT_ERR)
+            req_nodes = list(nodes_from_requirements(requirements))
+            cap_path = capability_index or default_capability_index_path()
+            cap_nodes = list(nodes_from_capability_index(cap_path))
+            nodes = req_nodes + cap_nodes
             profile = requirements_profile_for(requirements)
             project_root = str(requirements.parent)
         elif source == "node-schema":
@@ -290,6 +313,9 @@ def build(
                     out,
                     title=f"Node Graph — {source}",
                     semantic_only=semantic_only,
+                    rank_direction=(
+                        rank_direction.strip().lower() if rank_direction else None
+                    ),
                 )
             else:  # wireframe
                 # REQ-19: load the measured provenance artifact (if given) → a join source that relabels

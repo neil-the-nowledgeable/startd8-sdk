@@ -21,6 +21,7 @@ kind-distinguished styling) and a thin CSS/JS layer for pan/zoom/hover-highlight
 live physics sim. Same input → byte-identical bytes; cycle-safe by construction (fixed iterations,
 never a DAG recursion). No CDN, no ``<script src>`` (NR-6).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -48,14 +49,17 @@ except ImportError:  # pragma: no cover
 # The five semantic edge kinds get distinct colours + a dash pattern so the network reads at a glance.
 _EDGE_STYLE: Dict[str, Tuple[str, str]] = {
     # label:            (stroke colour, stroke-dasharray)
-    "depends-on": ("#f85149", ""),          # dependency — solid red
-    "serves": ("#3fb950", "5 3"),           # serves — dashed green
-    "built-by": ("#58a6ff", "2 3"),         # built-by — dotted blue
-    "delivers": ("#d29922", "7 3"),         # delivers — long-dash amber
-    "contains-child": ("#9aa4b2", "1 4"),   # containment — faint grey
+    "depends-on": ("#f85149", ""),  # dependency — solid red
+    "serves": ("#3fb950", "5 3"),  # serves — dashed green
+    "built-by": ("#58a6ff", "2 3"),  # built-by — dotted blue
+    "delivers": ("#d29922", "7 3"),  # delivers — long-dash amber
+    "contains-child": ("#9aa4b2", "1 4"),  # containment — faint grey
     # REQ-16/REQ-20 typed derivation edges — the compilation + feedback loop, visibly distinguished:
-    "derived-from": ("#39c5cf", ""),        # forward grounding — solid cyan
-    "revises": ("#bc8cff", "6 3"),          # backward FEEDBACK proposal (REQ-20) — dashed violet
+    "derived-from": ("#39c5cf", ""),  # forward grounding — solid cyan
+    "revises": (
+        "#bc8cff",
+        "6 3",
+    ),  # backward FEEDBACK proposal (REQ-20) — dashed violet
     # presentation-only view markers (only reachable under --full-graph)
     "has-section": ("#3a4150", "2 6"),
     "contains": ("#3a4150", "2 6"),
@@ -69,7 +73,7 @@ _STATUS_FILL: Dict[str, str] = {
     NodeStatus.SPEC: "#58a6ff",
     NodeStatus.DEPRECATED: "#f85149",
 }
-_SECTION_FILL = "#30363d"   # view-marker section nodes (full-graph only)
+_SECTION_FILL = "#30363d"  # view-marker section nodes (full-graph only)
 _DEFAULT_FILL = "#484f58"
 
 # SVG canvas (viewBox units). Node ``at`` coords are 0..1 fractions of these.
@@ -77,7 +81,7 @@ _W = 1600
 _H = 1000
 _MARGIN = 80
 _NODE_R = 9
-_ITERATIONS = 60           # FIXED — cycle-safe, deterministic, no early-exit on convergence
+_ITERATIONS = 60  # FIXED — cycle-safe, deterministic, no early-exit on convergence
 
 _GRAPH_CSS = """
 :root{--bg:#0f1115;--card:#171a21;--edge:#262b36;--fg:#e6e9ef;--mut:#9aa4b2;}
@@ -160,24 +164,55 @@ def _det_jitter(key: str) -> Tuple[float, float]:
     """A tiny deterministic offset derived from the node key hash (never ``random`` — D1).
 
     Returns dx,dy in [-0.5, 0.5) fractions of a layout cell, used only to break exact coordinate ties
-    so two nodes seeded at the same ``at`` don't stack perfectly on top of each other."""
+    so two nodes seeded at the same ``at`` don't stack perfectly on top of each other.
+    """
     digest = hashlib.sha256(key.encode("utf-8")).digest()
     dx = digest[0] / 255.0 - 0.5
     dy = digest[1] / 255.0 - 0.5
     return dx, dy
 
 
+def _ground_up_rank_y(edges: Sequence[Dict[str, Any]]) -> Dict[str, float]:
+    """REQ-feature-capability-composition-rollup FR-4 — a ground-up rank seed: a node that is the TARGET
+    of a ``serves`` edge (the capability/objective a feature composes up to) ranks at the ROOT band (small
+    y / top); a node that is the SOURCE of a ``serves`` edge (a composing feature) ranks at the BASE (large
+    y). So a capability is shown assembled bottom-up from its features. Deterministic, no new renderer.
+    """
+    targets, sources = set(), set()
+    for e in edges:
+        if e.get("label") == "serves":
+            if isinstance(e.get("to"), str):
+                targets.add(e["to"])
+            if isinstance(e.get("from"), str):
+                sources.add(e["from"])
+    rank: Dict[str, float] = {}
+    for t in targets:
+        rank[t] = 0.15  # capability / objective → root band (top)
+    for s in sources:
+        if (
+            s not in targets
+        ):  # a pure feature (composes up, nothing composes up to it) → base
+            rank[s] = 0.85
+    return rank
+
+
 def _layout(
-    graph_nodes: Sequence[Dict[str, Any]], edges: Sequence[Dict[str, Any]]
+    graph_nodes: Sequence[Dict[str, Any]],
+    edges: Sequence[Dict[str, Any]],
+    rank_direction: Optional[str] = None,
 ) -> Dict[str, Tuple[float, float]]:
     """Deterministic force-refined layout → {node_id: (x_px, y_px)} in viewBox units.
 
     Seeds each node from its projection ``at:{x,y}`` (a 0..1 fraction), adds a key-derived jitter, then
     runs a FIXED number of force iterations (repulsion between all pairs + spring pull along edges).
     Constant iteration count and no RNG ⇒ byte-identical across runs and cycle-safe (the force model
-    never recurses; a cycle is just three mutual springs)."""
+    never recurses; a cycle is just three mutual springs). ``rank_direction="ground-up"`` overrides the
+    seed y by a serves-composition rank (capabilities at the root band, features at the base — FR-4);
+    ``None`` (default) keeps the projection's y so existing renders are byte-identical.
+    """
     inner_w = _W - 2 * _MARGIN
     inner_h = _H - 2 * _MARGIN
+    rank_y = _ground_up_rank_y(edges) if rank_direction == "ground-up" else {}
     ids: List[str] = []
     pos: Dict[str, List[float]] = {}
     for gn in graph_nodes:
@@ -186,7 +221,9 @@ def _layout(
             continue
         at = gn.get("at") or {}
         fx = float(at.get("x", 0.5))
-        fy = float(at.get("y", 0.5))
+        fy = rank_y.get(
+            nid, float(at.get("y", 0.5))
+        )  # FR-4: ground-up rank seed overrides the projection y
         jx, jy = _det_jitter(nid)
         x = _MARGIN + (fx + jx * 0.02) * inner_w
         y = _MARGIN + (fy + jy * 0.02) * inner_h
@@ -226,7 +263,7 @@ def _layout(
                     dx = (dh[0] / 255.0 - 0.5) * 0.01 + 1e-3
                     dy = (dh[1] / 255.0 - 0.5) * 0.01 + 1e-3
                     dist2 = dx * dx + dy * dy
-                dist = dist2 ** 0.5
+                dist = dist2**0.5
                 force = k_rep / dist2
                 ux, uy = dx / dist, dy / dist
                 disp[ai][0] += ux * force
@@ -254,6 +291,12 @@ def _layout(
             p[0] = min(_W - _MARGIN, max(_MARGIN, p[0]))
             p[1] = min(_H - _MARGIN, max(_MARGIN, p[1]))
 
+    # FR-4: in ground-up mode re-clamp each ranked node's y to its rank band AFTER the force pass, so a
+    # capability stays above its composing features (the serves springs would otherwise pull them together).
+    for nid, frac in rank_y.items():
+        if nid in pos:
+            pos[nid][1] = _MARGIN + frac * inner_h
+
     return {nid: (round(p[0], 2), round(p[1], 2)) for nid, p in pos.items()}
 
 
@@ -264,12 +307,15 @@ def _labels_via_lenses(
 
     ``project_nodes`` returns a positional flat list of item-view dicts (one per node, in input order),
     so we zip by index against the same flat node list (D3). Soft dependency: if the transform is absent
-    (import-guarded) or ``role`` is None, returns {} and the caller falls back to raw ``Node`` labels."""
+    (import-guarded) or ``role`` is None, returns {} and the caller falls back to raw ``Node`` labels.
+    """
     if project_nodes is None or role is None:
         return {}
     try:
         views = project_nodes(list(nodes), role=role, fluency=fluency)
-    except Exception:  # pragma: no cover - defensive; a broken lens never breaks the render
+    except (
+        Exception
+    ):  # pragma: no cover - defensive; a broken lens never breaks the render
         return {}
     out: Dict[str, str] = {}
     for node, view in zip(nodes, views):
@@ -290,7 +336,8 @@ def _flatten_source_nodes(nodes: Sequence[Node]) -> List[Node]:
 
 def _edge_path(x1: float, y1: float, x2: float, y2: float) -> str:
     """A gently-curved quadratic path from (x1,y1) to (x2,y2) — a fixed perpendicular bow so parallel
-    edges between the same pair are still visually separable and self-loops would arc (deterministic)."""
+    edges between the same pair are still visually separable and self-loops would arc (deterministic).
+    """
     mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
     dx, dy = x2 - x1, y2 - y1
     # perpendicular offset, magnitude a fixed fraction of the edge length (no RNG)
@@ -310,6 +357,7 @@ def render_navigator_graph_html(
     semantic_only: bool = True,
     role: Optional[str] = None,
     fluency: str = "intermediate",
+    rank_direction: Optional[str] = None,
 ) -> Path:
     """Render Nodes as a standalone, offline, interactive node-link **graph** (REQ-05 FR-2).
 
@@ -341,7 +389,9 @@ def render_navigator_graph_html(
     if semantic_only:
         # Exclude view-marker nodes + non-semantic edges via the STAMPED fields, not id prefixes (FR-4c).
         graph_nodes = [
-            gn for gn in graph_nodes if not (gn.get("data") or {}).get("view_marker", False)
+            gn
+            for gn in graph_nodes
+            if not (gn.get("data") or {}).get("view_marker", False)
         ]
         kept_ids = {gn["id"] for gn in graph_nodes}
         edges = [
@@ -353,9 +403,11 @@ def render_navigator_graph_html(
         ]
 
     # Lens labels (FR-5), keyed by Node.key over the flattened source nodes.
-    lens_labels = _labels_via_lenses(_flatten_source_nodes(nodes), role=role, fluency=fluency)
+    lens_labels = _labels_via_lenses(
+        _flatten_source_nodes(nodes), role=role, fluency=fluency
+    )
 
-    positions = _layout(graph_nodes, edges)
+    positions = _layout(graph_nodes, edges, rank_direction=rank_direction)
 
     # ---- draw edges (behind nodes) ------------------------------------------------
     edge_svg: List[str] = []
@@ -410,7 +462,7 @@ def render_navigator_graph_html(
                 break
         inner = (
             f'<g class="gnode" data-id="{safe_id}" transform="translate({x} {y})">'
-            f'<title>{tooltip}</title>'
+            f"<title>{tooltip}</title>"
             f'<circle r="{_NODE_R}" fill="{fill}"></circle>'
             f'<text x="{_NODE_R + 4}" y="4">{safe_label}</text>'
             f"</g>"
