@@ -421,6 +421,48 @@ def verify_all(home: Optional[str] = None) -> List[LedgerFinding]:
     return findings
 
 
+def project_trends(ledger: ProjectGenerationLedger) -> Dict[str, Any]:
+    """Per-project run-over-run trends (follow-on #4) — turns the run history into insight.
+
+    For each run (chronological): cost, features passed, and the **$0-local ratio** — the share of
+    features generated at zero cost (Ollama/Micro Prime). That ratio is the micro-prime engagement
+    signal: as the decouple (full-quality-by-default) takes hold, more simple features route local →
+    the ratio rises and cost falls. Slopes reuse the shared ``trend_math.linear_slope`` (the same
+    math ``batch_postmortem`` uses per-batch, lifted to per-project).
+    """
+    from startd8.utils.trend_math import linear_slope
+
+    runs = sorted(
+        (r for b in ledger.batches for r in b.get("runs", [])),
+        key=lambda r: r.get("generated_at", ""),
+    )
+    series: List[Dict[str, Any]] = []
+    for r in runs:
+        feats = r.get("features", []) or []
+        local = sum(1 for f in feats if (f.get("cost_usd") or 0.0) == 0.0)
+        series.append(
+            {
+                "run_id": r.get("run_id", ""),
+                "generated_at": r.get("generated_at", ""),
+                "cost_usd": r.get("cost_usd", 0.0),
+                "features_passed": r.get("features_passed", 0),
+                "local_features": local,
+                "total_features": len(feats),
+                "local_ratio": (local / len(feats)) if feats else 0.0,
+            }
+        )
+    costs = [s["cost_usd"] for s in series]
+    ratios = [s["local_ratio"] for s in series]
+    return {
+        "project_id": ledger.project_id,
+        "runs": series,
+        "cost_slope": (linear_slope(costs) or 0.0) if len(costs) >= 2 else None,
+        "local_ratio_slope": (
+            (linear_slope(ratios) or 0.0) if len(ratios) >= 2 else None
+        ),
+    }
+
+
 def record_run(
     project_root: str, *, home: Optional[str] = None
 ) -> ProjectGenerationLedger:

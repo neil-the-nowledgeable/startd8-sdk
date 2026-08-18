@@ -282,3 +282,53 @@ def test_fr6_verify_all_spans_projects(tmp_path):
     # other-app cites artifacts that don't exist → verify_all surfaces its phantoms
     findings = gl.verify_all(home)
     assert any(f.project_id == "other-app" for f in findings)
+
+
+# ── #4: per-project trends ─────────────────────────────────────────────────────────────────────────
+
+
+def test_project_trends_computes_slopes():
+    led = gl.ProjectGenerationLedger(project_id="p", project_path="/p")
+    # run1: cost 2.0, 1/2 local; run2: cost 1.0, 2/2 local — cost falling + local rising (decouple win)
+    led.upsert_run(
+        {"batch_id": "b1"},
+        {
+            "run_id": "r1",
+            "generated_at": "2026-01-01",
+            "cost_usd": 2.0,
+            "features_passed": 2,
+            "features": [{"cost_usd": 0.0}, {"cost_usd": 2.0}],
+        },
+    )
+    led.upsert_run(
+        {"batch_id": "b1"},
+        {
+            "run_id": "r2",
+            "generated_at": "2026-01-02",
+            "cost_usd": 1.0,
+            "features_passed": 2,
+            "features": [{"cost_usd": 0.0}, {"cost_usd": 0.0}],
+        },
+    )
+    t = gl.project_trends(led)
+    assert [s["run_id"] for s in t["runs"]] == ["r1", "r2"]  # chronological
+    assert t["runs"][0]["local_ratio"] == 0.5 and t["runs"][1]["local_ratio"] == 1.0
+    assert t["cost_slope"] < 0  # cost trending down
+    assert t["local_ratio_slope"] > 0  # $0-local (micro-prime) trending up
+
+
+def test_project_trends_single_run_has_no_slope():
+    led = gl.ProjectGenerationLedger(project_id="p", project_path="/p")
+    led.upsert_run(
+        {"batch_id": "b1"},
+        {
+            "run_id": "r1",
+            "generated_at": "2026-01-01",
+            "cost_usd": 1.0,
+            "features_passed": 1,
+            "features": [{"cost_usd": 0.0}],
+        },
+    )
+    t = gl.project_trends(led)
+    assert len(t["runs"]) == 1
+    assert t["cost_slope"] is None and t["local_ratio_slope"] is None

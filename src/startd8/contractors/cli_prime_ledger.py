@@ -210,3 +210,55 @@ def record(
         f"{cum['features_total_in_batch']} · {cum['status']}"
     )
     raise typer.Exit(_EXIT_OK)
+
+
+@prime_ledger_app.command("trends")
+def trends(
+    project_id: str = typer.Argument(
+        ..., help="The project id (see `prime-ledger list`)."
+    ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the trend series + slopes as JSON."
+    ),
+    home: Optional[str] = typer.Option(
+        None, "--home", help="Override the ledger home."
+    ),
+) -> None:
+    """Per-project run-over-run trends: cost, features, and the $0-local (Micro Prime) ratio over time."""
+    path = gl.project_ledger_path(project_id, home)
+    if not path.is_file():
+        console.print(
+            f"[red]error:[/red] no ledger for project {project_id!r} ({path})"
+        )
+        raise typer.Exit(_EXIT_ERR)
+    data = gl.project_trends(gl.load_project_ledger(project_id, home=home))
+    if as_json:
+        typer.echo(_json.dumps(data, indent=2, default=str))
+        raise typer.Exit(_EXIT_OK)
+
+    table = Table(title=f"{project_id} — run trends")
+    for col in ("run", "when", "cost $", "passed", "$0-local / total"):
+        table.add_column(col)
+    for s in data["runs"]:
+        table.add_row(
+            s["run_id"],
+            s["generated_at"],
+            f"{s['cost_usd']:.4f}",
+            str(s["features_passed"]),
+            f"{s['local_features']}/{s['total_features']} ({s['local_ratio']:.0%})",
+        )
+    console.print(table)
+    if len(data["runs"]) < 2:
+        console.print("[dim]1 run — need ≥2 for a trend line.[/dim]")
+    else:
+
+        def _arrow(slope: float) -> str:
+            return "↑" if slope > 0 else ("↓" if slope < 0 else "→")
+
+        cs, rs = data["cost_slope"], data["local_ratio_slope"]
+        console.print(
+            f"cost/run {_arrow(cs)} ({cs:+.4f}/run) · "
+            f"$0-local ratio {_arrow(rs)} ({rs:+.1%}/run) — "
+            "a rising local ratio + falling cost is the decouple's Micro Prime win"
+        )
+    raise typer.Exit(_EXIT_OK)

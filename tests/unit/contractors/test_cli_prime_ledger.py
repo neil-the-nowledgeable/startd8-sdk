@@ -132,3 +132,27 @@ def test_verify_phantom_exits_one(tmp_path):
     assert res.exit_code == 1
     findings = json.loads(res.stdout)
     assert any(f["kind"] == "PHANTOM" for f in findings)
+
+
+# ── #4: trends command ──────────────────────────────────────────────────────────────────────────
+
+
+def test_trends_json_reports_local_ratio(tmp_path):
+    home = str(tmp_path / "home")
+    _record_portal_v2(tmp_path, home)
+    res = _RUNNER.invoke(
+        prime_ledger_app, ["trends", "portal-v2", "--json", "--home", home]
+    )
+    assert res.exit_code == 0
+    d = json.loads(res.stdout)
+    assert len(d["runs"]) == 1
+    assert d["cost_slope"] is None  # single run
+    # portal-v2: 11 of 16 features generated at $0 on Ollama (micro-prime)
+    assert d["runs"][0]["local_features"] == 11 and d["runs"][0]["total_features"] == 16
+
+
+def test_trends_unknown_project_errors(tmp_path):
+    res = _RUNNER.invoke(
+        prime_ledger_app, ["trends", "ghost", "--home", str(tmp_path / "home")]
+    )
+    assert res.exit_code == 2
