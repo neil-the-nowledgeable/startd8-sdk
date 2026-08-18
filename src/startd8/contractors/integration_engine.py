@@ -47,6 +47,13 @@ _INTEGRATION_MIN_LINES = 50
 
 logger = get_logger(__name__)
 
+# Determinism-gap census (observe-only, opt-in). ``record_intervention`` is a no-op unless a census
+# collector is installed → byte-identical when the census is off.
+try:
+    from ..census.hook import record_intervention as _census_record
+except Exception:  # noqa: BLE001 — census must never break integration
+    _census_record = None  # type: ignore[assignment]
+
 
 def _guarded_write(path, content: str, project_root) -> bool:
     """FR-A6a: write generated content to ``path`` unless it is a protected operator control file.
@@ -664,6 +671,9 @@ class IntegrationEngine:
                             "merged",
                             metadata={"unit_id": unit.id},
                         )
+                        # Determinism-gap census (observe-only): a contractor-drafted element landed
+                        # via the LLM path. No-op unless a collector is installed → byte-identical.
+                        self._census_observe_merge(entry, tf)
                     elif tf in skipped_set:
                         registry.set_phase_status(
                             entry.element_id,
@@ -676,6 +686,35 @@ class IntegrationEngine:
                         "Element provenance recording failed for %s: %s",
                         entry.element_id, exc,
                     )
+
+    def _census_observe_merge(self, entry: Any, target_file: str) -> None:
+        """Observe-only census hook at the contractor draft/integrate boundary — a contractor-drafted
+        element (LLM path) landed. No-op when the census is off; never raises into integration. The
+        element-kind is read from the registry entry when present, else ``unknown``; the language is
+        resolved from the integration's language profile."""
+        if _census_record is None:
+            return
+        try:
+            lang = (
+                self._language_profile.language_id
+                if self._language_profile is not None
+                else "unknown"
+            )
+            ekind = (
+                getattr(entry, "kind", None)
+                or getattr(entry, "element_kind", None)
+                or "unknown"
+            )
+            ekind = getattr(ekind, "value", ekind)  # accept an ElementKind enum
+            _census_record(
+                "element_render",
+                str(lang or "unknown"),
+                str(ekind),
+                file_path=str(target_file),
+                message=f"contractor drafted {getattr(entry, 'element_id', '?')} ({ekind})",
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("census merge hook swallowed an error", exc_info=True)
 
     # ------------------------------------------------------------------
     # Dirty-file protection (extracted from PrimeContractor)

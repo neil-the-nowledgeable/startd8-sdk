@@ -36,6 +36,42 @@ logger = get_logger(__name__)
 # Stateless singleton — safe for concurrent use (no mutable state).
 _validator = AstParseValidator()
 
+# Determinism-gap census (observe-only, opt-in). ``record_intervention`` is a no-op unless a census
+# collector is installed, so this import + the hook below are byte-identical when the census is off.
+try:
+    from ..census.hook import record_intervention as _census_record
+except Exception:  # noqa: BLE001 — census must never break repair
+    _census_record = None  # type: ignore[assignment]
+
+# Repair diagnostic category → census finding-class (repair-intervention domain).
+_CENSUS_REPAIR_CLASS = {
+    "syntax": "repair_syntax",
+    "import": "repair_import",
+    "lint": "repair_lint",
+    "contract_violation": "repair_contract",
+    "content_contract": "repair_contract",
+    "semantic": "repair_contract",
+}
+
+
+def _census_record_repair(file_path: Path, file_diags: List[Diagnostic], language_id: str) -> None:
+    """Observe-only: emit one census finding per repair category that fired on *file_path*. No-op when
+    the census is off. Never raises into the repair path (any error is swallowed)."""
+    if _census_record is None:
+        return
+    try:
+        categories = {d.category for d in file_diags} or {"unknown"}
+        for cat in categories:
+            _census_record(
+                _CENSUS_REPAIR_CLASS.get(cat, "repair_other"),
+                language_id,
+                "file",  # repair operates at file granularity; element-kind unknown here
+                file_path=str(file_path),
+                message=f"repair fired ({cat}) on {file_path}",
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("census repair hook swallowed an error", exc_info=True)
+
 # Try to import EventBus for step emissions (R3-S5)
 try:
     from ..events import Event, EventBus, EventType
@@ -659,6 +695,10 @@ def run_file_repair(
                 repaired = _inject_traceability_comment(repaired, applied)
                 repaired_files[file_path] = repaired
                 any_modified = True
+
+                # Determinism-gap census (observe-only; no-op unless a collector is installed — the
+                # repaired output is byte-identical either way).
+                _census_record_repair(file_path, file_diags, _metric_language_id)
 
             all_step_names.update(applied)
 

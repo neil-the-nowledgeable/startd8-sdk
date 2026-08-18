@@ -84,6 +84,47 @@ logger = get_logger(__name__)
 # Singleton repair step for contract violation repair after splice
 _contract_violation_fix_step = ContractViolationFixStep()
 
+# Determinism-gap census (observe-only, opt-in). ``record_intervention`` is a no-op unless a census
+# collector is installed, so this import + the hook are byte-identical when the census is off.
+try:
+    from startd8.census.hook import record_intervention as _census_record
+except Exception:  # noqa: BLE001 — census must never break generation
+    _census_record = None  # type: ignore[assignment]
+
+
+def _census_observe_element(result: "ElementResult", language_id: str) -> None:
+    """Observe-only: record a census finding when the LLM was load-bearing for *result* (a non-template
+    generation). No-op when the census is off; never raises into the generation path.
+
+    A template hit is deterministic (no LLM) → not recorded. A successful non-template generation used
+    the LLM to render/fill the element → an ``element_render`` observation tagged by language ×
+    element-kind. Purely additive: this reads a completed result, it does not touch generation output.
+    """
+    if _census_record is None:
+        return
+    try:
+        if getattr(result, "template_used", False):
+            return  # deterministic template — not an LLM intervention
+        if not getattr(result, "success", False):
+            return
+        used_llm = (
+            (getattr(result, "input_tokens", 0) or 0) > 0
+            or (getattr(result, "output_tokens", 0) or 0) > 0
+            or bool(getattr(result, "code", None))
+        )
+        if not used_llm:
+            return
+        ekind = getattr(result, "element_kind", None) or "unknown"
+        _census_record(
+            "element_render",
+            language_id or "unknown",
+            str(ekind),
+            file_path=str(getattr(result, "file_path", "") or ""),
+            message=f"LLM rendered {getattr(result, 'element_name', '?')} ({ekind})",
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("census element hook swallowed an error", exc_info=True)
+
 
 _SPLICE_VIOLATION_TYPE_MAP = {
     "parameter_count_mismatch": "missing_parameter",
@@ -2414,6 +2455,7 @@ class MicroPrimeEngine:
                 classification_signals=c.classification_signals,
             )
             file_result.element_results.append(result)
+            _census_observe_element(result, _language_id_from_path(result.file_path))
 
             # If successful, splice into skeleton
             if result.success and result.code:
@@ -3036,6 +3078,7 @@ class MicroPrimeEngine:
             result.parent_class = element.parent_class
             result.element_kind = element.kind.value if element.kind else None
             file_result.element_results.append(result)
+            _census_observe_element(result, _language_id_from_path(result.file_path))
 
         # AC-R16: Record file-whole success for few-shot in subsequent files
         if valid:
