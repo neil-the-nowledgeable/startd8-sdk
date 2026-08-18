@@ -1350,3 +1350,98 @@ def events(
         noun="event module",
         source="events.yaml",
     )
+
+
+@generate_app.command("howto")
+def howto(
+    requirements: Path = typer.Option(
+        ..., "--requirements", "-r", help="Path to the det-req doc to project a det-howto/0.1 from."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out",
+        help="Output path for the projected det-howto/0.1 markdown. Absent → print to stdout.",
+    ),
+    check: bool = typer.Option(
+        False, "--check",
+        help="Drift-check an on-disk howto against a fresh projection. Exit 0=in-sync, 1=drift, 2=error.",
+    ),
+    sarif: Optional[Path] = typer.Option(
+        None, "--sarif", help="Also write the conformance + liveness findings as SARIF 2.1.0 here."
+    ),
+) -> None:
+    """Project a det-req into a det-howto/0.1 command reference — deterministic, $0 (no LLM).
+
+    The third det-doc-kit projector (a degenerate-edge one): the command-reference skeleton
+    (commands ← the `## Contract projection` command/option rows + CLI-declaring FRs; prerequisites
+    ← the reuse/phantom audit) is `$0`-projected; the when/why/troubleshooting narrative is
+    human-residue. Fires only on a REQ that declares a command surface — a solo-by-design REQ with no
+    commands is reported skipped, exit 0 (SCHEMA §5 solo-vs-gap).
+    """
+    from .howto_codegen import (
+        NotHowtoOwedError,
+        findings_to_sarif,
+        project_howto,
+        render_howto,
+        validate_howto,
+    )
+
+    try:
+        req_text = requirements.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read requirements {requirements}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    # STANDARD 6a — solo-vs-gap gate. A REQ with no command surface owes no HOWTO → skip, exit 0.
+    try:
+        model = project_howto(req_text, req_path=requirements)
+    except NotHowtoOwedError as exc:
+        console.print(f"[dim]skipped:[/dim] {exc}")
+        raise typer.Exit(0)
+
+    rendered = render_howto(model)
+
+    # Conformance (SCHEMA §7) — an error-severity finding fails the gate (exit 1).
+    doc_label = out.as_posix() if out is not None else requirements.as_posix()
+    findings = validate_howto(model, doc_path=doc_label)
+    if sarif is not None:
+        try:
+            sarif.parent.mkdir(parents=True, exist_ok=True)
+            sarif.write_text(
+                json.dumps(findings_to_sarif(findings), indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write SARIF {sarif}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        console.print(f"[dim]sarif:[/dim] wrote {sarif} ({len(findings)} finding(s))")
+
+    errors = [f for f in findings if f.severity == "error"]
+    for f in findings:
+        color = "red" if f.severity == "error" else "yellow"
+        console.print(f"[{color}]{f.severity}[/{color}] {f.check}: {f.message}")
+    if errors:
+        console.print(f"[red]conformance failed:[/red] {len(errors)} error finding(s)")
+        raise typer.Exit(1)
+
+    if check:
+        try:
+            ondisk = out.read_text(encoding="utf-8") if (out and out.exists()) else None
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read {out}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        if ondisk == rendered:
+            console.print("[green]in_sync[/green]: on-disk howto matches a fresh projection")
+            raise typer.Exit(0)
+        console.print("[yellow]drift[/yellow]: on-disk howto differs from a fresh projection")
+        raise typer.Exit(1)
+
+    if out is None:
+        console.print(rendered)
+        raise typer.Exit(0)
+
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(rendered, encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot write {out}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+    console.print(f"[green]wrote[/green] {out}  ({len(model.commands)} command(s))")

@@ -1,6 +1,7 @@
 # Standard — the det-doc-kit `$0` PROJECTOR pattern
 
-**Date:** 2026-08-17 · **Type:** extracted standard (Hansei / `/reflective-retrospective`) · **Status:** **ADOPTED** — a second projector (det-handoff) was built against it with no new friction
+**Date:** 2026-08-17 · **Type:** extracted standard (Hansei / `/reflective-retrospective`) · **Status:** **INDEPENDENTLY REPLICATED** — a third projector (det-howto) was built from this doc *cold*, by a fresh-context adopter that never read the siblings
+**Independently replicated by:** `src/startd8/howto_codegen/` — a fresh-context subagent built it from this STANDARD + `SCHEMA_det-howto-0.1` alone (forbidden from reading `plan_codegen`/`handoff_codegen`), 22 tests green. It confirmed the 5-part shape + Part-6 + §0 transfer with **zero shape-gaps**, and — being genuinely independent — surfaced the mechanism-level gaps the two single-agent adoptions could not (folded into §I-1b, Part-5, Part-6d below).
 **Proved by:** REQ-29 — `src/startd8/plan_codegen/` (the det-plan projector), shipped `35e75c89`, hardened `33606c12`.
 **Hardened by:** a `/reflective-adoption` **cold-adopter dry-run** (2026-08-17) that tried to build the det-crp projector
 from this doc alone and found the gaps §0/§Part-6 below close.
@@ -55,7 +56,7 @@ Each clause cites the REQ-29 file that proved it. A new projector `det-<doc>` fi
 | **2. `render.py`** | `plan_codegen/render.py` — `render_plan(plan)` | **Idempotent** render of the model → the doc text; carries a `GENERATED_MARKER`; **no timestamps** (byte-identity depends on it — `test_render_has_no_timestamp`). |
 | **3. `conformance.py`** | `plan_codegen/conformance.py` — `validate_plan` + `findings_to_sarif` | Validates the output against the format §-conformance + liveness; emits findings as SARIF **by importing** `coverage_map/findings_sarif` (`conformance.py:14`) — **never vendor a copy** (charter §5). |
 | **4. `provider.py`** | `plan_codegen/provider.py` — `DetPlanProjectorProvider` | A `DeterministicFileProvider`: `owns()` = marker present; `is_in_sync()` = re-project from source and compare bytes. Silent-degradation paths **log at DEBUG** (`get_logger(__name__)`) so a non-skip is diagnosable. |
-| **5. CLI + entry-point** | `generate plan` in `cli_generate.py`; `det-plan-projector = …` in `pyproject.toml` | `startd8 generate <doc>` drives it; the provider registers under `startd8.contractors.deterministic_providers`. A **CliRunner test** must exercise the exit-code contract (write / stdout / skip / `--check` drift / SARIF). |
+| **5. CLI + entry-point** | `generate plan` in `cli_generate.py`; `det-plan-projector = …` in `pyproject.toml` | `startd8 generate <doc>` drives it; the provider registers under `startd8.contractors.deterministic_providers`. A **CliRunner test** must exercise the exit-code contract. **Exit codes (pinned — independent-replication finding: the STANDARD listed the cases but not the codes, so the adopter had to guess): `0`** = wrote / printed to stdout / solo-skip; **`1`** = `--check` drift OR a conformance error (won't write a nonconformant doc); **`2`** (`_EXIT_ERROR`) = an IO / read error. |
 
 ## Part 6 — the honesty behaviors (the charter invariants the shape must carry)
 
@@ -69,7 +70,7 @@ Each clause cites the REQ-29 file that proved it. A new projector `det-<doc>` fi
 | **6a. Solo-vs-gap gate** | `is_plan_owed()` → `NotPlanOwedError`; a solo REQ projects **nothing**, reported skipped, exit 0 | Fire **only** when a companion is *owed*; never invent ceremony for a solo-by-design source (charter §6.4). **The gate *signal* is doc-type-specific** (det-handoff adoption finding): det-plan reads a REQ **marker** (`plan deferred`); det-handoff reads **ledger state** (delivered + no open follow-on → not owed). Identify your signal per doc-type. |
 | **6b. Anti-inflation maturity** | render stamps `maturity: 0.1`; `validate_*` rejects an inflated stamp | A *projected* artifact starts at the lowest rung and never claims unearned hardening (charter inv-3). |
 | **6c. DIDL naming** | `naming.name_forms(...)` → the projected doc's `name`/`handle`/`ref` | Every projected artifact carries a semantic name + readable handle + canonical ref; no integer-only names (charter inv-5). |
-| **6d. Source back-reference** | the render embeds `pairsWith: <source>`; the provider re-resolves the source from it | The rendered doc MUST embed a resolvable pointer to its source, or `provider.is_in_sync` can't re-project to compare. |
+| **6d. Source back-reference** | the render embeds `pairsWith: <source>`; the provider re-resolves the source from it | The rendered doc MUST embed a resolvable pointer to its source, or `provider.is_in_sync` can't re-project to compare. **The *line format* is a two-file contract** (render writes it, provider regexes it back) — it MUST agree byte-for-byte. **Independent-replication finding:** the STANDARD left the literal format unwritten, so the cold adopter invented its own (`**pairsWith:** \`p\` (LIVE)`) ≠ the siblings' (`- **pairsWith:** \`p\``) → the three projectors now DRIFT on this line. **Next fold-back (a metabolize step): extract a shared `render_pairs_with_line`/`parse_pairs_with_line` into `req_header`** so render+provider can't disagree and the family converges — the same move as the `req_header` extraction the ledger already records. |
 
 ## The two load-bearing invariants the pilot proved
 
@@ -80,6 +81,20 @@ Each clause cites the REQ-29 file that proved it. A new projector `det-<doc>` fi
 charter's human-gated tail). **Rule for the next projector:** before claiming a field is `$0`-derivable, grep the
 source grammar for the field it would trace to. If the field doesn't exist, the output is either honestly empty
 (and the delta is human-residue) or the derivation is an *inference* you must not make. Never invent the edge.
+
+### I-1b — reading the source grammar (the mechanism I-1 assumes; independent-replication finding)
+I-1 says *which* field to trace to; the cold adopter found it stops one level short — it assumes you already know the
+source parser's **return shapes** and the **ref→liveness mapping**. Pin these so the next adopter doesn't guess:
+- **Know the reuse-module return shapes before you build.** `det_req.parse_fr_lines` → a list of dicts with
+  `touches`/`verify`/`lives[]`; a `Lives` entry is `{type, ref}`; `req_header.repo_root` walks up to `src/startd8`.
+  Read the cited module, don't infer its shape from an example.
+- **The projector owns an explicit ref→liveness mapping, including the non-file cases.** A `git:<sha>:…`, a `~/…`
+  home path, or an external URL is **LEGACY**, never a false **LIVE** — resolve only real on-disk files to LIVE
+  (this IS "never invent the edge" at the resolution layer). Handle a compound multi-entry `Lives` line (split
+  `code a.py, test b.py`; the thin parser may collapse it, yielding a false PHANTOM).
+- **Pin the *source sub-grammar* you read out of, not only the format you project into.** The det-howto adopter had
+  to reverse-engineer the `## Contract projection` table's column order + header row from one example — the SCHEMA
+  should state the source table/section's column contract (see `SCHEMA_det-howto-0.1 §0.1`, now pinned).
 
 ### I-2 — SDK owns the projector; the kit owns the format
 The format grammar (`SCHEMA_det-<doc>-0.1.md`) lives in the kit and is **cited, not restated** by the projector
@@ -137,9 +152,11 @@ cell) is accepted by **§-conformance + zero findings** instead (REQ-16/17).
 | Cold-adopter dry-run → det-crp (2026-08-17) | simulated, single-agent | standard hardened **+ premise corrected** | GAP-A/B → §0; GAP-C/D/E/F → Part 6; **det-crp is not a projector** → `SCHEMA_det-crp-0.1.md` (thin format+lint kit, generator cited) |
 | `SCHEMA_det-handoff-0.1` authored (2026-08-17) | format for the second projector | format ready | dual-source note (§0.1) → standard §0.2 step 2 |
 | **det-handoff projector built** (`5ba7eb48`) | the real second-*projector* adoption (`$0` REQ+ledger→HANDOFF) | **PASSED — standard transferred, 0 new shape-gaps** | 2 refinements: (a) shared `req_header` extracted (1st projector inlined it) → `plan_codegen` migrated too; (b) the solo-vs-gap *signal* is doc-type-specific (det-plan = REQ marker, det-handoff = ledger state) → §Part-6a note |
+| **det-howto projector built** (`howto_codegen`) | **INDEPENDENT** replication — a fresh-context adopter, cold, never read the siblings | **PASSED — 0 shape-gaps; 4 mechanism-gaps found** (the value of true independence) | §I-1b (source-grammar return shapes + ref→liveness mapping) · Part-5 exit-code table pinned · Part-6d back-reference format is a two-file contract (3-way drift found) · `SCHEMA_det-howto §0.1/§2` column-contract + placeholder-span rule pinned |
 
-*ADOPTED — det-plan established the shape, a cold-adopter dry-run closed the shape→build-spec gap, and the det-handoff
-projector (`5ba7eb48`) was then **built against this doc with zero new shape-gaps** — the `/reflective-adoption` gate
-passed. Remaining honesty caveat: both adoptions were **single-agent** (I carried context the doc might still assume);
-the strongest possible signal is an **independent** adopter building the third projector (det-howto / det-ledger) from
-this doc cold. Until then: adopted-once, not yet independently replicated.*
+*INDEPENDENTLY REPLICATED — det-plan established the shape; a cold-adopter dry-run closed the shape→build-spec gap;
+det-handoff (`5ba7eb48`) adopted it with zero new shape-gaps; and det-howto (`howto_codegen`) was then built **cold by a
+fresh-context adopter that never read the siblings** — the honesty caveat the prior rows carried is now **discharged**.
+That independent build confirmed the shape transfers AND found the four mechanism-level gaps only true independence
+could (§I-1b, Part-5, Part-6d) — the standard is stronger for it. Open metabolize step: extract the shared
+`pairs_with_line` helper (Part-6d) so the three projectors stop drifting on that one line.*

@@ -196,6 +196,7 @@ proto-skeleton = "startd8.proto_codegen.provider:ProtoSkeletonProvider"
 events = "startd8.events_codegen.provider:EventsFileProvider"
 det-plan-projector = "startd8.plan_codegen.provider:DetPlanProjectorProvider"
 det-handoff-projector = "startd8.handoff_codegen.provider:DetHandoffProjectorProvider"
+det-howto-projector = "startd8.howto_codegen.provider:DetHowtoProjectorProvider"
 
 [project.urls]
 Homepage = "https://github.com/neil-the-nowledgeable/startd8-sdk"
