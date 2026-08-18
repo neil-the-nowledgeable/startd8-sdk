@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
 
@@ -12,20 +11,70 @@ import pytest
 from startd8.contractors.batch_postmortem import (
     BatchLedger,
     BatchPostMortemEvaluator,
-    BatchPostMortemReport,
-    CumulativeCostSummary,
-    PersistentFailure,
-    RunSnapshot,
-    TaskLedgerRecord,
-    TaskRunEntry,
-    VelocityEstimate,
+    _deserialize_ledger,
+    _serialize_ledger,
     append_run_to_ledger,
     compute_seed_checksum,
     derive_batch_id,
     detect_force_regenerated,
     load_or_create_ledger,
+    resolve_project_identity,
     save_ledger,
 )
+
+# ---------------------------------------------------------------------------
+# FR-1 (prime-project-generation-ledger): the additive project-identity seam.
+# Byte-identity guard — a v0 (seed-centric) ledger deserializes unchanged; the two new
+# keys default empty and existing consumers are unaffected (the rest of this suite passes unedited).
+# ---------------------------------------------------------------------------
+
+
+class TestProjectIdentitySeam:
+    def test_v0_ledger_deserializes_with_empty_project_fields(self):
+        v0 = {
+            "batch_id": "batch-x",
+            "seed_path": "s.json",
+            "seed_checksum": "abc",
+            "total_tasks": 3,
+            "created_at": "t0",
+            "updated_at": "t1",
+            "tasks": {},
+            "runs": [],
+        }  # no project_id / project_path — the pre-seam shape
+        led = _deserialize_ledger(v0)
+        assert led.project_id == "" and led.project_path == ""
+
+    def test_roundtrip_preserves_project_identity(self):
+        led = BatchLedger(
+            batch_id="b",
+            seed_path="s",
+            seed_checksum="c",
+            total_tasks=1,
+            created_at="t0",
+            updated_at="t1",
+            project_id="portal-v2",
+            project_path="/abs/portal-v2",
+        )
+        back = _deserialize_ledger(_serialize_ledger(led))
+        assert back.project_id == "portal-v2" and back.project_path == "/abs/portal-v2"
+
+    def test_serialize_adds_only_the_two_new_keys(self):
+        led = BatchLedger(
+            batch_id="b",
+            seed_path="s",
+            seed_checksum="c",
+            total_tasks=1,
+            created_at="t0",
+            updated_at="t1",
+        )
+        d = _serialize_ledger(led)
+        assert d["project_id"] == "" and d["project_path"] == ""
+
+    def test_resolve_identity_dir_name_fallback(self, tmp_dir):
+        root = tmp_dir / "svc-app"
+        root.mkdir()
+        pid, ppath = resolve_project_identity(str(root))
+        assert pid == "svc-app" and ppath == str(root.resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -277,10 +326,16 @@ class TestBatchPostMortemEvaluator:
 
         # Run 1: T-001 passes, T-002 + T-003 fail
         ledger = append_run_to_ledger(
-            ledger, "run-001", "2026-03-01T10:00:00",
+            ledger,
+            "run-001",
+            "2026-03-01T10:00:00",
             {
                 "T-001": {"success": True, "cost_usd": 0.01},
-                "T-002": {"success": False, "cost_usd": 0.02, "root_cause": "ast_failure"},
+                "T-002": {
+                    "success": False,
+                    "cost_usd": 0.02,
+                    "root_cause": "ast_failure",
+                },
                 "T-003": {"success": False, "cost_usd": 0.01, "root_cause": "timeout"},
             },
             {},
@@ -288,7 +343,9 @@ class TestBatchPostMortemEvaluator:
 
         # Run 2: T-002 passes, T-003 fails again
         ledger = append_run_to_ledger(
-            ledger, "run-002", "2026-03-01T11:00:00",
+            ledger,
+            "run-002",
+            "2026-03-01T11:00:00",
             {
                 "T-002": {"success": True, "cost_usd": 0.03},
                 "T-003": {"success": False, "cost_usd": 0.02, "root_cause": "timeout"},
@@ -298,7 +355,9 @@ class TestBatchPostMortemEvaluator:
 
         # Run 3: T-003 passes
         ledger = append_run_to_ledger(
-            ledger, "run-003", "2026-03-01T12:00:00",
+            ledger,
+            "run-003",
+            "2026-03-01T12:00:00",
             {
                 "T-003": {"success": True, "cost_usd": 0.01},
             },
@@ -320,7 +379,9 @@ class TestBatchPostMortemEvaluator:
     def test_in_progress_verdict(self, seed_file):
         ledger = _make_ledger(seed_file)
         ledger = append_run_to_ledger(
-            ledger, "run-001", "2026-03-01T10:00:00",
+            ledger,
+            "run-001",
+            "2026-03-01T10:00:00",
             {"T-001": {"success": True, "cost_usd": 0.01}},
             {},
         )
@@ -334,13 +395,17 @@ class TestBatchPostMortemEvaluator:
         ledger = _make_ledger(seed_file)
         # Run 1: 1 pass
         ledger = append_run_to_ledger(
-            ledger, "run-001", "2026-03-01T10:00:00",
+            ledger,
+            "run-001",
+            "2026-03-01T10:00:00",
             {"T-001": {"success": True}},
             {},
         )
         # Run 2: 0 passes
         ledger = append_run_to_ledger(
-            ledger, "run-002", "2026-03-01T11:00:00",
+            ledger,
+            "run-002",
+            "2026-03-01T11:00:00",
             {"T-002": {"success": False}, "T-003": {"success": False}},
             {},
         )
@@ -435,7 +500,10 @@ class TestJsonRoundtrip:
             "T-002": {"success": False, "cost_usd": 0.02, "error": "boom"},
         }
         ledger = append_run_to_ledger(
-            ledger, "run-001", "2026-03-01T10:00:00", results,
+            ledger,
+            "run-001",
+            "2026-03-01T10:00:00",
+            results,
             {"T-001": {"name": "Alpha"}, "T-002": {"name": "Beta"}},
         )
 
@@ -460,17 +528,29 @@ class TestMarkdownRendering:
     def test_contains_key_sections(self, seed_file):
         ledger = _make_ledger(seed_file)
         ledger = append_run_to_ledger(
-            ledger, "run-001", "2026-03-01T10:00:00",
+            ledger,
+            "run-001",
+            "2026-03-01T10:00:00",
             {
                 "T-001": {"success": True, "cost_usd": 0.01},
-                "T-002": {"success": False, "cost_usd": 0.02, "root_cause": "ast_failure"},
+                "T-002": {
+                    "success": False,
+                    "cost_usd": 0.02,
+                    "root_cause": "ast_failure",
+                },
             },
             {},
         )
         ledger = append_run_to_ledger(
-            ledger, "run-002", "2026-03-01T11:00:00",
+            ledger,
+            "run-002",
+            "2026-03-01T11:00:00",
             {
-                "T-002": {"success": False, "cost_usd": 0.02, "root_cause": "ast_failure"},
+                "T-002": {
+                    "success": False,
+                    "cost_usd": 0.02,
+                    "root_cause": "ast_failure",
+                },
             },
             {},
         )
@@ -490,7 +570,9 @@ class TestMarkdownRendering:
     def test_write_outputs(self, seed_file, tmp_dir):
         ledger = _make_ledger(seed_file)
         ledger = append_run_to_ledger(
-            ledger, "run-001", "2026-03-01T10:00:00",
+            ledger,
+            "run-001",
+            "2026-03-01T10:00:00",
             {"T-001": {"success": True, "cost_usd": 0.01}},
             {},
         )

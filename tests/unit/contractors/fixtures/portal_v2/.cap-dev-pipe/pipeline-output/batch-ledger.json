@@ -1,0 +1,295 @@
+{
+  "batch_id": "batch-4e94a4edc329",
+  "seed_path": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/portal-v2-preview/plan-ingestion/prime-context-seed-enriched.json",
+  "seed_checksum": "4e94a4edc329318ba84e74c9ad2c96c41db260e7904c4289681bc0d784529538",
+  "total_tasks": 21,
+  "created_at": "2026-08-13T19:10:20.561955",
+  "updated_at": "2026-08-13T19:10:20.562358",
+  "tasks": {
+    "PI-002b": {
+      "task_id": "PI-002b",
+      "task_name": "entity CRUD + HTMX UI \u2014 ",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.612958,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-003": {
+      "task_id": "PI-003",
+      "task_name": "composite views",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-004a": {
+      "task_id": "PI-004a",
+      "task_name": "onboarding pages \u2014 pages.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-004b": {
+      "task_id": "PI-004b",
+      "task_name": "onboarding pages \u2014 ",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-005a": {
+      "task_id": "PI-005a",
+      "task_name": "auth + RBAC \u2014 portal_auth.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-005b": {
+      "task_id": "PI-005b",
+      "task_name": "auth + RBAC \u2014 user_routers.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-006a": {
+      "task_id": "PI-006a",
+      "task_name": "code+score review workspace \u2014 portal_ext.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 1.081632,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-006b": {
+      "task_id": "PI-006b",
+      "task_name": "code+score review workspace \u2014 ",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.483335,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-007": {
+      "task_id": "PI-007",
+      "task_name": "benchmark ingestion",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.399936,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-008a": {
+      "task_id": "PI-008a",
+      "task_name": "reference + roster seed \u2014 seed_reference.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-008b": {
+      "task_id": "PI-008b",
+      "task_name": "reference + roster seed \u2014 seed_roster.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-009": {
+      "task_id": "PI-009",
+      "task_name": "assignment/coverage algorithm",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-010a": {
+      "task_id": "PI-010a",
+      "task_name": "adjudication + augmented publish \u2014 portal_ext.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.35972,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-010b": {
+      "task_id": "PI-010b",
+      "task_name": "adjudication + augmented publish \u2014 publish_scorecard.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-011a": {
+      "task_id": "PI-011a",
+      "task_name": "embargo-gated export \u2014 export_public.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    },
+    "PI-011b": {
+      "task_id": "PI-011b",
+      "task_name": "embargo-gated export \u2014 set_embargo.py",
+      "current_status": "passed",
+      "history": [
+        {
+          "run_id": "portal-v2-preview",
+          "timestamp": "2026-08-13T19:10:20.562358",
+          "verdict": "PASS",
+          "cost_usd": 0.0,
+          "root_cause": "",
+          "pipeline_stage": "",
+          "force_regenerated": false,
+          "error_message": ""
+        }
+      ]
+    }
+  },
+  "runs": [
+    {
+      "run_id": "portal-v2-preview",
+      "timestamp": "2026-08-13T19:10:20.562358",
+      "tasks_attempted": 16,
+      "tasks_passed": 16,
+      "tasks_failed": 0,
+      "cumulative_passed": 16,
+      "remaining": 5,
+      "force_regenerated_count": 0,
+      "cost_usd": 2.9375809999999993
+    }
+  ]
+}

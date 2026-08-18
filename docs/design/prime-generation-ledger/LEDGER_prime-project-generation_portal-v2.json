@@ -1,0 +1,102 @@
+{
+  "_comment": "First realized cell of the Prime-Project Generation Ledger (INSTANTIATION_prime-project-generation-ledger.md §4.1). Materialized from portal-v2's REAL run artifacts (no invented values). This is the PER-PROJECT file that would live at ~/.startd8/generation-ledger/projects/portal-v2.json; the accompanying index fragment shows the cross-project registry row that would live at ~/.startd8/generation-ledger/index.json. Markdown view follows the JSON.",
+  "schema": "startd8.prime-generation-ledger/v0.1",
+  "trust_model": "auto-derived-from-run-artifacts + resolve-check oracle",
+  "project": {
+    "project_id": "portal-v2",
+    "project_path": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2",
+    "first_seen": "2026-08-13T23:10:15.959377+00:00",
+    "last_run_at": "2026-08-13T23:10:15.959377+00:00",
+    "cumulative": {
+      "runs": 1,
+      "total_cost_usd": 2.9375809999999993,
+      "total_input_tokens": 1425139,
+      "total_output_tokens": 601388,
+      "features_passed": 16,
+      "features_total_in_batch": 21,
+      "status": "IN_PROGRESS"
+    }
+  },
+  "batches": [
+    {
+      "batch_id": "batch-4e94a4edc329",
+      "seed_checksum": "4e94a4edc329318ba84e74c9ad2c96c41db260e7904c4289681bc0d784529538",
+      "seed_path": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/portal-v2-preview/plan-ingestion/prime-context-seed-enriched.json",
+      "total_tasks": 21,
+      "batch_ledger_ref": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/batch-ledger.json",
+      "runs": [
+        {
+          "run_id": "portal-v2-preview",
+          "generated_at": "2026-08-13T23:10:15.959377+00:00",
+          "verdict": "PASS",
+          "features_attempted": 16,
+          "features_passed": 16,
+          "features_failed": 0,
+          "force_regenerated_count": 0,
+          "remaining_in_batch": 5,
+          "cost_usd": 2.9375809999999993,
+          "input_tokens": 1425139,
+          "output_tokens": 601388,
+          "model_time_ms": 7522337.0,
+          "cost_by_provider": {
+            "anthropic": 2.937581,
+            "ollama": 0.0
+          },
+          "model_mix": {
+            "claude-sonnet-4-6": 5,
+            "startd8-coder": 11
+          },
+          "features": [
+            {"id": "PI-002b", "name": "entity CRUD + HTMX UI", "success": true, "cost_usd": 0.612958, "model": "claude-sonnet-4-6", "provider": "anthropic"},
+            {"id": "PI-003", "name": "composite views", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-004a", "name": "onboarding pages — pages.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-004b", "name": "onboarding pages", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-005a", "name": "auth + RBAC — portal_auth.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-005b", "name": "auth + RBAC — user_routers.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-006a", "name": "code+score review workspace — portal_ext.py", "success": true, "cost_usd": 1.081632, "model": "claude-sonnet-4-6", "provider": "anthropic"},
+            {"id": "PI-006b", "name": "code+score review workspace", "success": true, "cost_usd": 0.483335, "model": "claude-sonnet-4-6", "provider": "anthropic"},
+            {"id": "PI-007", "name": "benchmark ingestion", "success": true, "cost_usd": 0.399936, "model": "claude-sonnet-4-6", "provider": "anthropic"},
+            {"id": "PI-008a", "name": "reference + roster seed — seed_reference.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-008b", "name": "reference + roster seed — seed_roster.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-009", "name": "assignment/coverage algorithm", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-010a", "name": "adjudication + augmented publish — portal_ext.py", "success": true, "cost_usd": 0.35972, "model": "claude-sonnet-4-6", "provider": "anthropic"},
+            {"id": "PI-010b", "name": "adjudication + augmented publish — publish_scorecard.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-011a", "name": "embargo-gated export — export_public.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"},
+            {"id": "PI-011b", "name": "embargo-gated export — set_embargo.py", "success": true, "cost_usd": 0.0, "model": "startd8-coder", "provider": "ollama"}
+          ],
+          "artifacts": {
+            "generation_manifest": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.startd8/generation-manifest.json",
+            "prime_postmortem_report": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.startd8/prime-postmortem-report.json",
+            "prime_postmortem_summary": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.startd8/prime-postmortem-summary.md",
+            "kaizen_metrics": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.startd8/kaizen-metrics.json",
+            "forward_manifest": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.startd8/forward-manifest.json",
+            "batch_ledger": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/batch-ledger.json",
+            "run_dir": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/portal-v2-preview/",
+            "run_provenance": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/portal-v2-preview/run-provenance.json",
+            "artifact_manifest": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/portal-v2-preview/portal-v2-preview-artifact-manifest.yaml",
+            "delivery_ledger": null,
+            "project_context": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2/.cap-dev-pipe/pipeline-output/portal-v2-preview/project-context.yaml"
+          }
+        }
+      ]
+    }
+  ],
+  "_cross_project_index_fragment": {
+    "_comment": "This is the row this project contributes to ~/.startd8/generation-ledger/index.json — the cross-project registry answering 'which projects has Prime touched?'",
+    "schema": "startd8.prime-generation-ledger.index/v0.1",
+    "projects": [
+      {
+        "project_id": "portal-v2",
+        "project_path": "/Users/neilyashinsky/Documents/dev/benchmarking/Summer2026/portal-v2",
+        "ledger_ref": "~/.startd8/generation-ledger/projects/portal-v2.json",
+        "runs": 1,
+        "batches": 1,
+        "last_run_at": "2026-08-13T23:10:15.959377+00:00",
+        "cumulative_cost_usd": 2.9375809999999993,
+        "status": "IN_PROGRESS",
+        "features_passed": 16,
+        "features_total": 21
+      }
+    ]
+  }
+}

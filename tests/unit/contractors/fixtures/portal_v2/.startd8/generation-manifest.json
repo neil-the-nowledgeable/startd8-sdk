@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.1.0",
+  "execution_mode": "pipeline",
+  "effective_config": {
+    "mode": "pipeline",
+    "strategy": "standalone",
+    "dry_run": false,
+    "max_retries": 6,
+    "check_truncation": true
+  },
+  "features": {
+    "PI-002b": {
+      "name": "entity CRUD + HTMX UI \u2014 ",
+      "success": true,
+      "cost_usd": 0.612958,
+      "model": "claude-sonnet-4-6",
+      "agent": "anthropic:claude-sonnet-4-6",
+      "provider": "anthropic"
+    },
+    "PI-003": {
+      "name": "composite views",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-004a": {
+      "name": "onboarding pages \u2014 pages.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-004b": {
+      "name": "onboarding pages \u2014 ",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-005a": {
+      "name": "auth + RBAC \u2014 portal_auth.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-005b": {
+      "name": "auth + RBAC \u2014 user_routers.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-006a": {
+      "name": "code+score review workspace \u2014 portal_ext.py",
+      "success": true,
+      "cost_usd": 1.081632,
+      "model": "claude-sonnet-4-6",
+      "agent": "anthropic:claude-sonnet-4-6",
+      "provider": "anthropic"
+    },
+    "PI-006b": {
+      "name": "code+score review workspace \u2014 ",
+      "success": true,
+      "cost_usd": 0.483335,
+      "model": "claude-sonnet-4-6",
+      "agent": "anthropic:claude-sonnet-4-6",
+      "provider": "anthropic"
+    },
+    "PI-007": {
+      "name": "benchmark ingestion",
+      "success": true,
+      "cost_usd": 0.399936,
+      "model": "claude-sonnet-4-6",
+      "agent": "anthropic:claude-sonnet-4-6",
+      "provider": "anthropic"
+    },
+    "PI-008a": {
+      "name": "reference + roster seed \u2014 seed_reference.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-008b": {
+      "name": "reference + roster seed \u2014 seed_roster.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-009": {
+      "name": "assignment/coverage algorithm",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-010a": {
+      "name": "adjudication + augmented publish \u2014 portal_ext.py",
+      "success": true,
+      "cost_usd": 0.35972,
+      "model": "claude-sonnet-4-6",
+      "agent": "anthropic:claude-sonnet-4-6",
+      "provider": "anthropic"
+    },
+    "PI-010b": {
+      "name": "adjudication + augmented publish \u2014 publish_scorecard.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-011a": {
+      "name": "embargo-gated export \u2014 export_public.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    },
+    "PI-011b": {
+      "name": "embargo-gated export \u2014 set_embargo.py",
+      "success": true,
+      "cost_usd": 0.0,
+      "model": "startd8-coder",
+      "agent": "ollama:startd8-coder",
+      "provider": "ollama"
+    }
+  },
+  "total_cost_usd": 2.9375809999999993,
+  "total_input_tokens": 1425139,
+  "total_output_tokens": 601388,
+  "total_model_time_ms": 7522337.0,
+  "generated_at": "2026-08-13T23:10:15.959377+00:00"
+}

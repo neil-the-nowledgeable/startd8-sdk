@@ -20,7 +20,6 @@ import dataclasses
 import datetime
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -85,6 +84,11 @@ class BatchLedger:
     updated_at: str
     tasks: Dict[str, TaskLedgerRecord] = dataclasses.field(default_factory=dict)
     runs: List[RunSnapshot] = dataclasses.field(default_factory=list)
+    # FR-1 (prime-project-generation-ledger): the project-identity seam. Empty-default so a
+    # pre-existing (seed-centric) batch-ledger.json deserializes unchanged; resolved lazily from
+    # the project root by `resolve_project_identity`. Distinct from the seed identity above.
+    project_id: str = ""
+    project_path: str = ""
 
 
 @dataclasses.dataclass
@@ -153,6 +157,42 @@ def compute_seed_checksum(seed_path: str) -> str:
 def derive_batch_id(checksum: str) -> str:
     """Derive a batch ID from a seed checksum."""
     return f"batch-{checksum[:12]}"
+
+
+def resolve_project_identity(project_root: str) -> tuple[str, str]:
+    """Resolve ``(project_id, project_path)`` for a Prime-generated project (FR-1).
+
+    Prefers ``spec.project.id`` from a ``project-context.yaml`` (checked at the project root and in
+    the cap-dev-pipe run dirs), falling back to the project-root directory name. ``project_path`` is
+    the resolved absolute root. A missing / unparseable context file never raises — it degrades to the
+    dir-name identity (the seam is additive; the batch layer stays functional without it).
+    """
+    root = Path(project_root).resolve()
+    candidates = [root / "project-context.yaml"]
+    try:
+        candidates.extend(
+            sorted(root.glob(".cap-dev-pipe/pipeline-output/*/project-context.yaml"))
+        )
+    except OSError:  # pragma: no cover - defensive
+        pass
+
+    pid = ""
+    for cand in candidates:
+        if not cand.is_file():
+            continue
+        try:
+            import yaml  # soft dependency; absent → dir-name fallback
+
+            doc = yaml.safe_load(cand.read_text(encoding="utf-8")) or {}
+            pid = ((doc.get("spec", {}) or {}).get("project", {}) or {}).get(
+                "id", ""
+            ) or ""
+            if pid:
+                break
+        except Exception:  # pragma: no cover - malformed/absent yaml → fall through
+            continue
+
+    return (pid or root.name), str(root)
 
 
 def load_or_create_ledger(
@@ -281,10 +321,9 @@ def append_run_to_ledger(
 
         if feature_id not in ledger.tasks:
             # Resolve name from queue_state or seed
-            name = (
-                queue_state.get(feature_id, {}).get("name", "")
-                or seed_name_lookup.get(feature_id, feature_id)
-            )
+            name = queue_state.get(feature_id, {}).get(
+                "name", ""
+            ) or seed_name_lookup.get(feature_id, feature_id)
             ledger.tasks[feature_id] = TaskLedgerRecord(
                 task_id=feature_id,
                 task_name=name,
@@ -355,6 +394,8 @@ def _serialize_ledger(ledger: BatchLedger) -> Dict[str, Any]:
         "total_tasks": ledger.total_tasks,
         "created_at": ledger.created_at,
         "updated_at": ledger.updated_at,
+        "project_id": ledger.project_id,
+        "project_path": ledger.project_path,
         "tasks": {
             tid: {
                 "task_id": rec.task_id,
@@ -372,9 +413,7 @@ def _deserialize_ledger(data: Dict[str, Any]) -> BatchLedger:
     """Deserialize a dict into a BatchLedger."""
     tasks: Dict[str, TaskLedgerRecord] = {}
     for tid, tdata in data.get("tasks", {}).items():
-        history = [
-            TaskRunEntry(**e) for e in tdata.get("history", [])
-        ]
+        history = [TaskRunEntry(**e) for e in tdata.get("history", [])]
         tasks[tid] = TaskLedgerRecord(
             task_id=tdata.get("task_id", tid),
             task_name=tdata.get("task_name", tid),
@@ -391,6 +430,8 @@ def _deserialize_ledger(data: Dict[str, Any]) -> BatchLedger:
         total_tasks=data.get("total_tasks", 0),
         created_at=data.get("created_at", ""),
         updated_at=data.get("updated_at", ""),
+        project_id=data.get("project_id", ""),
+        project_path=data.get("project_path", ""),
         tasks=tasks,
         runs=runs,
     )
@@ -464,12 +505,14 @@ class BatchPostMortemEvaluator:
                     if pass_entries:
                         resolved_in = pass_entries[-1].run_id
 
-                persistent.append(PersistentFailure(
-                    task_id=record.task_id,
-                    failure_count=len(fail_entries),
-                    root_causes=root_causes,
-                    resolved_in_run=resolved_in,
-                ))
+                persistent.append(
+                    PersistentFailure(
+                        task_id=record.task_id,
+                        failure_count=len(fail_entries),
+                        root_causes=root_causes,
+                        resolved_in_run=resolved_in,
+                    )
+                )
         return persistent
 
     def _identify_newly_resolved(
@@ -481,17 +524,12 @@ class BatchPostMortemEvaluator:
             return resolved
 
         for record in ledger.tasks.values():
-            current_entries = [
-                e for e in record.history if e.run_id == current_run_id
-            ]
-            prior_entries = [
-                e for e in record.history if e.run_id != current_run_id
-            ]
+            current_entries = [e for e in record.history if e.run_id == current_run_id]
+            prior_entries = [e for e in record.history if e.run_id != current_run_id]
 
             # Passed in current run and failed in at least one prior run
-            if (
-                any(e.verdict == "PASS" for e in current_entries)
-                and any(e.verdict == "FAIL" for e in prior_entries)
+            if any(e.verdict == "PASS" for e in current_entries) and any(
+                e.verdict == "FAIL" for e in prior_entries
             ):
                 resolved.append(record.task_id)
 
@@ -582,12 +620,14 @@ class BatchPostMortemEvaluator:
 
         # Progression table
         if report.progression:
-            lines.extend([
-                "## Progression",
-                "",
-                "| Run | Attempted | Passed | Failed | Cumulative | Remaining | Cost |",
-                "|-----|-----------|--------|--------|------------|-----------|------|",
-            ])
+            lines.extend(
+                [
+                    "## Progression",
+                    "",
+                    "| Run | Attempted | Passed | Failed | Cumulative | Remaining | Cost |",
+                    "|-----|-----------|--------|--------|------------|-----------|------|",
+                ]
+            )
             for run in report.progression:
                 lines.append(
                     f"| {run.run_id} | {run.tasks_attempted} | {run.tasks_passed} "
@@ -627,27 +667,31 @@ class BatchPostMortemEvaluator:
         # Velocity
         if report.velocity:
             v = report.velocity
-            lines.extend([
-                "## Velocity",
-                "",
-                f"- Tasks per run (avg): {v.tasks_per_run_avg}",
-                f"- Estimated runs remaining: {v.estimated_runs_remaining}",
-                f"- Trend: {v.trend}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Velocity",
+                    "",
+                    f"- Tasks per run (avg): {v.tasks_per_run_avg}",
+                    f"- Estimated runs remaining: {v.estimated_runs_remaining}",
+                    f"- Trend: {v.trend}",
+                    "",
+                ]
+            )
 
         # Cost
         if report.cumulative_cost:
             c = report.cumulative_cost
-            lines.extend([
-                "## Cumulative Cost",
-                "",
-                f"- Total: ${c.total_usd:.4f}",
-                f"- Per task (avg): ${c.per_task_avg_usd:.4f}",
-                f"- Retry cost: ${c.retry_cost_usd:.4f} "
-                f"({c.retry_cost_fraction:.1%} of total)",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Cumulative Cost",
+                    "",
+                    f"- Total: ${c.total_usd:.4f}",
+                    f"- Per task (avg): ${c.per_task_avg_usd:.4f}",
+                    f"- Retry cost: ${c.retry_cost_usd:.4f} "
+                    f"({c.retry_cost_fraction:.1%} of total)",
+                    "",
+                ]
+            )
 
         return "\n".join(lines)
 
@@ -757,19 +801,15 @@ class BatchPostMortemEvaluator:
             result["avg_dashboard_slope"] = round(
                 _linear_slope(dashboard_scores) or 0.0, 4
             )
-            result["avg_alert_slope"] = round(
-                _linear_slope(alert_scores) or 0.0, 4
-            )
-            result["avg_slo_slope"] = round(
-                _linear_slope(slo_scores) or 0.0, 4
-            )
+            result["avg_alert_slope"] = round(_linear_slope(alert_scores) or 0.0, 4)
+            result["avg_slo_slope"] = round(_linear_slope(slo_scores) or 0.0, 4)
         if phantom_ratios:
-            result["phantom_ratio_slope"] = round(
-                (_linear_slope(phantom_ratios) or 0.0), 4
-            ) if len(phantom_ratios) >= 2 else 0.0
-            result["phantom_services_per_run"] = [
-                round(r, 4) for r in phantom_ratios
-            ]
+            result["phantom_ratio_slope"] = (
+                round((_linear_slope(phantom_ratios) or 0.0), 4)
+                if len(phantom_ratios) >= 2
+                else 0.0
+            )
+            result["phantom_services_per_run"] = [round(r, 4) for r in phantom_ratios]
             result["phantom_services_resolved"] = (
                 len(phantom_ratios) >= 2
                 and phantom_ratios[-1] == 0.0
@@ -780,15 +820,11 @@ class BatchPostMortemEvaluator:
                 len(dashboard_scores) >= 2
                 and dashboard_scores[-1] > dashboard_scores[0]
             )
-            result["composite_trajectory"] = [
-                round(s, 4) for s in composite_scores
-            ]
+            result["composite_trajectory"] = [round(s, 4) for s in composite_scores]
 
         return result
 
-    def write_outputs(
-        self, report: BatchPostMortemReport, output_dir: str
-    ) -> None:
+    def write_outputs(self, report: BatchPostMortemReport, output_dir: str) -> None:
         """Write batch post-mortem outputs to disk."""
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
