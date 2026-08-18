@@ -7,6 +7,13 @@
   FR-2 registry · FR-3 auto-derive, proven against portal-v2's real manifests); I4–I6 surface
   (`a32bf059`: FR-4 `startd8 prime-ledger list/show/artifacts` · FR-5 postmortem hook auto-records
   every run · FR-6 `prime-ledger verify` PHANTOM/DRIFT oracle). 64 tests across the subsystem.
+- **Follow-ons (post-spec):** `record` backfill command (`e2fa1499`); **portfolio backfilled** — 5
+  real projects recorded (kestra/portal-v2/online-boutique-demo/strtd8-v2-cascade/bnb-cap-prime,
+  $8.03 total); `trends` command (`f4a81054`) — per-project cost + $0-local (micro-prime) ratio over
+  runs. **Dropped after grounding:** the "auto-record standalone `run_prime_workflow` runs" idea —
+  the generation-manifest is *pipeline-mode only*, so standalone runs (mostly benchmark/pilot) can't
+  auto-derive; the real cap-dev-pipe path already records via FR-5. **Next per spec:** C4 (delivery-
+  ledger cross-project rollup) fills the reserved `artifacts.delivery_ledger` pointer.
 - **Derives from:** `INSTANTIATION_prime-project-generation-ledger.md` (the `/reflective-instantiation`
   loop that named cell C1). **Built ON** `src/startd8/contractors/batch_postmortem.py` — an extension,
   not a reinvention.
