@@ -9,6 +9,7 @@ single HUMAN-RESIDUE placeholder (SCHEMA §5), never invented prose.
 
 from __future__ import annotations
 
+from ..navigator import req_header as H
 from .models import Howto
 
 #: The generated-file marker the provider's ``owns()`` matches (STANDARD Part 4). A stable comment,
@@ -55,7 +56,9 @@ def render_howto(howto: Howto) -> str:
     parts.append(f"**companionKind:** {howto.companion_kind}  ")
     parts.append(f"**version:** {howto.version}  ")
     parts.append(f"**maturity:** {howto.maturity}  ")
-    parts.append(f"**pairsWith:** `{howto.pairs_with}` ({howto.pairs_with_liveness})")
+    # STANDARD 6d: the pairsWith back-reference uses the ONE shared family format (render+provider
+    # can't drift). Liveness is not inlined here — it lives on the model + the conformance findings.
+    parts.append(H.render_pairs_with_line(howto.pairs_with))
     parts.append("")
     parts.append(f"> **Semantic name:** *{howto.name}*  ")
     parts.append(f"> **Readable handle:** `{howto.handle}`  ")

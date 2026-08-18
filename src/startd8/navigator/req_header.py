@@ -65,6 +65,36 @@ def req_key(text: str, req_path: Optional[Path] = None) -> str:
     return "req"
 
 
+# The projector back-reference line (STANDARD Part-6d): a projector's render embeds it and its
+# provider parses it back — a **two-file byte-contract**. Sharing ONE render+parse pair here is the
+# metabolize step that stops the three projectors drifting on it (they did: det-howto invented its own
+# format). Canonical = the det-plan/det-handoff form (kept exactly so their committed artifacts stay
+# byte-identical); the parser is tolerant of a leading ``-`` and a trailing ``(LIVE)``-style suffix.
+_PAIRS_WITH_DOC_LINE = re.compile(
+    r"^-?\s*\*\*pairsWith:\*\*\s*`?(?P<p>[^`\n(]+?)`?(?:\s*\([^)]*\))?\s*$",
+    re.MULTILINE,
+)
+
+
+def render_pairs_with_line(source: str) -> str:
+    """The canonical ``pairsWith`` back-reference line a projector render embeds (STANDARD 6d).
+
+    ONE format across the family so render + provider cannot drift. Paired with
+    :func:`parse_pairs_with_line`; a projector must use both, never a hand-rolled regex.
+    """
+    return f"- **pairsWith:** `{source}`"
+
+
+def parse_pairs_with_line(content: str) -> Optional[str]:
+    """Recover the source path from a rendered doc's ``pairsWith`` line (tolerant), or ``None``.
+
+    Accepts the canonical line, an optional leading ``-`` bullet, and an optional trailing
+    ``(<liveness>)`` suffix (so a doc rendered by an older/variant projector still resolves).
+    """
+    m = _PAIRS_WITH_DOC_LINE.search(content)
+    return m.group("p").strip() if m else None
+
+
 def repo_root(req_path: Optional[Path]) -> Optional[Path]:
     """Infer the repo root from a doc path (walk up to a dir containing ``src/startd8``)."""
     if req_path is None:

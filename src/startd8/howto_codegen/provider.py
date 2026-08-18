@@ -8,19 +8,15 @@ DEBUG** via ``get_logger(__name__)`` so a non-skip is diagnosable (STANDARD Part
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from ..contractors.deterministic_providers import ProviderContext
 from ..logging_config import get_logger
+from ..navigator import req_header as H
 from .projector import NotHowtoOwedError, project_howto
 from .render import GENERATED_MARKER, render_howto
 
 logger = get_logger(__name__)
-
-#: The `pairsWith` back-reference line in a rendered doc (STANDARD 6d) — the resolvable pointer the
-#: provider re-projects from. Matches ``**pairsWith:** `<path>` (LIVE)``.
-_PAIRS_WITH_LINE = re.compile(r"^\*\*pairsWith:\*\*\s*`(?P<p>[^`]+)`", re.MULTILINE)
 
 
 class DetHowtoProjectorProvider:
@@ -34,11 +30,10 @@ class DetHowtoProjectorProvider:
 
     def _source_path(self, content: str, context: ProviderContext) -> Path | None:
         """Resolve the source REQ path from the doc's ``pairsWith`` back-reference (STANDARD 6d)."""
-        m = _PAIRS_WITH_LINE.search(content)
-        if not m:
+        raw = H.parse_pairs_with_line(content)
+        if not raw:
             logger.debug("det-howto: no pairsWith line — cannot re-project to compare")
             return None
-        raw = m.group("p").strip()
         candidate = Path(raw)
         if not candidate.is_absolute():
             candidate = (context.project_root / raw).resolve()

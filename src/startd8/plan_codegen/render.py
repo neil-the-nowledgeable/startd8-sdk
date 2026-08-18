@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import List
 
+from ..navigator import req_header as H
 from .models import DetPlan, Iteration
 
 # The generated-file marker (SCHEMA §10 / provider ``owns``): its presence identifies a projected
@@ -52,7 +53,7 @@ def render_plan(plan: DetPlan) -> str:
     lines.append("")
     lines.append(f"- **version:** {plan.version}")
     lines.append(f"- **formatVersion:** {plan.format_version}")
-    lines.append(f"- **pairsWith:** `{plan.pairs_with}`")
+    lines.append(H.render_pairs_with_line(plan.pairs_with))
     lines.append(f"- **companionKind:** {plan.companion_kind}")
     lines.append(f"- **maturity:** {plan.maturity}")
     lines.append(f"- **handle:** `{plan.handle}`")

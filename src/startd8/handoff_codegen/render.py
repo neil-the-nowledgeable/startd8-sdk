@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import List
 
+from ..navigator import req_header as H
 from .models import Handoff
 
 GENERATED_MARKER = "<!-- GENERATED det-handoff/0.1 — projected $0 from the paired REQ + ledger by startd8 handoff_codegen; do not edit by hand -->"
@@ -22,7 +23,7 @@ def render_handoff(handoff: Handoff) -> str:
     lines.append("")
     lines.append(f"- **version:** {h.version}")
     lines.append(f"- **formatVersion:** {h.format_version}")
-    lines.append(f"- **pairsWith:** `{h.pairs_with}`")
+    lines.append(H.render_pairs_with_line(h.pairs_with))
     lines.append(f"- **base:** {h.base}")
     lines.append(f"- **companionKind:** {h.companion_kind}")
     lines.append(f"- **maturity:** {h.maturity}")

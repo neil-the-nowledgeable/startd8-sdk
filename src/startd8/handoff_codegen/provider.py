@@ -14,14 +14,12 @@ from typing import Optional
 
 from ..contractors.deterministic_providers import ProviderContext
 from ..logging_config import get_logger
+from ..navigator import req_header as H
 from .projector import NotHandoffOwedError, project_handoff
 from .render import GENERATED_MARKER, render_handoff
 
 logger = get_logger(__name__)
 
-_PAIRS_WITH_LINE = re.compile(
-    r"^-\s*\*\*pairsWith:\*\*\s*`?(?P<p>[^`\n]+?)`?\s*$", re.MULTILINE
-)
 # Extract the sha from ``- **base:** main @ <sha>`` so re-projection reproduces the same base line.
 _BASE_LINE = re.compile(
     r"^-\s*\*\*base:\*\*\s*main @ (?P<sha>[^\s(]+)\s*$", re.MULTILINE
@@ -72,9 +70,8 @@ class DetHandoffProjectorProvider:
     def _resolve_req(content: str, context: ProviderContext) -> Optional[Path]:
         """Resolve the paired REQ from the handoff's ``pairsWith`` line, then a ``.md`` anchor."""
         root = Path(context.project_root)
-        m = _PAIRS_WITH_LINE.search(content)
-        if m:
-            name = m.group("p").strip()
+        name = H.parse_pairs_with_line(content)
+        if name:
             candidates = [root / name]
             for anchor in context.source_anchors:
                 ap = Path(anchor)

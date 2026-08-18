@@ -9,20 +9,16 @@ is the cited ``$0`` generator.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Optional
 
 from ..contractors.deterministic_providers import ProviderContext
 from ..logging_config import get_logger
+from ..navigator import req_header as H
 from .projector import NotPlanOwedError, project_plan
 from .render import GENERATED_MARKER, render_plan
 
 logger = get_logger(__name__)
-
-_PAIRS_WITH_LINE = re.compile(
-    r"^-\s*\*\*pairsWith:\*\*\s*`?(?P<p>[^`\n]+?)`?\s*$", re.MULTILINE
-)
 
 
 class DetPlanProjectorProvider:
@@ -72,9 +68,8 @@ class DetPlanProjectorProvider:
         lives alongside the plan in the design corpus). Falls back to a ``.md`` source anchor.
         """
         root = Path(context.project_root)
-        m = _PAIRS_WITH_LINE.search(content)
-        if m:
-            name = m.group("p").strip()
+        name = H.parse_pairs_with_line(content)
+        if name:
             # Try alongside the plan's own dir first (design docs are siblings), then the root.
             candidates = [root / name]
             for anchor in context.source_anchors:
