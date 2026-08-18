@@ -29,6 +29,9 @@ coordinations** (owners' calls).
 | **REQ-27** | self-dogfood `verify.gate` on our own corpus | 📄 spec · build-ready | build |
 | **REQ-28** | runtime o11y grounding (feature + AI o11y → SARIF/seam) | 📄 spec · build-ready | build |
 | **REQ-29** | the `$0` REQ→PLAN projector (det-plan-kit's generator) | 📄 spec · **has build handoff** | **build first** (§2.1) |
+| **REQ-32** | the draft-time firing wire (the convergence unlock — 2 wires + REQ-01 FR-4 + LOOP_CATALOG #8) | 📄 **spec** · build-ready | build (cross-repo: dev-os + CRP generator) — **prereq for the theme lints** |
+| **REQ-30/31** | schema `Emits:` · lifecycle `Lifecycle:` FR-field grammar (themes #3/#6) | ⬜ named, not yet specced | spec after REQ-32 (they fire through it) |
+| **ambiguity / atomic-write / security fact-rungs** | the top-3 ship-ready theme lints | ⬜ backlog (SYNTHESIS §3) | author each as one predicate once REQ-32's seam exists |
 | **CHARTER** det-doc-kit family | 7 invariants + audit-hardened §5 | ✅ directed | governs every kit build |
 | **SCHEMA** det-plan/0.1 | the plan format | 📄 spec | adopt into `dev-os/det-plan-kit/SCHEMA.md` |
 | **realization-facet REQ** | fill the reserved `regime` slot + determinism-% rollup | ⬜ **not yet specced** | spec it (folds OQ-1/OQ-4) |
