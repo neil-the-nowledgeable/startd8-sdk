@@ -1,9 +1,13 @@
 # Standard — the det-doc-kit `$0` PROJECTOR pattern
 
-**Date:** 2026-08-17 · **Type:** extracted standard (Hansei / `/reflective-retrospective`) · **Status:** proved-once + cold-adopter-hardened (simulated; not yet independently adopted)
+**Date:** 2026-08-17 · **Type:** extracted standard (Hansei / `/reflective-retrospective`) · **Status:** **ADOPTED** — a second projector (det-handoff) was built against it with no new friction
 **Proved by:** REQ-29 — `src/startd8/plan_codegen/` (the det-plan projector), shipped `35e75c89`, hardened `33606c12`.
 **Hardened by:** a `/reflective-adoption` **cold-adopter dry-run** (2026-08-17) that tried to build the det-crp projector
 from this doc alone and found the gaps §0/§Part-6 below close.
+**Adopted by:** `src/startd8/handoff_codegen/` (the det-handoff projector, `5ba7eb48`) — the real second-projector build.
+Because the dry-run had already folded its gaps back, the real build hit **no new shape→build-spec gaps**; it surfaced
+only two *refinements* (the shared header extraction + the doc-type-specific gate signal), folded below. This is the
+`/reflective-adoption` gate **passed**.
 **Governs:** every future det-doc-kit **projector** — `det-handoff` (`$0` REQ+ledger→HANDOFF), `det-howto`, `det-ledger`.
 **Does NOT govern:** `det-crp` — it is a **thin format+lint kit whose generator already exists** (the `new-cnvrg-rvw-prmpt` compiler); the review-log is human-*accreted*, not projected. See `SCHEMA_det-crp-0.1.md §9`. (Cold-adopter dry-run finding: not every det-doc-kit member is a projector.)
 **Grounded in:** the working code + `PILOT_REPORT_REQ-29-det-plan-projector.md`, not aspiration.
@@ -62,7 +66,7 @@ Each clause cites the REQ-29 file that proved it. A new projector `det-<doc>` fi
 
 | Behavior | REQ-29 instance | Rule (charter ref) |
 |----------|-----------------|--------------------|
-| **6a. Solo-vs-gap gate** | `is_plan_owed()` → `NotPlanOwedError`; a solo REQ projects **nothing**, reported skipped, exit 0 | Fire **only** when a companion is *owed*; never invent ceremony for a solo-by-design source (charter §6.4). |
+| **6a. Solo-vs-gap gate** | `is_plan_owed()` → `NotPlanOwedError`; a solo REQ projects **nothing**, reported skipped, exit 0 | Fire **only** when a companion is *owed*; never invent ceremony for a solo-by-design source (charter §6.4). **The gate *signal* is doc-type-specific** (det-handoff adoption finding): det-plan reads a REQ **marker** (`plan deferred`); det-handoff reads **ledger state** (delivered + no open follow-on → not owed). Identify your signal per doc-type. |
 | **6b. Anti-inflation maturity** | render stamps `maturity: 0.1`; `validate_*` rejects an inflated stamp | A *projected* artifact starts at the lowest rung and never claims unearned hardening (charter inv-3). |
 | **6c. DIDL naming** | `naming.name_forms(...)` → the projected doc's `name`/`handle`/`ref` | Every projected artifact carries a semantic name + readable handle + canonical ref; no integer-only names (charter inv-5). |
 | **6d. Source back-reference** | the render embeds `pairsWith: <source>`; the provider re-resolves the source from it | The rendered doc MUST embed a resolvable pointer to its source, or `provider.is_in_sync` can't re-project to compare. |
@@ -132,9 +136,10 @@ cell) is accepted by **§-conformance + zero findings** instead (REQ-16/17).
 | REQ-29 five-pilot (format, iter-1) | across req *instances* (same corpus) | format hardened | G-1/G-2/G-3 → `SCHEMA_det-plan-0.1 §2/§3` |
 | Cold-adopter dry-run → det-crp (2026-08-17) | simulated, single-agent | standard hardened **+ premise corrected** | GAP-A/B → §0; GAP-C/D/E/F → Part 6; **det-crp is not a projector** → `SCHEMA_det-crp-0.1.md` (thin format+lint kit, generator cited) |
 | `SCHEMA_det-handoff-0.1` authored (2026-08-17) | format for the second projector | format ready | dual-source note (§0.1) → standard §0.2 step 2 |
-| *det-handoff projector build* | **pending** — the real second-*projector* adoption (`$0` REQ+ledger→HANDOFF) | — | (the true `/reflective-adoption` gate; format now exists — the build is all that remains) |
+| **det-handoff projector built** (`5ba7eb48`) | the real second-*projector* adoption (`$0` REQ+ledger→HANDOFF) | **PASSED — standard transferred, 0 new shape-gaps** | 2 refinements: (a) shared `req_header` extracted (1st projector inlined it) → `plan_codegen` migrated too; (b) the solo-vs-gap *signal* is doc-type-specific (det-plan = REQ marker, det-handoff = ledger state) → §Part-6a note |
 
-*proved-once + cold-adopter-hardened — one projector (det-plan) establishes the shape, and a simulated cold-adopter
-closed the shape→build-spec gap. It becomes a **full** standard only when a second projector (det-crp/det-handoff) is
-actually built against it without new friction — and most honestly when an **independent** adopter does it (this
-dry-run was single-agent; I carried context the doc should hold). That independent build is the real `/reflective-adoption` gate.*
+*ADOPTED — det-plan established the shape, a cold-adopter dry-run closed the shape→build-spec gap, and the det-handoff
+projector (`5ba7eb48`) was then **built against this doc with zero new shape-gaps** — the `/reflective-adoption` gate
+passed. Remaining honesty caveat: both adoptions were **single-agent** (I carried context the doc might still assume);
+the strongest possible signal is an **independent** adopter building the third projector (det-howto / det-ledger) from
+this doc cold. Until then: adopted-once, not yet independently replicated.*
