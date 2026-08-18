@@ -190,6 +190,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--census-out", type=str, default=None, metavar="DIR",
+        help=(
+            "Run the determinism-gap census over this generation: install an observe-only collector, "
+            "then write census-report.md + census.sarif + census-observations.json to DIR — the ranked "
+            "per-language 'where the LLM is load-bearing' report. Profiles the NORMAL pipeline; "
+            "incompatible with --benchmark-mode (which is LLM-maximal and force-disables the census)."
+        ),
+    )
+    parser.add_argument(
         "--walkthrough", action="store_true",
         help="Build and persist all LLM prompts without calling LLMs",
     )
@@ -390,6 +399,21 @@ def main() -> int:
     # what the benchmark measures.
     if args.benchmark_mode:
         os.environ["STARTD8_CENSUS_DISABLED"] = "1"
+    # Determinism-gap census: profile the NORMAL pipeline (not benchmark-mode, which is LLM-maximal and
+    # force-disables the census above). Install the observe-only collector now so the construction hooks
+    # record; the report is written after the workflow completes.
+    if args.census_out and args.benchmark_mode:
+        parser.error("--census-out is incompatible with --benchmark-mode (the census profiles the normal pipeline; benchmark-mode is LLM-maximal and force-disables it)")
+    _census_collector = None
+    if args.census_out:
+        import atexit
+
+        from startd8.census import begin_census, write_census
+        _census_collector = begin_census()
+        if _census_collector is not None:
+            # Dump on interpreter exit so the report is written no matter which path main() returns from
+            # (the collector has accumulated observations across the whole generation by then).
+            atexit.register(write_census, _census_collector, args.census_out)
 
     setup_logging(verbose=args.verbose)
 

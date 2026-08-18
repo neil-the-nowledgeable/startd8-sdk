@@ -19,12 +19,14 @@ from startd8.census import (
     CensusCollector,
     CensusObservation,
     FindingClass,
+    begin_census,
     build_report,
     build_scoreboard,
     get_collector,
     record_intervention,
     render_sarif,
     set_collector,
+    write_census,
 )
 from startd8.census import rule_catalog
 from startd8.census.scoreboard import ABSENT
@@ -307,3 +309,51 @@ def test_engine_hook_skips_template_and_failed_results():
     _census_observe_element(_Template(), "python")
     _census_observe_element(_Failed(), "python")
     assert len(c) == 0
+
+
+# ── The run-driver: begin_census + write_census ─────────────────────────────────────────────────────
+
+def test_begin_census_installs_a_collector():
+    coll = begin_census()
+    assert coll is not None
+    assert get_collector() is coll
+
+
+def test_begin_census_returns_none_when_hard_disabled(monkeypatch):
+    monkeypatch.setenv("STARTD8_CENSUS_DISABLED", "1")
+    assert begin_census() is None
+    assert get_collector() is None
+
+
+def test_write_census_writes_all_three_artifacts_with_content(tmp_path):
+    import json
+
+    coll = begin_census()
+    record_intervention(FindingClass.BODY_FILL, "go", "method", file_path="quote.go")
+    record_intervention(FindingClass.BODY_FILL, "go", "method", file_path="cart.go")
+    record_intervention(FindingClass.REPAIR_IMPORT, "csharp", "class", file_path="Cart.cs")
+    out = write_census(coll, tmp_path / "census-out")
+
+    md = (out / "census-report.md").read_text()
+    assert "Determinism-gap census" in md
+    assert "Total observations:** 3" in md
+    assert "body_fill" in md and "go" in md          # the top ratchet row
+    assert "csharp" in md
+    assert "java" in md and ABSENT in md              # Java lane reads absent, not 0
+
+    sarif = json.loads((out / "census.sarif").read_text())   # valid SARIF JSON
+    assert isinstance(sarif, dict)
+
+    obs = json.loads((out / "census-observations.json").read_text())
+    assert len(obs) == 3 and obs[0]["finding_class"] in {"body_fill", "repair_import"}
+
+
+def test_write_census_empty_still_writes_an_honest_report(tmp_path):
+    coll = begin_census()
+    out = write_census(coll, tmp_path / "empty")
+    md = (out / "census-report.md").read_text()
+    assert "Total observations:** 0" in md
+    # Every known lane present and absent — honest, not a missing file.
+    for lane in ("python", "go", "nodejs", "java", "csharp"):
+        assert lane in md
+    assert ABSENT in md

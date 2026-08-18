@@ -26,6 +26,7 @@ from .hook import (
 )
 from .report import CensusReport, LanguageLoad, build_report, render_sarif
 from .scoreboard import LaneScore, build_scoreboard
+from .driver import begin_census, write_census
 
 __all__ = [
     "CensusCollector",
@@ -40,4 +41,6 @@ __all__ = [
     "LanguageLoad",
     "build_report",
     "render_sarif",
+    "begin_census",
+    "write_census",
 ]
