@@ -90,6 +90,28 @@ def test_artifacts_prints_the_map(tmp_path):
     assert len(non_null) == 10 and "generation_manifest" in non_null
 
 
+# ── record (backfill) ────────────────────────────────────────────────────────────────────────────
+
+
+def test_record_backfills_a_project(tmp_path):
+    home = str(tmp_path / "home")
+    root = tmp_path / "portal-v2"
+    shutil.copytree(_FIXTURE, root)
+    res = _RUNNER.invoke(prime_ledger_app, ["record", str(root), "--home", home])
+    assert res.exit_code == 0 and "recorded portal-v2" in res.stdout
+    # now visible in the index
+    assert "portal-v2" in [p["project_id"] for p in gl.load_index(home).projects]
+
+
+def test_record_missing_manifest_errors(tmp_path):
+    (tmp_path / "bare").mkdir()
+    res = _RUNNER.invoke(
+        prime_ledger_app,
+        ["record", str(tmp_path / "bare"), "--home", str(tmp_path / "home")],
+    )
+    assert res.exit_code == 2
+
+
 # ── FR-6: verify (advisory exit codes) ───────────────────────────────────────────────────────────────
 
 

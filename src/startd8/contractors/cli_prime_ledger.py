@@ -180,3 +180,33 @@ def verify(
                 f"[{colour}]{f.kind}[/{colour}] {f.project_id}/{f.run_id}: {f.detail}"
             )
     raise typer.Exit(_EXIT_FINDINGS if findings else _EXIT_OK)
+
+
+@prime_ledger_app.command("record")
+def record(
+    project_root: str = typer.Argument(
+        ...,
+        help="A Prime-generated project root (must contain .startd8/generation-manifest.json).",
+    ),
+    home: Optional[str] = typer.Option(
+        None, "--home", help="Override the ledger home."
+    ),
+) -> None:
+    """Backfill: record an existing project's latest run into the ledger (FR-3, manual entry point).
+
+    The postmortem hook (FR-5) records new runs automatically; this command brings *already-generated*
+    projects into the index. Auto-derived from the project's real artifacts — safe to re-run (idempotent
+    per run id).
+    """
+    try:
+        ledger = gl.record_run(project_root, home=home)
+    except FileNotFoundError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERR)
+    cum = ledger.cumulative()
+    console.print(
+        f"[green]recorded[/green] {ledger.project_id} — {cum['runs']} run(s) · "
+        f"${cum['total_cost_usd']:.4f} · {cum['features_passed']}/"
+        f"{cum['features_total_in_batch']} · {cum['status']}"
+    )
+    raise typer.Exit(_EXIT_OK)
