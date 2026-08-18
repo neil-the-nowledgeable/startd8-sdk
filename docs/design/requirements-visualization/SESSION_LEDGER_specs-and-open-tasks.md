@@ -153,9 +153,9 @@ explicitly. Names follow the semantic-naming convention (no integer+content-type
 
 | # | Spec | Track | State | Effort | Claim | Handoff / note |
 |---|------|-------|-------|--------|-------|----------------|
-| 1 | `REQ-unify-card-visibility-predicates` (Move 3) | card-browse | **BUILD-READY** | S | — | `HANDOFF_take-REQ-unify-visibility-predicates-…` — the enabler; fixes the `pagedCards`↔`pf-hidden` bug; **do first** |
-| 2 | `REQ-freetext-search-on-navigator-card-browse` | card-browse | **BUILD-READY** | M | — | `HANDOFF_take-REQ-freetext-search-…` — consumes Move 3's seam (its FR-5 is subsumed by Move 3) |
-| 3 | Move 2 — audience-first tiering | card-browse | outlined | L | — | spec reflectively against Move 3's landed seam (STRATEGY §Move 2) |
+| 1 | `REQ-unify-card-visibility-predicates` (Move 3) | card-browse | ✅ **SHIPPED** (`40efeac6`) | S | done | one `applyVisibility()` recompute + non-clobbering hide-reasons + survivor-set `pagedCards()` (fixed the `pagedCards`↔`pf-hidden` bug) + the FR-5 seam; 7 FR pins green |
+| 2 | `REQ-freetext-search-on-navigator-card-browse` | card-browse | ✅ **SHIPPED** (`49db7e91`) | M | done | rode Move 3's seam — collapsed to registering `srch-hidden` as one predicate (FR-4/5 by construction); definition-owned `search` group; 7 FR pins green |
+| 3 | Move 2 — audience-first tiering | card-browse | **next in track** (outlined) | L | — | spec reflectively against Move 3's landed seam (STRATEGY §Move 2); the audience-per-card predicate plugs into `PRE_PAGING_REASONS` (reserved `aud-hidden`) |
 | A | `REQ-feature-capability-composition-rollup` | graph/grammar | **BUILD-READY** | S–M | — | `HANDOFF_take-REQ-feature-capability-composition-…` — orthogonal; mostly REUSE (the `serves` edge is already generic; the one gate is the `_SERVES` parser extend + join + rank); the SDK dogfood of ContextCore EB-4 |
 | B | Move 1 — navig8r as the hub (cross-source graph) | graph | outlined | L | — | after the composition primitive (STRATEGY §Move 1) |
 
