@@ -74,9 +74,13 @@ class PrimeContractorConfig:
     # during _parse_config(). Lazy import to avoid circular deps.
     complexity_config: Any = None  # Optional[ComplexityRoutingConfig]
 
-    # Top-level flags
-    micro_prime_enabled: bool = False
-    complexity_routing_enabled: bool = False
+    # Top-level flags. Decouple Step 2: full-quality by DEFAULT — Micro Prime + complexity routing on,
+    # so a normal run gets element-level generation + cheap-tier routing (the $0-simple-features
+    # economics) without a flag. `--benchmark-mode` forces them back off (Step 1, apply_cli_overrides);
+    # `--no-micro-prime` / a config `"enabled": false` opt out per-run. Micro Prime is INERT without a
+    # forward-manifest (bypasses to the cloud fallback), so default-on is safe for manifest-less runs.
+    micro_prime_enabled: bool = True
+    complexity_routing_enabled: bool = True
     repair_enabled: bool = True
 
     # Global provider knob (MODEL_CONFIG FR-4/FR-6): when set, any agent role
@@ -135,12 +139,16 @@ def _parse_config(raw: dict[str, Any]) -> PrimeContractorConfig:
     mp = raw.get("micro_prime", {})
     if isinstance(mp, dict):
         config.micro_prime = mp
-        config.micro_prime_enabled = mp.pop("enabled", False)
+        config.micro_prime_enabled = mp.pop(
+            "enabled", True
+        )  # Step 2: default-on (benchmark forces off)
 
     # Complexity routing section
     cr = raw.get("complexity_routing", {})
     if isinstance(cr, dict):
-        config.complexity_routing_enabled = cr.pop("enabled", False)
+        config.complexity_routing_enabled = cr.pop(
+            "enabled", True
+        )  # Step 2: default-on (benchmark forces off)
         config.complexity_routing = cr
         # Parse thresholds into ComplexityRoutingConfig
         if cr:

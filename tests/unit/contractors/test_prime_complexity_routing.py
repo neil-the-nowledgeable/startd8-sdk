@@ -437,8 +437,18 @@ class TestBenchmarkModeDecouple:
         assert pc.complexity_routing_enabled is False
 
     def test_non_benchmark_run_is_unaffected(self):
-        # the Step-1 block is inert without --benchmark-mode; an explicit enable still works
-        # (proves zero behavioral change to normal runs today)
+        # the Step-1 block is inert without --benchmark-mode; an explicit enable is honored
         pc = self._apply(micro_prime=True, complexity_routing=True)
         assert pc.micro_prime_enabled is True
         assert pc.complexity_routing_enabled is True
+
+    def test_default_is_full_quality_on(self):
+        # Decouple Step 2: a normal run with NO flags now gets Micro Prime + routing on by default
+        pc = self._apply()
+        assert pc.micro_prime_enabled is True
+        assert pc.complexity_routing_enabled is True
+
+    def test_no_micro_prime_opts_out(self):
+        # --no-micro-prime still turns it off against the new default-on baseline
+        pc = self._apply(no_micro_prime=True)
+        assert pc.micro_prime_enabled is False

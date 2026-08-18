@@ -5,7 +5,6 @@ from __future__ import annotations
 import types
 from typing import Any
 
-import pytest
 
 from startd8.complexity.models import ComplexityRoutingConfig, TaskComplexitySignals
 from startd8.contractors.prime_contractor_config import (
@@ -14,10 +13,10 @@ from startd8.contractors.prime_contractor_config import (
     apply_cli_overrides,
 )
 
-
 # ---------------------------------------------------------------------------
 # Default values
 # ---------------------------------------------------------------------------
+
 
 class TestComplexityRoutingConfigDefaults:
     """ComplexityRoutingConfig has correct defaults for all threshold fields."""
@@ -37,6 +36,7 @@ class TestComplexityRoutingConfigDefaults:
 # ---------------------------------------------------------------------------
 # Config file parsing
 # ---------------------------------------------------------------------------
+
 
 class TestConfigFileParsing:
     """Config file with complexity_routing section parses all thresholds."""
@@ -84,17 +84,15 @@ class TestConfigFileParsing:
 
     def test_empty_section_no_config(self) -> None:
         """Empty complexity_routing section produces no config object."""
-        raw: dict[str, Any] = {
-            "complexity_routing": {"enabled": True}
-        }
+        raw: dict[str, Any] = {"complexity_routing": {"enabled": True}}
         config = _parse_config(raw)
         assert config.complexity_routing_enabled is True
         assert config.complexity_config is None
 
     def test_missing_section_defaults(self) -> None:
-        """No complexity_routing section at all."""
+        """No complexity_routing section at all → default-on (Decouple Step 2)."""
         config = _parse_config({})
-        assert config.complexity_routing_enabled is False
+        assert config.complexity_routing_enabled is True
         assert config.complexity_config is None
 
     def test_unknown_keys_ignored(self) -> None:
@@ -114,6 +112,7 @@ class TestConfigFileParsing:
 # ---------------------------------------------------------------------------
 # CLI overrides
 # ---------------------------------------------------------------------------
+
 
 def _make_args(**kwargs: Any) -> types.SimpleNamespace:
     """Build a minimal argparse-like namespace."""
@@ -214,6 +213,7 @@ class TestCLIOverrides:
 # Classifier wiring — config thresholds change routing
 # ---------------------------------------------------------------------------
 
+
 class TestClassifierUsesConfig:
     """Classifier uses config thresholds instead of hardcoded values."""
 
@@ -280,6 +280,7 @@ class TestProviderKnob:
 
     def test_provider_fills_all_unset_roles(self) -> None:
         from startd8.model_catalog import get_latest_model
+
         config = PrimeContractorConfig()
         apply_cli_overrides(config, _make_args(provider="gemini"))
         assert config.default_provider == "gemini"

@@ -5,7 +5,6 @@ across modules. If a test fails, it means a constant was defined in
 two places — consolidate to the canonical source.
 """
 
-import pytest
 
 
 def test_existing_files_budget_single_source():
@@ -141,8 +140,10 @@ def test_prime_contractor_config_defaults():
     from startd8.contractors.prime_contractor_config import PrimeContractorConfig
 
     config = PrimeContractorConfig()
-    assert config.micro_prime_enabled is False
-    assert config.complexity_routing_enabled is False
+    # Decouple Step 2: full-quality by default — Micro Prime + complexity routing on
+    # (--benchmark-mode / --no-micro-prime opt out).
+    assert config.micro_prime_enabled is True
+    assert config.complexity_routing_enabled is True
     assert config.repair_enabled is True
 
 
