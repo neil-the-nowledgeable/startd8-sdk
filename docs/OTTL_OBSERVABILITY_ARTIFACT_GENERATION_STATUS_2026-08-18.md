@@ -1,13 +1,14 @@
 # OTTL in Observability Artifact Generation — Status & Scope
 
 **Date:** 2026-08-18 · **Scope:** `src/startd8/observability/` · **Kind:** capability status / analysis
-**Question answered:** *"Do we have OTTL-driven o11y artifact generation yet?"*
+**Question answered:** *"Do we have OTTL-driven o11y artifact generation yet?"* — including the sharper
+form: *"do we generate Grafana SLOs + dashboards + the metrics that connect them, based on OTTL?"* (reading **(D)**).
 
 > **OTTL** = the [OpenTelemetry Transformation Language](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/ottl),
 > the statement language the Collector's `transform`/`filter`/`routing` processors use to mutate telemetry
 > in flight (e.g. `set(attributes["x"], "y") where resource.attributes["service.name"] == "svc"`).
 
-The answer depends on which of **three** distinct capabilities "OTTL-driven" means. This doc pins each to
+The answer depends on which of **four** distinct capabilities "OTTL-driven" means. This doc pins each to
 the actual code so the status can't drift.
 
 ---
@@ -19,9 +20,11 @@ the actual code so the status can't drift.
 | **(A)** The SDK **generates OTTL** as a first-class o11y artifact | ✅ **Shipped + live-proven** — the `collector_enrichment` business processor |
 | **(B)** OTTL is the **driver/SSOT** other artifacts (dashboards/alerts/SLOs) are **derived from** | ❌ Not built — OTTL is a co-generated *output*, not an *input* |
 | **(C)** The SDK generates **general-purpose OTTL transforms** (filter / route / redact / metric-derive / severity-remap) from a spec | ❌ Not built — only the *one* enrichment class exists |
+| **(D)** An **OTTL-connected vertical** — OTTL produces/labels the **metrics** that the co-generated **dashboards + SLOs** share | ❌ Not built — the three ARE co-generated from one manifest, but the SLO↔dashboard link is the *metric-descriptor* layer; OTTL and that vertical share only the *manifest*, not the metrics |
 
 Net: **we generate one class of OTTL (business-attribute enrichment); we do not use OTTL to drive
-downstream generation, and we do not generate arbitrary OTTL transforms.**
+downstream generation, we do not generate arbitrary OTTL transforms, and the co-generated SLOs/dashboards
+are connected by the metric-descriptor layer — not by OTTL.**
 
 ---
 
@@ -93,7 +96,52 @@ All of those would be new OTTL emitters.
 
 ---
 
-## If we wanted to build (B) or (C)
+## (D) The specific question — an OTTL-connected metric → dashboard → SLO vertical ❌
+
+We **do co-generate** dashboards + SLOs + the OTTL enrichment from one manifest (`generate_observability_artifacts`
+off the same `observability.yaml`), so they're coherent and share a source. But the vertical is **not connected
+through OTTL** — three distinct facts, each grounded:
+
+1. **The dashboard ↔ SLO connection is the metric-descriptor layer, not OTTL.** What links a dashboard panel
+   to its SLO is the shared **metric series** — bound via `MetricDescriptor` / declared-emitted real series /
+   RED convention / span-metrics, with a `declared > suppress > convention` precedence (`_descriptor_for`
+   `:284`, `generate_declared_base_slos` `:1577`, `generate_declared_functional_slos` `:1771`). OTTL is
+   nowhere in that binding.
+
+2. **The metrics are not OTTL-derived.** Metric derivation here is: error-rate from a counter, a counter from
+   a histogram `_count` suffix (`:2466`), and span→metric via the **spanmetrics *connector*** — and that last
+   one is a *documented manual step* ("append the spanmetrics `dimensions` to your existing connector",
+   `:3435`), **not** generated. There is **no OTTL metric-derivation**.
+
+3. **OTTL and the dashboard/SLO vertical share only the *manifest*, not the *metrics*.** The OTTL processor
+   *stamps* `business.criticality`/`business.owner` onto telemetry at the collector. The dashboard/SLO
+   generators *also* use `business.criticality` — but they read it from the **manifest** at generation time to
+   pick alert severity / availability targets / runbook text (`:900`, `:3133`, `:3141`), **not** by querying the
+   OTTL-stamped label. No generated PromQL uses a `{business_criticality=…}` selector.
+
+**So the OTTL-stamped `business.*` label is generated for downstream / human / ad-hoc consumers, but is
+*not queried* by the SDK's own generated dashboards/SLOs — they bake the business context in at generation
+time instead.** OTTL and the dashboard/SLO vertical run in **parallel off the shared manifest**; they are not
+wired through the metrics. That is why the honest answer to reading (D) is **no**.
+
+### The latent wire (a real, small, additive build)
+
+The generated dashboards/SLOs *could* `group_by` / filter on the OTTL-stamped `business.criticality` — which
+would make this a genuinely **OTTL-connected vertical**: OTTL labels the telemetry → dashboards slice by it →
+SLOs gate per-criticality. That is the missing wire, and it's additive: teach the dashboard/SLO generators to
+emit a `by (business_criticality)` grouping (or a `{business_criticality=…}` filter) **when the enrichment is
+present**, gated on the same business context the OTTL emitter already consumes — so **absent enrichment ⇒
+byte-identical** (the empty-default discipline `collector_enrichment` already uses). This is the concrete,
+highest-value form of "OTTL-driven" worth building, and is smaller than either (B) or (C).
+
+> **Why this beats reading (B).** (B) — making OTTL the SSOT other artifacts are *derived from* — inverts the
+> real SSOT (the manifest) for no clear gain. (D)'s wire keeps the manifest as SSOT and simply makes the
+> generated dashboards/SLOs *consume the label OTTL already produces* — closing a stamped-but-unqueried gap
+> rather than re-architecting the source of truth.
+
+---
+
+## If we wanted to build (B), (C), or (D)
 
 Both fit the **existing, well-trodden `artifact_generator` pattern** — no new framework:
 
@@ -105,13 +153,18 @@ Both fit the **existing, well-trodden `artifact_generator` pattern** — no new 
    block is byte/semantically safe.
 4. **Wire into `generate_observability_artifacts`** and add a CLI surface.
 
-**(C) — general transforms** is the more natural next step (a spec section → filter/route/redact OTTL), and
-is additive: each transform class is an independent emitter behind an opt-in spec field, byte-identical when
-the field is absent (the same empty-default discipline `collector_enrichment` uses).
+**Recommended order of value:**
 
-**(B) — OTTL as a derivation driver** is a bigger conceptual change (make OTTL the SSOT other artifacts read)
-and would likely be *lower* value than (C): the manifest/spec is already the SSOT, and deriving dashboards
-from transform statements inverts that without clear benefit. Prefer (C) unless there's a concrete driver.
+- **(D) — the OTTL-connected vertical wire** is the **highest-value, smallest** build: no new artifact type,
+  no new OTTL emitter — just teach the *existing* dashboard/SLO generators to `group_by` / filter on the
+  `business.*` label the enrichment already stamps, gated on the same business context, byte-identical when
+  absent. It closes a concrete stamped-but-unqueried gap.
+- **(C) — general transforms** (a spec section → filter/route/redact OTTL) is the natural next *emitter*
+  build: additive, each transform class an independent emitter behind an opt-in spec field, byte-identical
+  when the field is absent (the empty-default discipline `collector_enrichment` uses).
+- **(B) — OTTL as a derivation driver** is a bigger conceptual change (make OTTL the SSOT other artifacts
+  read) and is likely *lowest* value: the manifest is already the SSOT, so deriving dashboards from transform
+  statements inverts that without clear benefit. Prefer (D), then (C), unless there's a concrete driver for (B).
 
 ---
 
@@ -124,3 +177,6 @@ from transform statements inverts that without clear benefit. Prefer (C) unless 
 - Validation / parity / runtime-fidelity: `collector_enrichment_validation.py`, `collector_enrichment_parity.py`, `runtime_fidelity.py`
 - CLI: `observability enrichment-parity` (`cli.py:808`)
 - Handoff / live proof: `docs/design/COLLECTOR_ENRICHMENT_SDK_HANDOFF.md` (commit `5896a15e`, #321)
+- **(D)** SLO↔metric binding (descriptor layer, not OTTL): `_descriptor_for` `:284`, `generate_slo_definitions` `:2424`, `generate_declared_base_slos` `:1577`, `generate_declared_functional_slos` `:1771`
+- **(D)** metric derivation is counter/histogram/spanmetrics-connector, not OTTL: `:2466` (`_count` fallback), `:3435` (manual spanmetrics `dimensions` step)
+- **(D)** business context read from the manifest at generation time (not queried from the OTTL label): `artifact_generator_generators.py:900,3133,3141`; input at `artifact_generator_models.py:176-184`
