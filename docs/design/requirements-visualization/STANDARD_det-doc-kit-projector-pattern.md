@@ -28,13 +28,16 @@ A cold adopter who skipped these hit a wall immediately. Do them **first**, in o
    the kit owns that grammar (I-2). If it doesn't exist yet, **author it first** (charter §9 sequencing) — you cannot
    project into a format that isn't specified. *(det-plan had `SCHEMA_det-plan-0.1` authored before REQ-29; det-crp does
    **not** yet — so det-crp is format-blocked until its SCHEMA lands.)*
-2. **Name the single upstream authored source, and confirm it is authored — not generated.** The projector is a pure
-   function of ONE upstream doc (`<source>_text`). Before building, answer: *what exact doc is the source, and is it
-   human-authored?* A source that is itself an LLM/compiler output (e.g. det-crp's review-log may be produced by the
-   `new-cnvrg-rvw-prmpt` compiler, and lives embedded as an Appendix-A/B/C section inside a req/plan doc — not a
-   standalone file) **violates the "authored doc" premise** and needs resolving (extract the authored sub-part, or treat
-   the compiler as the projector). *(det-plan's source was unambiguous: one `REQ-*.md`. det-crp's is not — resolve it
-   before writing `projector.py`.)*
+2. **Name the upstream authored source(s), and confirm each is authored — not generated.** The projector is a pure
+   function of its source. Before building, answer: *what exact doc(s) are the source, and are they human-authored?*
+   - A source that is itself an LLM/compiler output (e.g. det-crp's review-log is produced by the
+     `new-cnvrg-rvw-prmpt` compiler, embedded as an Appendix-A/B/C section — not a standalone authored file)
+     **violates the premise** and means the doc-type is likely *not a projector at all* (det-crp became a thin
+     format+lint kit citing the compiler — the dry-run's biggest correction).
+   - **A source may be TWO authored inputs, not one** (det-handoff fold-back): a *primary doc* + a *state/ledger*
+     (det-handoff = the `REQ` + the delivery `ledger`; det-plan was one `REQ`). Both must be authored/accreted for the
+     projection to stay `$0`. *(det-plan's source was one `REQ-*.md`; det-handoff's is `REQ + SESSION_LEDGER`; det-crp's
+     is compiler-generated → not a projector. Resolve which case you're in before writing `projector.py`.)*
 3. **Locate a hand-authored golden instance** to run the acceptance golden-diff against (below), or confirm the cell is
    demand-clearing (no golden → accept on conformance alone).
 
@@ -128,7 +131,8 @@ cell) is accepted by **§-conformance + zero findings** instead (REQ-16/17).
 |----------|------|--------|----------------------|
 | REQ-29 five-pilot (format, iter-1) | across req *instances* (same corpus) | format hardened | G-1/G-2/G-3 → `SCHEMA_det-plan-0.1 §2/§3` |
 | Cold-adopter dry-run → det-crp (2026-08-17) | simulated, single-agent | standard hardened **+ premise corrected** | GAP-A/B → §0; GAP-C/D/E/F → Part 6; **det-crp is not a projector** → `SCHEMA_det-crp-0.1.md` (thin format+lint kit, generator cited) |
-| *det-handoff projector build* | **pending** — the real second-*projector* adoption (`$0` REQ+ledger→HANDOFF) | — | (the true `/reflective-adoption` gate; needs `SCHEMA_det-handoff-0.1` first) |
+| `SCHEMA_det-handoff-0.1` authored (2026-08-17) | format for the second projector | format ready | dual-source note (§0.1) → standard §0.2 step 2 |
+| *det-handoff projector build* | **pending** — the real second-*projector* adoption (`$0` REQ+ledger→HANDOFF) | — | (the true `/reflective-adoption` gate; format now exists — the build is all that remains) |
 
 *proved-once + cold-adopter-hardened — one projector (det-plan) establishes the shape, and a simulated cold-adopter
 closed the shape→build-spec gap. It becomes a **full** standard only when a second projector (det-crp/det-handoff) is
