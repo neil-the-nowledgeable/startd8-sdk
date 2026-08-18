@@ -3,9 +3,10 @@
 - **Schema:** det-req/0.1
 - **Name:** prime-project-generation-ledger
 - **Maturity:** 0.1 (build-ready)
-- **Status:** I1–I3 BUILT + landed (`d0de1087`) — the data spine (FR-1 identity · FR-2 registry ·
-  FR-3 auto-derive) ships, proven by reproducing the portal-v2 row from its real manifests. FR-4 (CLI) ·
-  FR-6 (liveness oracle) · FR-5 (postmortem hook) = I4–I6, the queryable/trustworthy/live surface, remain.
+- **Status:** COMPLETE — all 6 FRs built + landed. I1–I3 data spine (`d0de1087`: FR-1 identity ·
+  FR-2 registry · FR-3 auto-derive, proven against portal-v2's real manifests); I4–I6 surface
+  (`a32bf059`: FR-4 `startd8 prime-ledger list/show/artifacts` · FR-5 postmortem hook auto-records
+  every run · FR-6 `prime-ledger verify` PHANTOM/DRIFT oracle). 64 tests across the subsystem.
 - **Derives from:** `INSTANTIATION_prime-project-generation-ledger.md` (the `/reflective-instantiation`
   loop that named cell C1). **Built ON** `src/startd8/contractors/batch_postmortem.py` — an extension,
   not a reinvention.
