@@ -560,9 +560,25 @@ Current version: **0.4.0** (defined in pyproject.toml)
 
 Pre-1.0 SemVer: breaking changes may occur in MINOR versions.
 
+## Where work is tracked (start here for open / not-yet-built work)
+
+**`CLOSURE-LEDGER.md` (repo root) is the project's discovery hub — check it before assuming a spec
+is missing or untracked.** It holds two kinds of open work:
+- **Open *loops* (code)** — built-but-unwired / untested / drifted surfaces, each with an honest
+  maturity (L1–L5) under the **WIP=1** rule. A loose end lands here the moment it exists.
+- **Open *specs* (pre-code)** — the **"Open specs — project-wide index"** section rolls up the topic
+  ledgers: `docs/design/requirements-visualization/SESSION_LEDGER_specs-and-open-tasks.md` (navigator
+  work; **topic-scoped, NOT project-wide** despite its name) and the business-instrumentation specs in
+  `docs/design/business-context-propagation/` (cross-repo, ContextCore-bound — tracked as **BI-1..BI-3
+  in `ContextCore/CLOSURE-LEDGER.md`**, where that build lands).
+
+Each repo keeps its **own** project-specific `CLOSURE-LEDGER.md` (ContextCore has a parallel one); cite
+the sibling repo's ledger for cross-repo work, don't duplicate rows.
+
 ## Documentation
 
 Key docs in `docs/`:
+- `CLOSURE-LEDGER.md` (repo root) - **open-loops + open-specs discovery hub** (see section above)
 - `SDK_ARCHITECTURE_v1.md` - Architecture overview
 - `API_REFERENCE_v1.md` - API reference
 - `ARTISAN_WORKFLOW_GUIDE.md` - Artisan contractor workflow guide (phases, handoff, scripts)
