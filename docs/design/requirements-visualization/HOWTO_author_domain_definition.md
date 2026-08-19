@@ -2,7 +2,8 @@
 
 **For:** an SDK contributor or cross-repo adopter (legal · benchmark · dev-os) adding a **new domain**
 to the navig8r presentation system. **Grounds:** REQ-10 (keystone) · REQ-11 (theme) · REQ-12 (chrome
-bindings) · the three shipped examples in `src/startd8/navigator/view_definition.py`.
+bindings) · REQ-cross-surface-view-definition (`node_state` / `surface_links`) · the shipped
+examples in `src/startd8/navigator/view_definition.py`.
 
 A domain's *presentation* — its status vocabulary, masthead chrome, theme, and content-derived chrome
 — is a **serializable `ViewDefinition`** that `extends` a shared base via a per-leaf cascade. You author
@@ -12,7 +13,8 @@ into the `RenderProfile` the renderers already consume. You do **not** touch a r
 ## The mental model
 
 ```
-BASE_NAVIG8R_DEFINITION  (theme · lenses · control · glance · regions — shared defaults)
+BASE_NAVIG8R_DEFINITION  (theme · lenses · control · glance · regions
+                          · node_state · surface_links — shared defaults)
         ▲ extends
 YOUR_DEFINITION          (your delta: vocabulary + chrome [+ optional theme override + chrome bindings])
         │ resolve(def, registry)  →  deep-merge per leaf, keyed collections by id
@@ -25,7 +27,12 @@ ResolvedDefinition  →  to_render_profile(resolved[, context])  →  RenderProf
 ### 1. Understand what the base gives you (inherit, don't re-declare)
 The base owns the domain-neutral defaults: `theme` (the real `:root` tokens `ink`/`paper`/`accent`),
 `lenses` (role/fluency), `control` (panel structure), `glance` (status roll-up), `regions` (the
-layer skeleton). Your domain inherits all of these — **do not copy them into your delta.**
+layer skeleton), plus the cross-surface sections `node_state` (canonical health + per-surface
+presentation) and `surface_links` (declared drill/rollup pointers). Your domain inherits all of
+these — **do not copy them into your delta.** A resolved dump of a thin delta will still show
+`surface_links.drill.via == "fullview"`; that is inheritance, not something you authored. Drill and
+rollup are **declared-not-wired** until a cockpit adopter reads them — `view-definition --validate`
+passing does not mean tiles are linked.
 
 ### 2. Author your delta
 Add a `ViewDefinition(name="<your-domain>", extends="base", …)` with only what differs:
@@ -37,6 +44,12 @@ Add a `ViewDefinition(name="<your-domain>", extends="base", …)` with only what
       ...
   }}
   ```
+  **Equal-keys opt-in (trap):** `to_render_profile` reads statuses from shared `node_state`
+  presentation (navig8r leaves) **only when** your `vocabulary.statuses` key set **exactly equals**
+  the canonical navig8r map (`grounded` / `spec` / `awaiting` / `excluded` / `unknown`). A proper
+  subset (e.g. only `{spec, awaiting}`) is **not** an opt-in — you keep your own labels and colors.
+  Reusing those five ids on purpose **drops** your authored label/color/meaning in favor of the
+  shared taxonomy. Keep a local vocabulary if you do not want that.
 - **`chrome`** — your masthead/apex strings (`title`, `eyebrow`, `section_lead`, `headline`,
   `summary_meta`, `why`, `do`).
 - **`theme`** *(optional)* — override only the tokens you change; the rest inherit
