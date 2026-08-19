@@ -54,6 +54,20 @@
 
 ---
 
+## Open specs — project-wide index (designed, NOT-yet-built)
+
+> **Open *loops* (code) are the table above; open *specs* (pre-code) live in topic ledgers — this
+> is the index to them.** Added 2026-08-19 to fix the "specs exist, nothing tracks them" gap: start
+> here to find any designed-but-unbuilt work in this repo. Each linked ledger is scoped to its
+> *topic* (not the whole project); this table is the whole-project roll-up.
+
+| Topic | Tracker (authoritative) | Open items | Build lands in |
+|-------|-------------------------|-----------|----------------|
+| Requirements-visualization / navigator + craft | `docs/design/requirements-visualization/SESSION_LEDGER_specs-and-open-tasks.md` — **topic-scoped despite its name; NOT project-wide.** `scripts/verify_ledger.py` audits its ✅ rows | REQ-30/31/32 + the det-req-kit grammar-field batch (cross-repo dev-os) | startd8-sdk + dev-os |
+| Business instrumentation (`business.*` dimension) | `docs/design/business-context-propagation/` (design home) → tracked as **BI-1..BI-3 in `ContextCore/CLOSURE-LEDGER.md`** | Weaver registry group · `business.flow` carrier · map-fidelity gate | **ContextCore** |
+
+---
+
 ## Parked — intentional, NOT defects (do not "fix")
 
 | ID | Artifact | Why it's parked, not broken | Revisit when |
