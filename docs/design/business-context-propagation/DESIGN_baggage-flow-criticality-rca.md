@@ -67,6 +67,38 @@ the **dynamic** flow-criticality that only exists at runtime. Design-time = *pro
 artifacts); runtime = *propagation* (business context → every span) — **two projections of one business-context
 source.** The mapping MUST be single-sourced across both (see §8).
 
+## 2b. Materialization is DECLARATIVE-first (k8s-derived) — code only for the gaps
+
+The earlier framing implied per-language SDK code. In a k8s + OTel environment, almost all of it is **declarative,
+zero-app-code** — which dissolves most of the polyglot chain-fragility guardrail. Two mechanisms do the work, and
+both are **pod-annotation-driven**, so they align natively with ContextCore's `contextcore.io/*` annotation model:
+
+- **Generation + baggage propagation → the OTel Operator.** An `Instrumentation` CRD declares the propagators
+  (`OTEL_PROPAGATORS=tracecontext,baggage`) and the `BaggageSpanProcessor`; a pod annotation
+  (`instrumentation.opentelemetry.io/inject-<lang>`) makes a mutating webhook inject the real SDK. Generation,
+  propagation, and materialization become **CRD config, not code**. *(Go is the rough edge — eBPF-based, less
+  mature than Python/Java/Node/.NET injection.)*
+- **Static business context → the `k8sattributes` processor.** Collector-side, it pulls named `contextcore.io/*`
+  pod annotations onto every signal — zero SDK code, any language. Cleaner than the in-SDK `detector.py` for the
+  static half.
+- **The flow SEED can be MESH config, not app code.** For route-discriminable flows (most), an Istio/Envoy header
+  rule stamps the baggage at the trusted boundary: `route =~ /cart/checkout → baggage:
+  business.flow=checkout,business.criticality=critical`. App code is only needed when the flow depends on request
+  *content* (body/segment/flag), not the route. So the truly-irreducible piece is **authoring the route → flow →
+  criticality mapping** — business knowledge (the same criticality source-of-truth), expressed declaratively.
+
+| Concern | Operator auto-instr | eBPF (Beyla/Odigos) | `k8sattributes` | manual SDK / `instrumentation-gen` |
+|---|:--:|:--:|:--:|:--:|
+| Base traces/metrics (polyglot) | ✅ | ✅ | — | fallback |
+| Baggage propagation | ✅ | ◐ maturing | — | ✅ |
+| Static business context | (via SDK) | — | ✅ **best** | — |
+| Flow seed | — (mesh does it) | — | — | only if not route-discriminable |
+| **Absent** metrics / custom business spans | ✕ | ✕ | ✕ | ✅ **its niche** |
+
+**`instrumentation-gen` is NOT obsolete — it is the coverage-gap fallback:** absent metrics no probe can infer,
+unsupported languages / no-injection environments, and custom app-semantic business spans. **The default is
+declarative** (annotate the pod, configure the collector, add the mesh rule); code is the exception, not the rule.
+
 ## 3. What OTTL can and can't do (the materialize-first rule)
 
 **OTTL cannot read runtime baggage** — by the time telemetry reaches the collector, baggage is not on the span
@@ -143,7 +175,7 @@ business baggage only at a trusted entry.
 |---|---|---|
 | **P0 — the contract** | both | Fix the minimal baggage key set (`business.flow`, `business.criticality`, `business.tier`) + the trusted seeding point. Everything else is elaboration. |
 | **P1 — propagate + materialize** | **startd8-sdk** | (a) configure a composite propagator (`tracecontext` + `baggage`) in `otel.py`; (b) a `BaggageSpanProcessor` that materializes the agreed keys → span attributes; (c) seed the baggage at the trusted entry from `build_criticality_map` / the ContextCore resolution. |
-| **P2 — polyglot materialization** | **startd8-sdk** | **Generate** the per-language BaggageSpanProcessor + propagator config + entry seeding via `scaffold_codegen/instrumentation_gen.py` + `telemetry_renderer.py` — so all 5 languages get it deterministically (closes the chain-fragility guardrail). |
+| **P2 — materialization (DECLARATIVE-first)** | **startd8-sdk + platform** | Default = **k8s-derived, zero app code** (§2b): OTel **Operator** `Instrumentation` CRD (propagators + BaggageSpanProcessor, pod-annotation inject) + **`k8sattributes`** for the static half + a **mesh header rule** for the flow seed. `scaffold_codegen/instrumentation_gen.py` is demoted to the **coverage-gap fallback** (absent metrics, unsupported langs, custom business spans). |
 | **P3 — OTTL policy** | **ContextCore** | collector OTTL: route/tail-sample by `flow.business.criticality`; copy business attrs onto spanmetrics + log correlation. Reuse the DerivationRule mapping (§8). |
 | **P4 — flow-aware RCA** | **ContextCore** | extend `coverage_rca` / `remediation` to weight by *flow* criticality (baggage) alongside *service* criticality (`build_criticality_map`); add the business-impact blast-radius + journey-step queries. |
 | **P5 — sink filter** | **ContextCore** | the Phase-2 delivery-policy router over `telemetry_sink.py` (§4b): route/tier telemetry to sinks by `flow.business.criticality` (traces/logs; metrics separately). OTTL is a candidate implementation. |
