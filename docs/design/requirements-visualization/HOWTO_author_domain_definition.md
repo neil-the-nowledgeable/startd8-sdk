@@ -82,7 +82,9 @@ prof = to_render_profile(resolve(YOUR_DEFINITION, DEFINITION_REGISTRY), context=
 ```bash
 startd8 navigator view-definition --name <your-domain>          # the resolved JSON
 startd8 navigator view-definition --name <your-domain> --diff   # only what YOU override vs base
-startd8 navigator view-definition --validate                     # govern the whole registry (EC-6)
+startd8 navigator view-definition --validate                     # govern the whole registry (EC-6 + EC-CS-1)
+# --validate also walks resolved surface_links.via (must name a regions.bindings key or `serves`)
+# and cockpit attention (ok/review/blocked/backlog). Passing does not mean drill/rollup are live.
 ```
 
 ### 6. It's covered by the guards

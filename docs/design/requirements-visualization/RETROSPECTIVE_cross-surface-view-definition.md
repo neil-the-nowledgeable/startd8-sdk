@@ -15,7 +15,7 @@ the post-harden tree (`view_definition.py` + four test modules + greps), not the
 | `presentation.navig8r` → `StatusStyle` | FR-2 tests + `test_hth_*` pins; requirements profile byte-identical | **wired** |
 | `presentation.cockpit` | declared `view_definition.py:463-499`; `rg` in `kickoff_experience/` = **0 hits** | **dormant (by NR-7)** |
 | `surface_links.drill` / `.rollup` | declared `:506-518`; consumed only by `test_surface_links.py` + resolve inheritance | **dormant (by NR-7)** — declared-not-wired |
-| `validate_definitions` vs `surface_links.via` | function `:691-712` checks `extends` + `chrome.bindings` only; no `via` / `attention` walk | **soft-only** — CLI `--validate` can print `ok` on a dangling drill |
+| `validate_definitions` vs `surface_links.via` | function `:691-712` checks `extends` + `chrome.bindings` only; no `via` / `attention` walk | **soft-only at harvest** — closed by **EC-CS-1** (`_validate_resolved_cross_surface`) |
 | `REQUIREMENTS_DEFINITION.vocabulary.statuses` vs navig8r leaves | two copies (`:530-536` vs `:461-492`); projection **discards vocab values** when keys equal (`:264-266`); no equality pin at harvest start | **unexercised dual-write** (CEP XS pin this run) |
 | Done-when / FR-7 byte-identity | `test_no_profile_is_byte_identical` unedited; goldens unedited | **wired** |
 | Ledger implement row | said opt-in is a **subset**; code after `7ca8a5f2` is **equality** | **claim-ceiling** — RECORD wrote the PREP sentence; HTH-1 moved the tree |

@@ -481,6 +481,84 @@ def test_validate_flags_unknown_extends_and_unknown_binding_field():
     assert any("unknown context field 'nope'" in i for i in issues)
 
 
+def test_validate_flags_dangling_surface_links_via():
+    """EC-CS-1: via must name a resolved region or the serves primitive."""
+    typo = ViewDefinition(
+        name="typo-via",
+        extends="base",
+        surface_links={"drill": {
+            "from_surface": "cockpit",
+            "to_surface": "navig8r",
+            "relation": "drill",
+            "via": "fulview",
+        }},
+    )
+    issues = validate_definitions({**DEFINITION_REGISTRY, "typo-via": typo})
+    assert any("surface_links.drill" in i and "fulview" in i for i in issues)
+
+
+def test_validate_allows_serves_via_even_without_a_region_binding():
+    """``serves`` is a composition primitive, not a regions.bindings key."""
+    orphan = ViewDefinition(
+        name="serves-only",
+        surface_links={"rollup": {
+            "from_surface": "navig8r",
+            "to_surface": "cockpit",
+            "relation": "rollup",
+            "via": "serves",
+        }},
+        regions={"bindings": {}},
+    )
+    assert validate_definitions({"serves-only": orphan}) == []
+
+
+def test_validate_flags_dropped_fullview_with_inherited_drill():
+    """A --from adopter that keeps drill.via=fullview but omits the region fails closed."""
+    thin = ViewDefinition(
+        name="thin-base",
+        regions={"bindings": {
+            "masthead": {"layer": "descriptive", "scaffold": "x", "order": 1},
+        }},
+        surface_links={"drill": {
+            "from_surface": "cockpit",
+            "to_surface": "navig8r",
+            "relation": "drill",
+            "via": "fullview",
+        }},
+    )
+    issues = validate_definitions({"thin-base": thin})
+    assert any("via 'fullview'" in i for i in issues)
+
+
+def test_validate_flags_malformed_link_shape_and_illegal_attention():
+    """Shape is judged on the resolved snapshot — a partial override of base would merge complete."""
+    shapeless = ViewDefinition(
+        name="shapeless",
+        regions={"bindings": {
+            "fullview": {"layer": "node", "scaffold": "#<key>", "order": 1},
+        }},
+        surface_links={"drill": {"via": "fullview"}},
+        node_state={"states": {
+            "grounded": {"presentation": {"cockpit": {"label": "ok", "attention": "wat"}}},
+        }},
+    )
+    issues = validate_definitions({"shapeless": shapeless})
+    assert any("surface_links.drill missing" in i for i in issues)
+    assert any("attention 'wat'" in i for i in issues)
+
+
+def test_validate_skips_cross_surface_when_extends_is_broken():
+    """A resolve failure is reported; we do not walk a missing snapshot."""
+    orphan = ViewDefinition(
+        name="orphan",
+        extends="ghost",
+        surface_links={"drill": {"via": "fulview"}},
+    )
+    issues = validate_definitions({**DEFINITION_REGISTRY, "orphan": orphan})
+    assert any("unknown definition 'ghost'" in i for i in issues)
+    assert not any("fulview" in i for i in issues)
+
+
 # ── REQ-13 — cross-repo VIEW-SCHEMA import ───────────────────────────────────────────────────────
 
 def test_load_definition_from_dict_and_requires_name():

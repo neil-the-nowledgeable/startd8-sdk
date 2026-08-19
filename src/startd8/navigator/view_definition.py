@@ -687,19 +687,84 @@ DEFINITION_REGISTRY: Dict[str, ViewDefinition] = {
 # REQ-12: the content-context fields a chrome binding may reference (from ``requirement_identity``).
 BINDING_CONTEXT_FIELDS = ("key", "title", "semantic_name", "initiative")
 
+# EC-CS-1: closed sets for resolved ``surface_links`` / cockpit leaves. Local — do not import
+# ``kickoff_experience`` (NR-7 / ``test_surface_links.test_fr6a_definition_module_has_no_renderer_imports``).
+_SURFACE_LINK_KEYS = ("from_surface", "to_surface", "relation", "via")
+_SURFACE_LINK_RELATIONS = frozenset({"drill", "rollup"})
+_SURFACE_LINK_VIA_PRIMITIVES = frozenset({"serves"})
+_COCKPIT_ATTENTION = frozenset({"ok", "review", "blocked", "backlog"})
+
+
+def _validate_resolved_cross_surface(name: str, resolved: ResolvedDefinition) -> List[str]:
+    """EC-CS-1: dangling ``surface_links.via`` and illegal cockpit ``attention`` on a resolved snapshot."""
+    issues: List[str] = []
+    links = resolved.surface_links or {}
+    if links and not isinstance(links, dict):
+        issues.append(f"{name}: surface_links must be a mapping")
+        return issues
+    region_bindings = ((resolved.regions or {}).get("bindings") or {})
+    region_keys = set(region_bindings) if isinstance(region_bindings, dict) else set()
+    known_via = region_keys | _SURFACE_LINK_VIA_PRIMITIVES
+    for link_id, spec in links.items():
+        prefix = f"{name}: surface_links.{link_id}"
+        if not isinstance(spec, dict):
+            issues.append(f"{prefix} must be a mapping with {_SURFACE_LINK_KEYS}")
+            continue
+        missing = [k for k in _SURFACE_LINK_KEYS if k not in spec]
+        if missing:
+            issues.append(f"{prefix} missing {', '.join(missing)}")
+        relation = spec.get("relation")
+        if relation is not None and relation not in _SURFACE_LINK_RELATIONS:
+            issues.append(
+                f"{prefix} relation {relation!r} is not one of "
+                f"{', '.join(sorted(_SURFACE_LINK_RELATIONS))}"
+            )
+        via = spec.get("via")
+        if via is None:
+            continue
+        if not isinstance(via, str) or not via:
+            issues.append(f"{prefix} via must be a non-empty string")
+            continue
+        if via not in known_via:
+            issues.append(
+                f"{prefix} via {via!r} is not a regions.bindings key "
+                f"or a known primitive ({', '.join(sorted(_SURFACE_LINK_VIA_PRIMITIVES))})"
+            )
+
+    states = (resolved.node_state or {}).get("states") or {}
+    if not isinstance(states, dict):
+        return issues
+    for sid, spec in states.items():
+        if not isinstance(spec, dict):
+            continue
+        cockpit = ((spec.get("presentation") or {}).get("cockpit") or {})
+        if not isinstance(cockpit, dict) or not cockpit:
+            continue
+        attention = cockpit.get("attention")
+        if attention is None:
+            continue
+        if attention not in _COCKPIT_ATTENTION:
+            issues.append(
+                f"{name}: node_state.states.{sid}.presentation.cockpit.attention "
+                f"{attention!r} is not one of {', '.join(sorted(_COCKPIT_ATTENTION))}"
+            )
+    return issues
+
 
 def validate_definitions(registry: Mapping[str, ViewDefinition]) -> List[str]:
-    """EC-6: governance check for a definition registry — returns a list of issues (empty = clean).
+    """EC-6 + EC-CS-1: governance check for a definition registry — empty list = clean.
 
-    Read-only. Catches the two classes an author can get wrong: (1) a definition whose ``extends``
-    chain is broken (unknown parent or a cycle — surfaced by :func:`resolve`'s guards); (2) a
-    ``chrome.bindings`` template referencing an unknown content-context field (not one of
-    :data:`BINDING_CONTEXT_FIELDS`), which would silently substitute the empty string at render.
+    Read-only. Catches: (1) a broken ``extends`` chain (unknown parent or a cycle — surfaced by
+    :func:`resolve`); (2) a ``chrome.bindings`` template referencing an unknown content-context
+    field (not one of :data:`BINDING_CONTEXT_FIELDS`); (3) a resolved ``surface_links.via`` that
+    names neither a ``regions.bindings`` key nor the ``serves`` primitive, a malformed link shape,
+    or a cockpit ``attention`` outside ``ok/review/blocked/backlog``.
     """
     issues: List[str] = []
     for name, definition in registry.items():
+        resolved: Optional[ResolvedDefinition] = None
         try:
-            resolve(definition, registry)
+            resolved = resolve(definition, registry)
         except ValueError as exc:
             issues.append(f"{name}: {exc}")
         for field_name, template in (definition.chrome.get("bindings") or {}).items():
@@ -709,6 +774,8 @@ def validate_definitions(registry: Mapping[str, ViewDefinition]) -> List[str]:
                         f"{name}: chrome.bindings.{field_name} references unknown context field "
                         f"{ref!r} (known: {', '.join(BINDING_CONTEXT_FIELDS)})"
                     )
+        if resolved is not None:
+            issues.extend(_validate_resolved_cross_surface(name, resolved))
     return issues
 
 

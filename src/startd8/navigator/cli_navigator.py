@@ -1247,8 +1247,9 @@ def view_definition(
     validate: bool = typer.Option(
         False,
         "--validate",
-        help="Govern the registry: check every definition resolves + bindings reference known fields. "
-        "Exit 0=clean, 1=issues (EC-6).",
+        help="Govern the registry: every definition resolves, chrome.bindings reference known "
+        "fields, and resolved surface_links.via names a region or the serves primitive. "
+        "Exit 0=clean, 1=issues (EC-6 / EC-CS-1).",
     ),
     from_file: Optional[Path] = typer.Option(
         None,
