@@ -49,6 +49,8 @@ That tag follows the traveler everywhere they go inside the airport. So when the
 
 The friendly name for this whole idea is **"business context as code"** — you write down what matters *once*, and everything downstream just knows.
 
+> **Two ways to "add instruments."** One *watches the machine* and reports what it did (the classic way — a sensor bolted to the engine). The other *adds meaning labels* — "this is a checkout, it's worth a lot" — onto what's already being reported, so you can finally ask "did anything valuable break?" We call this second way **business instrumentation** — it's what makes monitoring business-aware. One catch: the meaning labels are *written down by a human*, not discovered by the machine — and they ride on top of the machine-watching that's already there.
+
 ## One honest note
 
 The tagging and the no-rewiring, smart-mailroom parts **work today**. The most magical part — knowing the exact business worth of *every single traveler* at a glance — is partly still being built. We'd rather tell you that plainly than oversell it.

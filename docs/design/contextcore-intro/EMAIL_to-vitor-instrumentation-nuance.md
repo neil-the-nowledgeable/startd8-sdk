@@ -74,9 +74,9 @@ Best, [your name]
 
 ---
 
-## Optional modular passage — the concrete example + the "instrument the dimension" reframe (strongest add)
+## Optional modular passage — the concrete example + the "business instrumentation" reframe (strongest add)
 
-*Drop this in when you want to make the argument land with a shipped example rather than a definition.*
+*Drop this in when you want to make the argument land with a shipped example rather than a definition — and to give the thing a name.*
 
 > Here's a concrete one, so it's not just semantics. We generate a collector-side OTTL processor
 > (`transform/business`) from a single manifest of business context — it stamps each service's
@@ -85,12 +85,15 @@ Best, [your name]
 > rank the blind spots by business value."** That question was literally unanswerable before the enrichment, and
 > answerable after.
 >
-> So I'll concede your strict point *and* sharpen mine: this isn't source-side *signal generation* — a collector
-> processor can't observe the running system, you're right. But it **instruments a new _dimension_**: it projects
-> declared business meaning onto the existing signal so a class of questions becomes answerable. The RCA is the
-> proof. The honest caveat: the dimension's information is *declared* (a manifest), not *discovered* from the
-> system — so it instruments the business dimension, riding on the classically-instrumented base signal (which is
-> your eBPF layer). Two axes of the same word, not a redefinition of it.
+> So I'll concede your strict point *and* sharpen mine — and the clean resolution is that these are two different
+> things, so I should stop overloading one word. What you do is **classical (technical) instrumentation**:
+> source-side signal generation. What I'm describing is a *separate* discipline I've started calling **business
+> instrumentation** — making the *business dimension* observable by projecting declared business meaning onto the
+> signal your layer already produces, so a class of business questions becomes answerable (the RCA is the proof).
+> Crucially it's a **new, named category adjacent to yours, not a claim on your word**: business instrumentation is
+> **not** source-side signal generation — a collector processor can't observe the running system, you're right —
+> its information is *declared* (a manifest), not *discovered*, and it **rides on** the classically-instrumented
+> base signal (your eBPF layer). Two axes, two disciplines — not a redefinition of instrumentation.
 >
 > (Amusingly, the module that derives all this is literally named `instrumentation.py` — it does double duty:
 > derives what each service *should* emit from OTel semconv *and* generates that business-enrichment processor.

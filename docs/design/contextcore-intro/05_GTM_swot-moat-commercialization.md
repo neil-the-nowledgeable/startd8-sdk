@@ -51,6 +51,22 @@ cause analysis, per-flow value tiering, and the sink-policy router are **on the 
 instrumentation and eBPF-based context propagation are **maturing in the upstream ecosystem** — a
 dependency we ride rather than own. The strategy below is built to be true at each of those stages.
 
+> **Classical instrumentation vs business instrumentation — two axes (the positioning + the category
+> play).** There are **two axes** to "instrumentation," and the category we own is the second. **Classical
+> (technical) instrumentation** is *source-side signal generation* (code, auto-instrumentation, **eBPF**)
+> — the technical signal every competitor already produces; it is commoditized. Our differentiated move is
+> **business instrumentation**: making the *business dimension* observable by projecting **declared**
+> business meaning (criticality, flow, value) onto that already-emitted signal, so a class of business
+> questions becomes answerable — **the coverage RCA is the proof** ("are our *critical* services
+> observed?" is unanswerable before, answerable after). **This is category creation.** "Business
+> instrumentation" is a coined, **ownable** category — a defensible *new discipline adjacent to* classical
+> instrumentation, **not** a redefinition of it — that reinforces the own-the-category moat (§4): we name
+> and own a discipline rather than fight for share of the commoditized technical-signal one. The honest
+> caveat that survives diligence: business instrumentation is **not** source-side signal generation — the
+> meaning is **declared, not discovered**, and it **rides on** classical instrumentation's base signal.
+> (Do **not** flatly claim "OTTL is instrumentation" — that reframe is exactly what a technical evaluator
+> pushes back on; the defensible claim is the *new, adjacent business-instrumentation axis*.)
+
 ---
 
 ## 2. Commercialization value

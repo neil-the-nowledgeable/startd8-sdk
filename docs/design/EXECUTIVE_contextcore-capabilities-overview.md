@@ -29,6 +29,8 @@ knowledge where it's queryable** — in your OpenTelemetry stack.
 
 ### A. Business-context observability *(the differentiator)*
 
+> **Classical instrumentation vs business instrumentation — two axes.** Classical (technical) instrumentation *generates signal at the source* (the telemetry every tool already produces). ContextCore adds a second, distinct discipline — **business instrumentation**: making the *business dimension* observable by projecting **declared** business meaning (criticality, flow, value) onto that already-emitted signal, so a class of business questions becomes answerable — **the coverage RCA is the proof** ("are our *critical* services observed?" — unanswerable before, answerable after). Honest caveat: business instrumentation's meaning is **declared, not discovered**, and it **rides on** classical instrumentation's base signal.
+
 | Capability | What it is | Why it matters to you |
 |---|---|---|
 | **Context enrichment via annotations** | Declare business context (criticality, owner, SLOs, cost-center) once as a Kubernetes annotation; every metric/trace/log from that workload inherits it. *(Shipped.)* | **Zero code change.** Your existing telemetry instantly becomes business-aware — no re-instrumentation project. |

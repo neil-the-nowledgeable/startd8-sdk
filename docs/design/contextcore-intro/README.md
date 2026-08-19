@@ -23,6 +23,16 @@ OTTL — is all open and commoditized. **That's a strength, not a weakness.** Co
 agent-shared system of record: the single source of truth (criticality/owner/SLO/flow) projected consistently to
 instrumentation, routing, dashboards, and RCA — and drift-guarded so it stays correct.
 
+> **Classical instrumentation vs business instrumentation — two axes.** **Classical (technical)
+> instrumentation** = *source-side signal generation* (code, auto-instrumentation, or **eBPF** emitting
+> telemetry that didn't exist before). ContextCore's second axis is **business instrumentation** —
+> making the *business dimension* observable by projecting **declared** business meaning (criticality,
+> flow, value) onto the telemetry classical instrumentation already emits (the collector-side
+> **enrichment**), so business questions become answerable. **The coverage RCA is the proof.** The
+> honest caveat: business instrumentation is **not** source-side signal generation — **declared, not
+> discovered**, and it **rides on** classical instrumentation's base signal. We don't redefine
+> instrumentation; business instrumentation is a distinct axis added alongside it.
+
 ## Deeper design docs
 
 - `../business-context-propagation/` — the baggage/flow-criticality design note (originate→propagate→materialize→

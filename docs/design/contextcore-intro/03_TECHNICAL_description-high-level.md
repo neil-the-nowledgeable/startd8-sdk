@@ -45,6 +45,18 @@ The static axes are a property of *services*; the dynamic axis is a property of 
 business-critical than the same call inside a browse flow. That flow distinction is the axis only
 baggage can carry.
 
+> **Classical instrumentation vs business instrumentation — two axes.** The four-mechanism stack below
+> spans **both axes** of the word "instrumentation." **Classical (technical) instrumentation** =
+> *source-side signal generation* (mechanism ①'s injected SDK / **eBPF** emitting telemetry that didn't
+> exist before). The second axis — mechanisms ②/④ — is **business instrumentation**: making the
+> *business dimension* observable by projecting **declared** business meaning (criticality, flow, value)
+> onto the telemetry classical instrumentation already emits (collector-side **enrichment**), so business
+> questions become answerable. **The coverage RCA is the proof** ("are our *critical* services observed?"
+> — unanswerable before the enrichment, answerable after). The honest caveat: business instrumentation is
+> **not** source-side signal generation — it is **declared, not discovered**, and it **rides on**
+> classical instrumentation's base signal. The architecture doesn't redefine instrumentation; business
+> instrumentation is a distinct axis added alongside it.
+
 ---
 
 ## 2. The four-mechanism declarative stack

@@ -99,6 +99,19 @@ both are **pod-annotation-driven**, so they align natively with ContextCore's `c
 unsupported languages / no-injection environments, and custom app-semantic business spans. **The default is
 declarative** (annotate the pod, configure the collector, add the mesh rule); code is the exception, not the rule.
 
+> **Classical instrumentation vs business instrumentation — two axes.** There are **two axes** to the
+> word "instrumentation," and this design lives on the second. **Classical (technical) instrumentation**
+> is *source-side signal generation*: code, auto-instrumentation, or **eBPF** that observes the running
+> system and emits telemetry that didn't exist before. **Business instrumentation** is the second,
+> distinct discipline: making the *business dimension* of a system observable by projecting **declared**
+> business meaning (criticality, flow, value) onto the telemetry your classical instrumentation already
+> emits — the collector-side move the OTTL `transform/business` processor below performs — so business
+> questions become answerable. **The coverage RCA is the proof** ("are our *critical* services observed?"
+> — unanswerable before the enrichment, answerable after). The honest caveat: business instrumentation is
+> **not** source-side signal generation — its information is **declared, not discovered**, and it **rides
+> on** classical instrumentation's base signal. We do not redefine instrumentation; business
+> instrumentation is a distinct axis added alongside it.
+
 ## 3. What OTTL can and can't do (the materialize-first rule)
 
 **OTTL cannot read runtime baggage** — by the time telemetry reaches the collector, baggage is not on the span

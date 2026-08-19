@@ -15,6 +15,8 @@
 
 Today, most observability data can tell you *that* a service is slow or erroring. It usually **cannot** tell you *whether that matters to the business* — which customer-facing flow it broke, whether that flow earns revenue, or who owns the fix. ContextCore closes that gap by letting you state the business facts up front and then projecting them across everything your monitoring already collects.
 
+> **Classical instrumentation vs business instrumentation — two axes.** There are **two axes** to the word "instrumentation." **Classical (technical) instrumentation** *generates signal at the source* — code, auto-instrumentation, or **eBPF** that watches the running system and emits telemetry that didn't exist before. ContextCore's second axis is **business instrumentation**: making the *business dimension* of a system observable by projecting **declared** business meaning (criticality, flow, value) onto the telemetry classical instrumentation *already* emits, so a whole class of business questions becomes answerable. **The coverage RCA is the proof** — "are our *critical* services observed?" is unanswerable before the enrichment and answerable after. The honest caveat: business instrumentation is **not** source-side signal generation — the meaning is **declared, not discovered**, and it **rides on** classical instrumentation's base signal. ContextCore doesn't redefine instrumentation; business instrumentation is a distinct discipline added alongside it.
+
 ---
 
 ## Purpose

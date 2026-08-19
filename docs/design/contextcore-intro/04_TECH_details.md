@@ -24,6 +24,35 @@ per-service half (K8s annotations → resource attributes, *shipped*) and a **DY
 (baggage → span attributes, *planned*). Keep them mentally distinct — different granularity, different
 OTel layer, same namespace.
 
+### Classical instrumentation vs business instrumentation — two axes
+
+There are **two axes** to the word "instrumentation," and this doc wires up both. Keep them distinct or
+you will mis-scope what each mechanism does.
+
+- **Axis 1 — classical (technical) instrumentation** = *source-side signal generation*: code, the
+  Operator-injected SDK (§1), or **eBPF** that observes the running system and **emits telemetry that
+  didn't exist before**. This is the base-signal generator.
+- **Axis 2 — business instrumentation** = making the *business dimension* of a system observable by
+  projecting **declared** business meaning — criticality, flow, value — onto the telemetry classical
+  instrumentation already emits. Its mechanism here is the generated OTTL **`transform/business`**
+  processor (§4), which stamps that declared meaning onto **already-emitted** signal so business
+  questions become answerable. **The coverage RCA is the proof** ("are our *critical* services observed?"
+  — unanswerable before the enrichment, answerable after). The `k8sattributes` enrichment (§2) is the
+  static-half instance of business instrumentation.
+
+**The honest caveat (do not soften it):** business instrumentation is **not** source-side signal
+generation — its information is **declared, not discovered**, and it **rides on** classical
+instrumentation's base signal (axis 1). We do not redefine instrumentation; business instrumentation is a
+distinct discipline added alongside it.
+
+This double-nature is why ContextCore's `utils/instrumentation.py` does **double duty**: it derives what
+a service **should emit** (the classical signal-generation concern — feeding `scaffold_codegen`'s
+`instrumentation-gen` fallback) *and* generates the business-instrumentation **`transform/business`
+enrichment processor** that stamps the declared business dimension onto that signal. The generated
+processor is **shipped**; `coverage/snapshot.py` (EC-10) consumes its `business_criticality` label for
+the coverage RCA. Flow-scoped baggage criticality (§3) is the **roadmap** extension of business
+instrumentation — the same declared-dimension move, made per-request.
+
 ---
 
 ## 1. Origination A — the OTel Operator `Instrumentation` CRD (propagation + materialization)

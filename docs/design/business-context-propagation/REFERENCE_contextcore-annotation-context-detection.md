@@ -14,6 +14,16 @@ onto *every signal that workload emits*, set once at process start. This is how 
 a team annotates a pod (or its `ProjectContext` CRD → pod), and every trace/metric/log from it self-describes with
 `business.criticality`, `project.id`, SLOs, risk, etc. — with **zero application code change**.
 
+> **Classical instrumentation vs business instrumentation — two axes.** **Classical (technical)
+> instrumentation** = *source-side signal generation* (code, auto-instrumentation, or **eBPF** emitting
+> telemetry that didn't exist before). The annotation→attribute enrichment documented here is the second
+> axis — **business instrumentation** (its **static half**): making the *business dimension* observable
+> by projecting **declared** business meaning (criticality, owner, SLOs) onto the telemetry classical
+> instrumentation already emits, so business questions become answerable. **The coverage RCA is the
+> proof.** The honest caveat: business instrumentation is **not** source-side signal generation — the
+> context is **declared, not discovered**, and it **rides on** classical instrumentation's base signal.
+> We don't redefine instrumentation; business instrumentation is a distinct axis added alongside it.
+
 ## The mechanism
 
 - **Annotation namespace:** `ANNOTATION_PREFIX = "contextcore.io/"` (`detector.py:179`). Only keys under this prefix
