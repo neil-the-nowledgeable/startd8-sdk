@@ -193,6 +193,38 @@ a script and/or runbook.
 - **Status:** ACTIVE. REQ-01..09 clean (govern_score 1.0); seat-req is a legitimate real finding
   (stage-0-blocked), not a false positive.
 
+### 8. Review-Theme Metabolizer  *(cross-kit — the CRP review-wisdom shift-left)*
+
+- **What it does:** turns the CRP corpus's **re-derived** review concerns into **fired grammar rules**, so a
+  settled concern surfaces once (at draft time + in the review prompt) instead of being re-sought review
+  after review. Cycle: **census** (rank the 7,299 accepted suggestions by theme) → **promote** (a recurring
+  theme → a PATTERN-CATALOG entry) → **metabolize** (`/metabolize-finding`: theme → a concrete grammar rule)
+  → **lint** (the rule fires as an advisory fact-rung at draft time + as a "settled themes — do not re-derive"
+  block in the review prompt) → **re-census** (the theme's re-seek rate drops). The KAIZEN "don't re-derive
+  lessons" move applied to the review corpus.
+- **Driver (cross-kit):** census `~/Documents/dev/dev-os/scripts/render_crp_index.py` (`REVIEW_THEME_RULES`)
+  · catalog `dev-os/PATTERN-CATALOG.md` + `contextcore learning pattern_catalog recall` · metabolizer
+  `/metabolize-finding` · lint host `dev-os/det-req-kit/extract.py::collect_findings` · review-prompt
+  generator `~/.claude/skills/new-cnvrg-rvw-prmpt/SKILL.md`.  ·  **Spec:**
+  `docs/design/requirements-visualization/REQ-32-draft-time-firing-wire.md`
+- **Moving number:** **re-seek rate** for a metabolized theme — how often a *settled* concern is re-derived
+  in a fresh review (goal → 0). A wired theme's re-seek rate collapses once its lint fires; a rising re-seek
+  rate = a theme that slipped back to dormant.
+- **Scope (FR-5):** **cross-kit family capability**, not det-req-kit-only — the census / catalog / metabolizer
+  serve every det-doc-kit member (det-req / plan / handoff / howto / crp), and the firing seam fuels both the
+  authoring surface and the review surface.
+- **Run it (once the firing seam lands):**
+  ```bash
+  python3 ~/Documents/dev/dev-os/scripts/render_crp_index.py       # census: theme counts
+  contextcore learning pattern_catalog recall <theme>              # is the theme promoted + queryable?
+  # draft-time: det-req-kit extract.py fires the fact-rung lint (advisory, exit-unchanged)
+  ```
+- **State:** `dev-os/CRP-INDEX.md` (census) + `dev-os/PATTERN-CATALOG.md` (promoted themes, PC-16..18+).
+- **Status:** **REGISTERED — firing seam pending REQ-32.** The metabolization pipeline is built end-to-end;
+  only the draft-time firing wire is missing (REQ-32, spec `e3560ca3`). Cross-repo build handed off in
+  `HANDOFF_devos-req32-draft-time-firing-wire.md` (5/6 FRs land in dev-os/skills; **this catalog entry is
+  REQ-32's SDK-local slice, FR-5**).
+
 ---
 
 ## Related established loops in the repo (cross-reference)
