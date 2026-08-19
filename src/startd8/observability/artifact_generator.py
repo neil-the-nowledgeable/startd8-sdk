@@ -89,6 +89,7 @@ from .artifact_generator_generators import (  # noqa: F401
     _target_for,
     generate_alert_rules,
     generate_business_criticality_dashboard,
+    generate_business_criticality_slos,
     generate_capability_index,
     generate_collector_enrichment,
     generate_dashboard_spec,
@@ -1947,6 +1948,15 @@ def generate_observability_artifacts(
     )
     if _bcd.status != "skipped":
         report.artifacts.append(_bcd)
+
+    # (D)-wire SLO counterpart: per-tier availability SLOs that CONSUME the same span-metrics dimension,
+    # gating an error budget per business tier. Presence-gated identically (self-skips without
+    # criticality ⇒ byte-identical). Flows through the same SLO validation as every other slo_definition.
+    _bcs = _repair_and_validate(
+        generate_business_criticality_slos(services, business, report), business
+    )
+    if _bcs.status != "skipped":
+        report.artifacts.append(_bcs)
 
     # Gap 4 / Closure 4A: render dashboard specs to deployable Grafana JSON at the
     # contracted grafana/dashboards/{service}-dashboard.json path. Runs in dry_run
