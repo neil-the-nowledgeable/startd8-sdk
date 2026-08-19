@@ -41,8 +41,11 @@ _BINDING = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
 # The scaffold-taxonomy sections a definition (and its resolution) carry. FR-13 adds the display-logic
 # DATA sections (field_display = inspector field→element mapping, region_templates = frame templates).
+# Cross-surface (REQ-cross-surface-view-definition): ``node_state`` (canonical health + per-surface
+# presentation) and ``surface_links`` (drill/rollup pointers) are ordinary inherited sections — no
+# second cascade (NR-1).
 _SECTIONS = ("theme", "vocabulary", "chrome", "glance", "control", "regions", "lenses",
-             "field_display", "region_templates")
+             "field_display", "region_templates", "node_state", "surface_links")
 
 # A defaults holder so the projection falls back to the RenderProfile field defaults (single source of
 # truth) for any chrome key a (partial) definition omits — the real domains supply every key.
@@ -92,13 +95,15 @@ class ViewDefinition:
     field_display: Dict[str, Any] = field(default_factory=dict)      # FR-13: inspector field→element mapping
     region_templates: Dict[str, Any] = field(default_factory=dict)   # FR-13: frame region display templates
     lenses: Dict[str, Any] = field(default_factory=dict)
+    node_state: Dict[str, Any] = field(default_factory=dict)         # cross-surface canonical health
+    surface_links: Dict[str, Any] = field(default_factory=dict)      # drill/rollup typed pointers
 
     def _sections(self) -> Dict[str, Any]:
-        """The seven taxonomy sections as a fresh dict (identity/extends excluded)."""
+        """The taxonomy sections as a fresh dict (identity/extends excluded)."""
         return {name: _copy(getattr(self, name)) for name in _SECTIONS}
 
     def to_dict(self) -> Dict[str, Any]:
-        """JSON-safe payload: identity (``name``/``extends``) + the seven sections."""
+        """JSON-safe payload: identity (``name``/``extends``) + the taxonomy sections."""
         payload: Dict[str, Any] = {"name": self.name, "extends": self.extends}
         payload.update(self._sections())
         return payload
@@ -130,9 +135,11 @@ class ResolvedDefinition:
     field_display: Dict[str, Any] = field(default_factory=dict)      # FR-13: inspector field→element mapping
     region_templates: Dict[str, Any] = field(default_factory=dict)   # FR-13: frame region display templates
     lenses: Dict[str, Any] = field(default_factory=dict)
+    node_state: Dict[str, Any] = field(default_factory=dict)         # cross-surface canonical health
+    surface_links: Dict[str, Any] = field(default_factory=dict)      # drill/rollup typed pointers
 
     def to_dict(self) -> Dict[str, Any]:
-        """The seven resolved sections as a fresh JSON-safe dict."""
+        """The resolved taxonomy sections as a fresh JSON-safe dict."""
         return {name: _copy(getattr(self, name)) for name in _SECTIONS}
 
 
@@ -221,6 +228,44 @@ def _binding_fields(template: Any) -> List[str]:
     return [f for part in parts for f in _BINDING.findall(str(part))]
 
 
+def _navig8r_statuses_from_node_state(node_state: Mapping[str, Any]) -> Dict[str, Any]:
+    """``presentation.navig8r`` leaves keyed by canonical state id; empty leaves omitted.
+
+    ``activated`` is a project-level roll-up (OQ-3) and carries no navig8r presentation, so it is
+    skipped here and never becomes a ``StatusStyle``.
+    """
+    states = (node_state or {}).get("states") or {}
+    out: Dict[str, Any] = {}
+    for sid, spec in states.items():
+        if not isinstance(spec, dict):
+            continue
+        nav = ((spec.get("presentation") or {}).get("navig8r") or {})
+        if nav:
+            out[sid] = nav
+    return out
+
+
+def _status_specs(resolved: ResolvedDefinition) -> Dict[str, Any]:
+    """FR-2: project ``StatusStyle`` input from shared ``node_state``, with empty-default fallback.
+
+    A domain whose authored ``vocabulary.statuses`` keys are a subset of the canonical navig8r
+    presentation (the requirements surface) reads statuses FROM ``node_state`` — that is what
+    wires the shared taxonomy into ``to_render_profile``. A domain with its own keys (capability,
+    pipeline, node-schema) keeps its vocabulary verbatim so the render stays byte-identical.
+    Absent/empty ``node_state`` falls back to ``vocabulary.statuses``.
+    """
+    vocab_statuses = dict((resolved.vocabulary or {}).get("statuses") or {})
+    nav = _navig8r_statuses_from_node_state(resolved.node_state)
+    if not nav:
+        return vocab_statuses
+    if not vocab_statuses:
+        return nav
+    if set(vocab_statuses) <= set(nav):
+        # Preserve authored key order (the Derive-to-Prove oracle on REQUIREMENTS_DEFINITION).
+        return {k: nav[k] for k in vocab_statuses}
+    return vocab_statuses
+
+
 def to_render_profile(
     resolved: ResolvedDefinition,
     context: Optional[Mapping[str, str]] = None,
@@ -229,8 +274,10 @@ def to_render_profile(
 
     Reads ``vocabulary`` (ordered ``statuses`` keyed map + ``gap_noun``), ``chrome`` (masthead + apex
     strings), ``theme`` (REQ-11 → ``theme_tokens``), and ``control`` + ``regions`` (REQ-14 → the
-    debug-panel schema + region/layer taxonomy, applied as an additive runtime override). ``lenses``/
-    ``glance`` are still NOT projected. Any omitted chrome key falls back to the RenderProfile default.
+    debug-panel schema + region/layer taxonomy, applied as an additive runtime override). Cross-surface
+    FR-2: ``statuses`` prefer ``node_state.presentation.navig8r`` when the domain's status keys are a
+    subset of that map (requirements); otherwise ``vocabulary.statuses`` (empty-default — capability
+    / pipeline / node-schema stay byte-identical). ``lenses`` / ``glance`` are still NOT projected.
 
     REQ-12: when a ``context`` is supplied, a chrome field named in ``chrome.bindings`` is derived by
     substituting its ``{field}`` template against the context — but ONLY when every referenced field
@@ -262,7 +309,7 @@ def to_render_profile(
             severity=spec.get("severity", 5),
             is_gap=spec.get("is_gap", False),
         )
-        for sid, spec in (vocab.get("statuses") or {}).items()
+        for sid, spec in _status_specs(resolved).items()
     )
     return RenderProfile(
         statuses=statuses,
@@ -399,6 +446,75 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
     # domain delta can reconfigure either via the keyed cascade.
     field_display=dict(DEFAULT_FIELD_DISPLAY),
     region_templates=dict(DEFAULT_REGION_TEMPLATES),
+    # Cross-surface canonical node health (REQ-cross-surface-view-definition FR-1). One state set,
+    # two presentations: navig8r leaves ARE today's requirements ``vocabulary.statuses`` (the
+    # Derive-to-Prove oracle — FR-2 projects them byte-for-byte); cockpit leaves declare the
+    # readiness vocabulary (``portal_spec._ATTENTION_DISPLAY`` keys) without touching the cockpit
+    # (NR-3/NR-7). ``activated`` is the project-level roll-up target (OQ-3 / FR-5), not a per-node
+    # attention class. Canonical ids = the navig8r keys verbatim (locked at PREP — not "speculative").
+    node_state={
+        "states": {
+            "grounded": {
+                "presentation": {
+                    "navig8r": {"label": "Grounded", "color": "#3d7a57",
+                                "meaning": "reuses existing code", "severity": 0},
+                    "cockpit": {"label": "ok", "attention": "ok", "color": "#3d7a57"},
+                },
+            },
+            "spec": {
+                "presentation": {
+                    "navig8r": {"label": "Spec", "color": "#6b6252",
+                                "meaning": "written, not built", "severity": 2},
+                    "cockpit": {"label": "review", "attention": "review", "color": "#a9781a"},
+                },
+            },
+            "awaiting": {
+                "presentation": {
+                    "navig8r": {"label": "Awaiting", "color": "#a9781a",
+                                "meaning": "needs a decision", "severity": 3, "is_gap": True},
+                    "cockpit": {"label": "review", "attention": "review", "color": "#a9781a"},
+                },
+            },
+            "excluded": {
+                "presentation": {
+                    "navig8r": {"label": "Excluded", "color": "#948b78",
+                                "meaning": "out of scope", "severity": 2},
+                    "cockpit": {"label": "backlog", "attention": "backlog", "color": "#948b78"},
+                },
+            },
+            "unknown": {
+                "presentation": {
+                    "navig8r": {"label": "Unknown", "color": "#ab473a",
+                                "meaning": "done-claim without Lives", "severity": 4, "is_gap": True},
+                    "cockpit": {"label": "blocked", "attention": "blocked", "color": "#ab473a"},
+                },
+            },
+            "activated": {
+                "kind": "project",
+                "presentation": {
+                    "navig8r": {},
+                    "cockpit": {"label": "activated", "attention": "ok"},
+                },
+            },
+        },
+    },
+    # Cross-surface pointers (FR-4/FR-5) — typed data, not glue. Distinct from ``chrome.bindings``
+    # (NR-5). ``via: fullview`` names the registered region (the ``#<key>`` route); ``via: serves``
+    # names the composition rollup primitive. Neither binding adds a route or an edge kind.
+    surface_links={
+        "drill": {
+            "from_surface": "cockpit",
+            "to_surface": "navig8r",
+            "relation": "drill",
+            "via": "fullview",
+        },
+        "rollup": {
+            "from_surface": "navig8r",
+            "to_surface": "cockpit",
+            "relation": "rollup",
+            "via": "serves",
+        },
+    },
 )
 
 # FR-4: the requirements domain — ``extends: base`` + a thin delta (its vocabulary/statuses + chrome).
