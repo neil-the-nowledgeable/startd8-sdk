@@ -31,6 +31,38 @@ python3 scripts/navigator_spec_delivery_loop.py \
 # expect: BUILD-READY ✓ (7 FRs)
 ```
 
+> **Gate note (2026-08-19):** pass the spec path **absolute** (as above). A *relative* path crashes the
+> driver (`relative_to` on an unresolved path vs an absolute root) — a driver path-handling bug, not a
+> spec or worktree problem. `--status` works either way. Re-verified BUILD-READY ✓ (7 FRs) on `79db581c`.
+
+## 1a. Stage-1 PREP — locked decisions (2026-08-19)
+
+PREP re-grounded every seam below on `79db581c` and the human locked these before BUILD:
+
+1. **Canonical state ids = the navig8r ids verbatim** — `grounded` · `spec` · `awaiting` · `excluded` ·
+   `unknown` (plus `activated` only as the project-level rollup state, never a per-node attention class).
+   The spec's prose `speculative` is NOT adopted: reusing the ids the vocabulary already keys on is what
+   makes FR-2's byte-identity trivially provable.
+2. **`REQUIREMENTS_DEFINITION.vocabulary.statuses` KEEPS its authored literal** as the Derive-to-Prove
+   oracle (the REQ-10 pattern) — the `node_state` projection must reproduce it byte-for-byte, and
+   `test_no_profile_is_byte_identical` stays UNEDITED as the gate. Do not delete the literal.
+3. **Cockpit wiring is OUT of scope** (spec NR-7): this delivery DECLARES `presentation.cockpit` and the
+   two `surface_links` in the View Definition and produces a **zero diff** on `kickoff_experience/`.
+   Drill/rollup are therefore not user-visible at the end of this build — a follow-on adopter spec wires
+   the cockpit tiles to read `surface_links` and link the `#<key>` route. Say so in the ledger row.
+
+**Line drift PREP corrected in this handoff's own citations** (the seams exist; the numbers moved):
+`_SECTIONS` is now **9** sections, not 7 (FR-13 added `field_display`/`region_templates`) → this build makes
+it 11 · `buildFullView` is `_template.py:960`, `resolveHash` `:994`, the `hashchange` listener `:1511`
+(the spec's 900/923/1402 are stale) · `fullview` region is `view_definition.py:391` · `graph_projection.py:181`
+`serves` edge verified exactly as cited · the spec's FR-7 Touches path `tests/unit/kickoff/test_portal_spec.py`
+**does not exist** — the real cockpit tests live under `tests/unit/kickoff_experience/`.
+
+**Byte-identity baseline measured green before any edit:** 53 tests across
+`tests/unit/wireframe/test_render_profile.py` + `tests/unit/navigator/test_view_definition.py`, plus
+`test_schema_conformance.py::test_node_field_set_equals_documented_manifest`. **No new `Node` field** —
+the 20-field golden must not move.
+
 ## 2. Build seams (grounded)
 
 - **Shared taxonomy:** navig8r statuses (`view_definition.py` REQUIREMENTS_DEFINITION.vocabulary.statuses)
