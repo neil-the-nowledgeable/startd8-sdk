@@ -5,6 +5,8 @@
 **Format:** det-req/0.1
 **Backend:** otel-weaver-semconv
 **Method:** `/reflective-instantiation` — the built registry groups predict the shape of the empty `business` cell (§A)
+**Extends (parent — ContextCore, plan-of-record):** **`ContextCore/docs/design/weaver/WEAVER_REGISTRY_REQUIREMENTS.md §4.5`** — already plans a Phase-2 `business.*` STATIC group (16 attrs; enum sources `BusinessValue`/`RiskType`/`Criticality`) and knows `weaver registry live-check` (its Phase 3). This REQ is the **dynamic-axis + map-fidelity-gate delta** on top of it, not a new origination.
+**Sibling (same fidelity CLASS):** `ContextCore/docs/design/requirements/REQ_FIDELITY_VERDICT_REFINEMENT.md` — the PromQL-replay instance of "binds-but-attests-nothing" (`bound_no_data` / `binding_coverage` vs `data_coverage` / no-silent-green). Reuse its verdict vocabulary for map-fidelity.
 **Pairs with:** **`REQ-business-flow-and-flow-criticality.md`** (the carrier — its FR-1/FR-5/FR-9 reference this schema) · `DESIGN_business-dimension-roadmap.md` (the dimension adjudication) · `REFERENCE_weaver-loom-map-fidelity.md` (the Weaver mechanism) · `../contextcore-intro/REFERENCE_business-instrumentation-in-the-otel-model.md` (the `business.*` semconv namespace)
 **Inherits standards:** OTel Weaver registry schema · the sibling groups' structure (`registry/{task,project,sprint,agent,lesson}.yaml`) · registry-mirrors-canonical-Python-enum discipline (`contextcore weaver check`) · the naming-collision + minimalism guardrails of `DESIGN_business-dimension-roadmap.md`
 **Audience:** ContextCore contributors · platform/SRE
@@ -21,10 +23,34 @@ The `business.*` namespace is **emitted today but ungoverned**. `detector.py` al
 `business.criticality`, `business.value`, `business.owner`, `business.cost_center` onto every signal (lines
 205–208, 383–385), yet there is **no `registry/business.yaml`** — the manifest reserves it as a commented
 Phase-2 line. So the registry *lags emission*: the four shipped attributes have no declared type, no
-allowed-values, no `weaver check` coverage. This REQ closes that gap and lays the schema foundation the
-dynamic axis (`REQ-business-flow-and-flow-criticality.md`) and the fidelity gate (its FR-9 / `weaver registry
-live-check`) both depend on. It is **Decision 2** of `REFERENCE_weaver-loom-map-fidelity.md §4`: land the
-reserved group.
+allowed-values, no `weaver check` coverage.
+
+**This is not net-new — it is a delta on an existing plan-of-record.** ContextCore's
+`WEAVER_REGISTRY_REQUIREMENTS.md §4.5` already plans the STATIC `business.*` group as Phase 2 (16 attrs) and
+already knows `weaver registry live-check` (Phase 3, generically). What this REQ adds — and what that doc does
+**not** contain (grep-confirmed: no `flow`/`baggage`/`dynamic`) — is the **dynamic axis** (`business.flow` +
+`business.flow.criticality`), the **two-validator seam**, and **live-check wired as the map-fidelity gate**
+against the route→flow map. It is **Decision 2** of `REFERENCE_weaver-loom-map-fidelity.md §4`: land the
+reserved group, now scoped as an extension of §4.5.
+
+### 0.1 Relation to existing ContextCore requirements (reconciliation)
+
+| Concept | Already in ContextCore (plan-of-record) | This REQ's net-new delta |
+|---|---|---|
+| Weaver registry + CI `weaver registry check` | `WEAVER_REGISTRY_REQUIREMENTS` (Phase 1, not started) | — reuse |
+| STATIC `business.*` attrs + canonical enums | `WEAVER_REGISTRY_REQUIREMENTS §4.5 / §3.8 / §3.10` (Phase 2) | — FR-2 **defers to §4.5's 16-attr set**; not a rediscovery |
+| `weaver registry live-check` mechanism | `WEAVER_REGISTRY_REQUIREMENTS` Phase 3 (generic OTLP-vs-registry) | ✅ **wire it as the route→flow map-fidelity gate** (FR-5) |
+| map/verdict fidelity ("binds-but-attests-nothing") | `REQ_FIDELITY_VERDICT_REFINEMENT` (PromQL-replay instance; `bound_no_data`) | ✅ **the flow-map instance of the same class** — reuse its `bound_no_data`/`binding_coverage` vocabulary |
+| **DYNAMIC** `business.flow` + `flow.criticality` (baggage) | **absent** | ✅ **the core of this REQ + the carrier** |
+
+**Not to be confused with `BUSINESS_OBSERVABILITY` (shipped 2026-08-02).** That capability observes *business
+metrics* (revenue/OKR **pacing** via `Objective`/`KeyResult`/`classify_status`) — a **third** thing, distinct
+from business *instrumentation* (declared context as a dimension on technical telemetry). They are adjacent
+(both touch `coverage/snapshot.py`, both carry a "business" facet) but not the same; do not merge them.
+
+**Honest sequencing dependency:** §4.5 sits in the Weaver effort's **Phase 2**, and that effort is *"Phase 1
+not started"* (as of 2026-02-28). So this dynamic extension rests on an unstarted foundation — landing the
+Phase-1 registry + Phase-2 static `business.*` group is a prerequisite, not assumed done.
 
 ## A. Reflective-instantiation (the method that sets the scope)
 
@@ -94,7 +120,7 @@ values to `live-check`; register the group in `registry_manifest.yaml`.
 ## Functional requirements
 
 - **FR-1 — The `registry.business` group exists and is manifest-registered.** A `semconv/registry/business.yaml` file defines a `registry.business` `attribute_group` with `prefix: business` and `stability: experimental`, and the reserved `# - registry/business.yaml` line in `registry_manifest.yaml` is activated. Name: The business attribute_group exists and is registered in the Weaver manifest. Touches: `ContextCore/semconv/registry/business.yaml`, `ContextCore/semconv/registry_manifest.yaml`. Lives: config ContextCore/semconv/registry/business.yaml. Approve?: does a registered `registry.business` group exist following the sibling-group schema?. Verify: `contextcore weaver check` parses `business.yaml` and the manifest references it; an unregistered group file is not validated. Serves: O-1
-- **FR-2 — Formalize the shipped static attributes so the registry matches emission.** The four attributes `detector.py` already emits — `business.criticality`, `business.value`, `business.owner`, `business.cost_center` — are declared in the group with types and briefs, closing the emitted-but-unregistered gap. Name: The already-emitted static business attributes are declared in the registry. Touches: `ContextCore/semconv/registry/business.yaml`, `ContextCore/src/contextcore/detector.py`. Lives: config ContextCore/semconv/registry/business.yaml. Approve?: does the registry declare every `business.*` attribute detector.py emits?. Verify: each of the four detector-emitted `business.*` attributes resolves to a registry member; an emitted attribute absent from the group is flagged by the registry's reverse-coverage check. Serves: O-2
+- **FR-2 — Formalize the shipped static attributes so the registry matches emission.** The four attributes `detector.py` already emits — `business.criticality`, `business.value`, `business.owner`, `business.cost_center` — are declared in the group with types and briefs, closing the emitted-but-unregistered gap and aligning with (deferring to) the broader 16-attr static set already planned in `WEAVER_REGISTRY_REQUIREMENTS §4.5`. Name: The already-emitted static business attributes are declared in the registry aligned with the planned §4.5 set. Touches: `ContextCore/semconv/registry/business.yaml`, `ContextCore/src/contextcore/detector.py`. Lives: config ContextCore/semconv/registry/business.yaml. Approve?: does the registry declare every `business.*` attribute detector.py emits?. Verify: each of the four detector-emitted `business.*` attributes resolves to a registry member; an emitted attribute absent from the group is flagged by the registry's reverse-coverage check. Serves: O-2
 - **FR-3 — Co-ship the dynamic pair with a non-colliding criticality name.** `business.flow` (open string) and `business.flow.criticality` (enum) are declared together, with `business.flow.criticality` named distinctly from the static resource-level `business.criticality` so a span can carry both. Name: The dynamic flow and flow-criticality attributes are declared with a distinct criticality name. Touches: `ContextCore/semconv/registry/business.yaml`. Lives: config ContextCore/semconv/registry/business.yaml. Approve?: are `business.flow` and a non-colliding `business.flow.criticality` both declared?. Verify: the group contains `business.flow` and `business.flow.criticality` as separate attributes, and `business.flow.criticality` differs in name from `business.criticality`. Serves: O-1
 - **FR-4 — Closed enums mirror `types.py` and are `weaver check`-validated.** `business.flow.criticality` and `business.value` mirror the canonical `Criticality` and `BusinessValue` enums (and `business.owner_relation` mirrors `OwnerRelation` if authored); each is registered in `_ATTRIBUTE_ENUM_MAP` so `contextcore weaver check` fails on registry↔enum drift. Name: The closed business enums mirror the canonical Python enums and are validated in CI. Touches: `ContextCore/semconv/registry/business.yaml`, `ContextCore/src/contextcore/cli/weaver.py`, `ContextCore/src/contextcore/contracts/types.py`. Lives: code ContextCore/cli/weaver.py::_ATTRIBUTE_ENUM_MAP. Approve?: are the closed business enums mapped to their canonical Python enums and CI-checked?. Verify: adding a member to `business.yaml` absent from the `Criticality` enum makes `contextcore weaver check` fail; an in-sync group passes. Serves: O-1
 - **FR-5 — `business.flow` is open and live-check-validated, not weaver-enum-validated.** `business.flow` is declared `type: string` (no `members:`), its values are the app-declared route→flow labels, and its fidelity is enforced by `weaver registry live-check` against the route→flow map (the carrier REQ's FR-9), never by `weaver check` against `types.py`. Name: The open business flow attribute is validated by live-check not by the weaver enum check. Touches: `ContextCore/semconv/registry/business.yaml`, `ContextCore/src/contextcore/cli/weaver.py`. Lives: config ContextCore/semconv/registry/business.yaml. Approve?: is `business.flow` an open string whose fidelity is a live-check concern, not a weaver-enum concern?. Verify: `business.flow` has no `members:` and is absent from `_ATTRIBUTE_ENUM_MAP`; an arbitrary app flow value does not fail `weaver check`; a live route unmapped in the flow map is a `live-check` divergence (per the carrier FR-9). Serves: O-1
