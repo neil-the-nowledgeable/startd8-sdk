@@ -46,6 +46,15 @@ exactly this kind of orthogonal dimension.
    the semantic-conventions layer *that doesn't exist yet*. It fits the model's shape perfectly but has no ratified
    vocabulary — which is the "own the semconv standard" opportunity (doc 05). It populates a blank region; it
    doesn't extend the model.
+
+   The namespace already has a **reserved home**: ContextCore's OTel **Weaver** registry manifest
+   (`ContextCore/semconv/registry_manifest.yaml`) lists `# - registry/business.yaml` as a **planned Phase-2** group,
+   alongside the shipped Phase-1/2 groups (task, project, sprint, agent, lesson). So the absent namespace is
+   *reserved-not-yet-populated* — the slot exists, the group file does not. Weaver is its **governance mechanism**:
+   `weaver registry check` validates the registry YAML (already the enforced check for the shipped groups) and
+   `live-check` + Rego policy can gate real emitted telemetry against the declared conventions. Honest maturity:
+   `business.yaml` is **planned, not shipped** — the reservation and the governance tooling exist; the ratified
+   `business.*` group has not yet been authored.
 2. **The opt-in Baggage→telemetry seam.** OTel keeps baggage *out* of telemetry by default (propagation-only, with
    security/cardinality cautions) while *providing* the `BaggageSpanProcessor` to bridge it on demand. Business
    instrumentation operationalizes that opt-in bridge as a disciplined practice — which is why the guardrails

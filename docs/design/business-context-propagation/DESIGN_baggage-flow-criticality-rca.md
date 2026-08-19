@@ -67,6 +67,27 @@ the **dynamic** flow-criticality that only exists at runtime. Design-time = *pro
 artifacts); runtime = *propagation* (business context → every span) — **two projections of one business-context
 source.** The mapping MUST be single-sourced across both (see §8).
 
+### 2c. Carrier selection — baggage is not the only way to get `flow` onto a span (metabolized: synthesis C5)
+
+Baggage propagation (steps 2–3) is **one carrier**, not the only one. `business.flow` is *recoverable post-hoc*
+from the assembled trace's **root span**, which already carries the entry route — so a **collector-side
+trace-derivation pass** can stamp `flow` *down* onto the trace's spans with **zero baggage propagation**. That
+splits the levers by *timing*: baggage is strictly necessary only for the **real-time-at-ingest** levers (tail-sample
+retention, the §4b premium-sink cost tiering, live P1 alerting — decisions taken *before* the trace is assembled);
+the **analysis/RCA** levers (§4's blast-radius, flow-aware prioritization, cross-signal pivot — taken *after*
+assembly) can use trace-derivation and **dominate on brownfield/async/polyglot fleets** where a propagator rollout
+is expensive or where baggage structurally breaks across queue/batch/serverless/third-party hops.
+
+| Carrier | Timing it serves | Levers | Rollout cost | Fails when |
+|---|---|---|---|---|
+| **Baggage** (steps 2–3) | **real-time / at-ingest** | tail-sample, §4b premium-sink tiering, live alerting | needs the propagator on *every* hop (§5 chain fragility) | async/queue/batch/serverless/3rd-party hops break the chain |
+| **Trace-derivation** (collector, post-assembly) | **analysis / RCA** | §4 blast-radius, prioritization, cross-signal pivot | **$0 propagator rollout** (collector-only) | can't inform a decision that must be made *before* the trace assembles |
+
+Both carriers **read the one declared `route→flow→criticality` map** (§7) — so trace-derivation is a *sixth*
+consumer of that single source, and a hybrid deployment (baggage where real-time is needed, trace-derivation
+elsewhere) is the honest default: brownfield shops get most of the RCA value with no propagator rollout at all.
+*(Maturity: trace-derivation carrier = roadmap; baggage carrier = the P1 build above.)*
+
 ## 2b. Materialization is DECLARATIVE-first (k8s-derived) — code only for the gaps
 
 The earlier framing implied per-language SDK code. In a k8s + OTel environment, almost all of it is **declarative,
@@ -197,10 +218,67 @@ business baggage only at a trusted entry.
 
 One authored criticality now feeds **five** consumers: the design-time `DerivationRule`, the runtime **baggage
 seed**, the **OTTL** policy, the **authoring lint** (`HANDOFF_criticality-authoring-lint.md`), and the **sink
-filter** (Phase-2 delivery router, §4b). The
+filter** (Phase-2 delivery router, §4b), plus — per §2c — a **sixth**: the trace-derivation carrier. The
 **criticality→severity mapping** (`critical→P1`, sampling rates, SLO thresholds) MUST be authored once and shared
 by the DerivationRule (design-time) and the OTTL (runtime) — else the two drift and a critical flow is sampled
 one way at design and another at runtime. Extend the lint's spirit: guard that the mapping has one home.
+
+### 7a. From linted table to GOVERNED REGISTRY — the map is a decision-point, not a shared table (metabolized: synthesis C1)
+
+The framing above treats the `route→flow→criticality` map as a shared table guarded by a **consistency lint**.
+Three independent analogy domains — FinOps tag-policy, zero-trust OPA (PDP/PEP), and product-analytics
+tracking-plans — **converge** that a declared vocabulary feeding N consumers needs a *governed, versioned, enforced
+**registry***, not merely a consistent table. The load-bearing artifact is the **registry itself** (declared-table
+× join-key × stage × consumers), *not* the `BaggageSpanProcessor` — which **vindicates and sharpens the moat
+thesis: the moat is the registry, not the mechanism.** The four properties a governed registry adds over a linted
+table:
+
+- **Allowed-values enum** — `flow`, `criticality`, `tier` are closed vocabularies; unknown values are rejected at
+  authoring time, not discovered at query time.
+- **Coverage %** — *"what fraction of live traffic carries a mapped flow?"* — the reach metric FR-6 needs.
+- **An unmapped bucket** — the **honest denominator**: traffic that matched *no* declared route→flow rule is
+  explicitly bucketed, never silently dropped or mis-attributed.
+- **A lifecycle** — `draft → active → deprecated`, so a flow can be retired without a big-bang rename across all
+  six consumers.
+
+**The Weaver connection — the governance home already exists.** ContextCore already runs an **OTel Weaver semconv
+registry** (`ContextCore/semconv/registry_manifest.yaml`), and `# - registry/business.yaml` is **reserved as a
+planned Phase-2 group** in that manifest today. Weaver's design admits `weaver registry check` running **Rego
+policies** — i.e. an externalized **PDP the consumers query**, the zero-trust-mature answer to the very §7 drift
+this note already fears, **one rung past a consistency lint**. So the metabolized target is concrete: the
+`route→flow→criticality` map becomes a Weaver **`business.yaml` registry group + policy**, not an ad-hoc table each
+consumer copies. *(Maturity — honest: the Weaver registry is **ContextCore-shipped** for `task.*`/`lesson.*` today;
+`business.yaml` is a **planned Phase-2 group** (reserved in the manifest, not yet authored); `weaver registry
+check` + Rego policies are **roadmap** for ContextCore — no `.rego` policy files exist there yet.)*
+
+**Over-abstraction guard (load-bearing).** Externalize to a full queryable PDP **only at ≥2 declared tables or on
+real observed drift.** At **one** declared table (`business.*`), the **lint + `weaver registry check`** is the
+right rung — a full PDP for a single vocabulary would itself be accidental complexity. The registry *structure*
+(enum, coverage %, unmapped bucket, lifecycle) is worth adopting now; the *externalized decision engine* is not,
+until a second declared table earns it in (see §7b).
+
+### 7b. The deeper invariant — declarative context joins over telemetry (metabolized: synthesis C3)
+
+`detector.py` (SDK-side, static business context) and the `k8sattributes` processor (collector-side) already run
+the **same operation** at two different stages: a **join** of a *declared attribute table* against a *live signal*
+on a **key** (the pod / service identity). "Dimension" is just the *output shape* of that join — the primitive is
+**join-on-key**. Seen this way, `business.*` is the **beachhead, not the ceiling**: the same machinery admits other
+authored tables joining on service / route / flow keys —
+
+- **org-chart / on-call** (join → owner, escalation target),
+- **service-catalog / CMDB** (join → team, lifecycle, dependencies),
+- **cost model** (join → $/unit, budget owner),
+- **SLO** (join → objective, error budget),
+- **compliance / data-classification** (join → residency, obligation).
+
+Each is a declared table joined onto telemetry on a key the signal already carries — the registry of §7a is the
+general artifact, and `business.flow` criticality is one instance of it.
+
+**Over-abstraction guard (load-bearing).** Generalize the **registry/contract now** — it is cheap, mostly *renaming*
+existing artifacts (the map is already a declared-table × join-key × consumers shape; §7a's registry properties
+apply unchanged to any of these tables). But **DEFER any generic join *engine*** until table #2 is *actually wired*:
+a framework built for a single use (`business.*` today) is exactly the accidental complexity this note forbids.
+Ship the beachhead, keep the framing, build the engine only when the second table pays for it.
 
 ## 8. Coherence / tie-ins
 
