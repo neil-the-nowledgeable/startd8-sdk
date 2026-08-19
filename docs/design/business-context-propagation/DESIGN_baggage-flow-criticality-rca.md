@@ -93,6 +93,37 @@ Today RCA picks *"the highest-criticality dark service"* (static). With flow-bag
 4. **Cross-signal pivot** — one business context on traces + metrics + logs → correlate by `flow=checkout,
    criticality=critical`.
 
+## 4b. The sink filter — the concrete egress home for flow routing
+
+ContextCore's `pilot/models/telemetry_sink.py` (FR-16) is a per-app registry of telemetry EGRESS destinations
+(vendor/scheme/endpoint), deliberately **Phase-1 inert** — schema + validation only, no router/sender/deliver. Its
+versioned schema exists so *"a Phase-2 **router** can add delivery policy without reinterpreting Phase-1 fields"*
+(`:26-28`, `:132-134`). **That Phase-2 delivery-policy router IS the "sink filter"** — it decides *which telemetry
+egresses to which sink* — and it is the natural, concrete home for §3's flow routing:
+
+| Layer | What it is | Status |
+|---|---|---|
+| `TelemetrySink` registry | the destinations | ✅ Phase-1 built |
+| **Phase-2 delivery-policy router** | **the sink filter** (which telemetry → which sink) | ⬜ planned seam |
+| OTTL (collector) | a candidate *implementation* of that router | ⬜ |
+| **`flow.business.criticality`** (baggage) | the dynamic **predicate** it routes on | ⬜ |
+
+**Payoff — per-FLOW cost/value tiering at egress.** A sink filter on *static per-service* criticality sends all
+`productcatalogservice` telemetry to one tier (the service is `high`). With flow-criticality the *same service's*
+spans route by the flow they serve — a productcatalog span in a checkout flow → the premium high-retention sink;
+in a browse flow → the cheap/sampled sink (or dropped). You pay for fidelity on revenue-primary flows and next to
+nothing on browse **even though both traverse the same services** — a cost lever static per-service criticality
+structurally cannot pull.
+
+**Honest nuance — a TRACES/LOGS lever, not a metrics one.** Traces and logs are per-record → route each by its
+materialized `flow.business.criticality`. **Metrics are pre-aggregated** → per-flow sink routing is lossy unless
+`flow` becomes a metric dimension (reintroducing the cardinality guardrail). Flow-aware egress shines on traces
+(route + tail-sample the premium sink) and logs; treat metrics separately.
+
+**Trust boundary → now a COST-abuse vector.** If the sink filter buys premium egress by flow-criticality, a client
+stamping `criticality=critical` in baggage buys premium retention on your dime. Same fix as §5: set/overwrite
+business baggage only at a trusted entry.
+
 ## 5. Guardrails (the discipline that makes it safe)
 
 - **Trust boundary** — baggage travels in headers; **set/overwrite business baggage at a trusted entry**, never
@@ -115,11 +146,13 @@ Today RCA picks *"the highest-criticality dark service"* (static). With flow-bag
 | **P2 — polyglot materialization** | **startd8-sdk** | **Generate** the per-language BaggageSpanProcessor + propagator config + entry seeding via `scaffold_codegen/instrumentation_gen.py` + `telemetry_renderer.py` — so all 5 languages get it deterministically (closes the chain-fragility guardrail). |
 | **P3 — OTTL policy** | **ContextCore** | collector OTTL: route/tail-sample by `flow.business.criticality`; copy business attrs onto spanmetrics + log correlation. Reuse the DerivationRule mapping (§8). |
 | **P4 — flow-aware RCA** | **ContextCore** | extend `coverage_rca` / `remediation` to weight by *flow* criticality (baggage) alongside *service* criticality (`build_criticality_map`); add the business-impact blast-radius + journey-step queries. |
+| **P5 — sink filter** | **ContextCore** | the Phase-2 delivery-policy router over `telemetry_sink.py` (§4b): route/tier telemetry to sinks by `flow.business.criticality` (traces/logs; metrics separately). OTTL is a candidate implementation. |
 
 ## 7. Single-source-of-truth mandate (ties to the criticality lint)
 
-One authored criticality now feeds **four** consumers: the design-time `DerivationRule`, the runtime **baggage
-seed**, the **OTTL** policy, and the **authoring lint** (`HANDOFF_criticality-authoring-lint.md`). The
+One authored criticality now feeds **five** consumers: the design-time `DerivationRule`, the runtime **baggage
+seed**, the **OTTL** policy, the **authoring lint** (`HANDOFF_criticality-authoring-lint.md`), and the **sink
+filter** (Phase-2 delivery router, §4b). The
 **criticality→severity mapping** (`critical→P1`, sampling rates, SLO thresholds) MUST be authored once and shared
 by the DerivationRule (design-time) and the OTTL (runtime) — else the two drift and a critical flow is sampled
 one way at design and another at runtime. Extend the lint's spirit: guard that the mapping has one home.
