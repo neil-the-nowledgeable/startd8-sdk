@@ -102,3 +102,17 @@ def test_hth_malformed_navig8r_leaf_is_skipped_not_raised():
     assert to_render_profile(orphan).statuses == (
         StatusStyle("ok", "OK", "#0a0", "fine", 0),
     )
+
+
+def test_hth_requirements_vocab_matches_navig8r_leaves():
+    """Dual-write pin: projection reads node_state values; vocab content must stay equal."""
+    resolved = resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY)
+    vocab = resolved.vocabulary["statuses"]
+    states = resolved.node_state["states"]
+    nav_keys = {
+        sid for sid, spec in states.items()
+        if isinstance(spec, dict) and (spec.get("presentation") or {}).get("navig8r")
+    }
+    assert set(vocab) == nav_keys
+    for sid, spec in vocab.items():
+        assert spec == states[sid]["presentation"]["navig8r"]

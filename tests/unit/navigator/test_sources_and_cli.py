@@ -73,6 +73,9 @@ def test_view_definition_cli_dumps_one_resolved_definition():
     assert payload["theme"]["accent"] == "#3a6a94"
     assert payload["theme"]["ink"] == "#241f17"          # inherited from base
     assert payload["vocabulary"]["gap_noun"] == "capability"
+    # EC-CS-6: a thin delta inherits the cross-surface contract from base
+    assert payload["node_state"]["states"]["grounded"]["presentation"]["navig8r"]["label"] == "Grounded"
+    assert payload["surface_links"]["drill"]["via"] == "fullview"
 
 
 def test_view_definition_cli_dumps_whole_registry_and_rejects_unknown():
@@ -318,6 +321,8 @@ def test_view_definition_cli_from_consumes_an_external_file():
     resolved = json.loads(res.stdout)
     assert resolved["chrome"]["eyebrow"] == "This statute"      # its own chrome
     assert resolved["theme"]["accent"] == "#1b545f"             # inherited base theme
+    assert resolved["surface_links"]["drill"]["via"] == "fullview"  # inherited, not authored
+    assert "grounded" in resolved["node_state"]["states"]
 
 
 def test_view_definition_cli_from_rejects_a_malformed_external(tmp_path):
