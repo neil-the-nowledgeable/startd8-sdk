@@ -235,12 +235,14 @@ def _navig8r_statuses_from_node_state(node_state: Mapping[str, Any]) -> Dict[str
     skipped here and never becomes a ``StatusStyle``.
     """
     states = (node_state or {}).get("states") or {}
+    if not isinstance(states, dict):
+        return {}
     out: Dict[str, Any] = {}
     for sid, spec in states.items():
         if not isinstance(spec, dict):
             continue
         nav = ((spec.get("presentation") or {}).get("navig8r") or {})
-        if nav:
+        if isinstance(nav, dict) and nav:
             out[sid] = nav
     return out
 
@@ -248,19 +250,18 @@ def _navig8r_statuses_from_node_state(node_state: Mapping[str, Any]) -> Dict[str
 def _status_specs(resolved: ResolvedDefinition) -> Dict[str, Any]:
     """FR-2: project ``StatusStyle`` input from shared ``node_state``, with empty-default fallback.
 
-    A domain whose authored ``vocabulary.statuses`` keys are a subset of the canonical navig8r
+    A domain whose authored ``vocabulary.statuses`` keys **equal** the canonical navig8r
     presentation (the requirements surface) reads statuses FROM ``node_state`` — that is what
-    wires the shared taxonomy into ``to_render_profile``. A domain with its own keys (capability,
-    pipeline, node-schema) keeps its vocabulary verbatim so the render stays byte-identical.
-    Absent/empty ``node_state`` falls back to ``vocabulary.statuses``.
+    wires the shared taxonomy into ``to_render_profile``. A proper subset is NOT an opt-in
+    (a domain keyed only ``{spec, awaiting}`` must keep its own meanings). Any other key set
+    (capability, pipeline, node-schema, or empty) keeps ``vocabulary.statuses`` verbatim —
+    empty-default, byte-identical. Absent/empty ``node_state`` also falls back to vocabulary.
     """
     vocab_statuses = dict((resolved.vocabulary or {}).get("statuses") or {})
     nav = _navig8r_statuses_from_node_state(resolved.node_state)
     if not nav:
         return vocab_statuses
-    if not vocab_statuses:
-        return nav
-    if set(vocab_statuses) <= set(nav):
+    if set(vocab_statuses) == set(nav):
         # Preserve authored key order (the Derive-to-Prove oracle on REQUIREMENTS_DEFINITION).
         return {k: nav[k] for k in vocab_statuses}
     return vocab_statuses
@@ -275,9 +276,10 @@ def to_render_profile(
     Reads ``vocabulary`` (ordered ``statuses`` keyed map + ``gap_noun``), ``chrome`` (masthead + apex
     strings), ``theme`` (REQ-11 → ``theme_tokens``), and ``control`` + ``regions`` (REQ-14 → the
     debug-panel schema + region/layer taxonomy, applied as an additive runtime override). Cross-surface
-    FR-2: ``statuses`` prefer ``node_state.presentation.navig8r`` when the domain's status keys are a
-    subset of that map (requirements); otherwise ``vocabulary.statuses`` (empty-default — capability
-    / pipeline / node-schema stay byte-identical). ``lenses`` / ``glance`` are still NOT projected.
+    FR-2: ``statuses`` prefer ``node_state.presentation.navig8r`` when the domain's status keys
+    **equal** that map (requirements); otherwise ``vocabulary.statuses`` (empty-default — capability
+    / pipeline / node-schema, and any proper subset, stay byte-identical). ``lenses`` / ``glance``
+    are still NOT projected.
 
     REQ-12: when a ``context`` is supplied, a chrome field named in ``chrome.bindings`` is derived by
     substituting its ``{field}`` template against the context — but ONLY when every referenced field
