@@ -74,6 +74,29 @@ Best, [your name]
 
 ---
 
+## Optional modular passage — the concrete example + the "instrument the dimension" reframe (strongest add)
+
+*Drop this in when you want to make the argument land with a shipped example rather than a definition.*
+
+> Here's a concrete one, so it's not just semantics. We generate a collector-side OTTL processor
+> (`transform/business`) from a single manifest of business context — it stamps each service's
+> **business_criticality** (and owner) onto telemetry it *didn't* originally carry. Our coverage RCA then reads
+> that dimension: instead of "is service X observed?", it answers **"are our _critical_ services observed — and
+> rank the blind spots by business value."** That question was literally unanswerable before the enrichment, and
+> answerable after.
+>
+> So I'll concede your strict point *and* sharpen mine: this isn't source-side *signal generation* — a collector
+> processor can't observe the running system, you're right. But it **instruments a new _dimension_**: it projects
+> declared business meaning onto the existing signal so a class of questions becomes answerable. The RCA is the
+> proof. The honest caveat: the dimension's information is *declared* (a manifest), not *discovered* from the
+> system — so it instruments the business dimension, riding on the classically-instrumented base signal (which is
+> your eBPF layer). Two axes of the same word, not a redefinition of it.
+>
+> (Amusingly, the module that derives all this is literally named `instrumentation.py` — it does double duty:
+> derives what each service *should* emit from OTel semconv *and* generates that business-enrichment processor.
+> The coverage RCA sits right at the intersection — "is this service instrumented enough to be observable, and
+> does it matter?")
+
 ## Optional modular passages (drop in if useful)
 
 - **If you want to name the approach:** *"The shorthand I've been using is 'declarative business-context
