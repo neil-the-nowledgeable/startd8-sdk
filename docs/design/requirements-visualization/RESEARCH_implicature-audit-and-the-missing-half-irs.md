@@ -200,6 +200,26 @@ The §E thread asks whether SARIF is a *projection* of the Node findings or a *p
 
 The honest one-liner for the agenda: **"Two IRs, one lattice, reconciled by the derivation edge — not one merged IR, and not two forking representations. SARIF is the findings-half node; Node is the spec-half node; they share the grammar and are joined, not unified."**
 
+### 3.6 The OTHER axis — narrow waists by DOMAIN (SARIF/OTel and their query + BI cousins)
+
+§3.1–3.5 factor the IRs by **polarity** (spec↔findings, intent↔actual, red↔green). There is a second, orthogonal axis: the **domain narrow waist** — the "thin waist of the hourglass," the one interchange representation many producers and many consumers converge on (IP for the network, `SARIF` for static-analysis findings). The NLPS leans on `SARIF` and the contract IR as narrow waists but has adopted only a *subset* of the domains that have one:
+
+| Domain | Narrow waist (the canonical interchange IR) | In our system | Status |
+|---|---|---|---|
+| spec · data-model · wire | Node/contract · `.prisma` · **proto** | the spec-half IR | ✅ adopted |
+| findings · diagnostics | **SARIF** | the findings bus — repair/validators/security/contract/o11y/query all route in | ✅ adopted |
+| telemetry | **OTel / OTLP** (query dialects: PromQL · TraceQL · LogQL) | *not a peer of SARIF here* — routes **into** SARIF via the o11y bridge (REQ-28); it's a source one layer up | ✅ as a source |
+| query — relational | **SQL** · **Substrait** (a cross-engine **query-plan IR**, the exact SARIF-shaped cousin) · Arrow/ADBC (data/transport) | **Query Prime** *generates* queries and emits → SARIF | ⬜ waist not adopted |
+| query — dimensional / OLAP | **MDX** (MultiDimensional eXpressions, over XMLA) | — | ⬜ absent |
+| BI · metrics | **semantic / metrics layer** (dbt MetricFlow · Cube · Malloy); legacy: **MDX / OLAP cubes** | **dashboard_creator** *generates* dashboards (Grafana) | ⬜ waist not adopted |
+| evidence · attestation | *(no industry standard)* → the proposed **GREEN-evidence IR** (D5) | — | ⬜ proposed |
+
+**The finding this exposes.** We inventoried the polarity axis thoroughly but only the **spec** and **findings** domains on this axis (plus the proposed **evidence** one). The **query** and **BI** narrow waists are real, canonical, and **absent** — yet we already own the *generators* that would sit on them: **Query Prime** (query) and **dashboard_creator** (BI). They currently organize around SARIF (findings), **not** around a query-plan IR (Substrait/SQL) or a metrics IR (semantic layer). So the move, if wanted, is not "build generators" — it is **adopt the waist** and let the existing generator sit on it, exactly as `backend_codegen` sits on the `.prisma` contract.
+
+**On MDX specifically** — it is the purest historical *unifier* of the two missing waists: an OLAP query language whose **calculated members** carry metric definitions inline, so it lives at the **query ∩ BI** intersection (a query IR that also *is* a metric IR). The modern **semantic layer** is its SQL-targeted successor (metrics-as-code compiled down to warehouse SQL, several tools still exposing an MDX face for BI-tool compatibility). MDX is thus the cleanest single illustration that "query waist" and "BI waist" are two faces of one dimensional IR. *(Disambiguation: this is MultiDimensional eXpressions — not the Markdown-plus-JSX doc format.)*
+
+**Over-abstraction guard (the honest verdict).** Adopting a query or BI narrow waist is a **correct-absence today, not a gap** — it earns its place *only* when the NLPS wants **deterministic query/BI generation** (the way `backend_codegen` does deterministic app generation). Until that demand is named, Substrait/MDX/semantic-layer are the *right cousins to know* but the *wrong thing to build* — listing them as narrow waists is inventory, not a backlog. The one that IS on the critical path is the evidence half-IR (D5), because two independent tracks already converged on it.
+
 ### 3.6 The missing structural half-IR that most rounds out the NLPS
 
 **D5 — the GREEN-evidence IR — is the single biggest structural gap, and it is the one to build.**
