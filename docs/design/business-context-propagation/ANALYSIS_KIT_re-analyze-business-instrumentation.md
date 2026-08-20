@@ -30,8 +30,7 @@ it; its information is **declared, not discovered**.
 | `business-context-propagation/REFERENCE_contextcore-annotation-context-detection.md` | the shipped static half (`contextcore.io/*` pod annotations → resource attrs, `detector.py`) |
 | `business-context-propagation/REQ-business-flow-and-flow-criticality.md` | the formal REQ (det-req/0.1) for the dynamic axis |
 | `contextcore-intro/REFERENCE_business-instrumentation-in-the-otel-model.md` | how it fits OTel (a dimension, not a signal); the absent `business.*` semconv namespace; `business.flow` creation; the competitive landscape |
-| `contextcore-intro/{01..05, LINKEDIN, EMAIL}` | the audience-tiered intro set (ELI5→GTM) + the "two axes" framing + the coined term |
-| `EXECUTIVE_contextcore-capabilities-overview.md` | the broader ContextCore capability context |
+| _(relocated out of the repo)_ | The audience-tiered intro set (`contextcore-intro/01..05` + `LINKEDIN`), the `EMAIL` draft, and `EXECUTIVE_contextcore-capabilities-overview.md` were **moved out of the repo** (personal-brand / portfolio material); only `REFERENCE_business-instrumentation-in-the-otel-model.md` (row above) remains in-repo as design grounding. |
 
 **Grounded facts to respect:** the static axis (`business.criticality` via `detector.py` + the `transform/business`
 OTTL processor, consumed by coverage RCA) is **shipped**; the dynamic axis (`business.flow`, baggage) is
