@@ -15,62 +15,55 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..dashboard_creator.v2 import Section, V2Panel, build_sectioned_v2
+from ..dashboard_creator.neutral import (
+    Dashboard,
+    DatasourceRef,
+    Panel,
+    Placement,
+    Query,
+    QueryLanguage,
+    Section,
+    Threshold as NeutralThreshold,
+    VisualizationKind,
+)
+from ..dashboard_creator.v2 import lower_dashboard_to_grafana_v2
 from .dashboard_renderer import _title
 from .spec import ObservabilitySpec, Signal
 
 _DATASOURCE_VAR = "$datasource"
 
 
-def _timeseries_panel(pid: int, sig: Signal) -> V2Panel:
-    """A v2 ``Panel`` (timeseries) for one signal — the metric (thresholded) or the raw expr."""
+def _timeseries_panel(pid: int, sig: Signal) -> Panel:
+    """A portable time-series panel for one signal — metric threshold or raw expression."""
     expr = sig.name if sig.threshold is not None else (sig.expr or sig.name)
-    field_defaults: Dict[str, Any] = {}
+    thresholds: List[NeutralThreshold] = []
+    unit = None
     if sig.threshold is not None:
         color = "red" if sig.threshold.severity == "critical" else "orange"
-        field_defaults["thresholds"] = {
-            "mode": "absolute",
-            "steps": [
-                {"color": "green", "value": None},
-                {"color": color, "value": float(sig.threshold.value)},
-            ],
-        }
-        if sig.threshold.unit:
-            field_defaults["unit"] = sig.threshold.unit
-    viz_config = {
-        "kind": "timeseries",
-        "spec": {
-            "options": {},
-            "fieldConfig": {"defaults": field_defaults, "overrides": []},
-        },
-    }
-    data = {
-        "kind": "QueryGroup",
-        "spec": {
-            "queries": [
-                {
-                    "kind": "PanelQuery",
-                    "spec": {
-                        "refId": "A",
-                        "hidden": False,
-                        "query": {
-                            "kind": "DataQuery",
-                            "group": "prometheus",
-                            "version": "v0",
-                            "datasource": {"name": _DATASOURCE_VAR},
-                            "spec": {"expr": expr, "refId": "A"},
-                        },
-                    },
-                }
-            ],
-            "transformations": [],
-            "queryOptions": {},
-        },
-    }
-    return V2Panel(id=pid, title=_title(sig.name), viz_config=viz_config, data=data)
+        thresholds = [
+            NeutralThreshold(color="green", value=None),
+            NeutralThreshold(color=color, value=float(sig.threshold.value)),
+        ]
+        unit = sig.threshold.unit or None
+    return Panel(
+        id=pid,
+        title=_title(sig.name),
+        visualization=VisualizationKind.TIME_SERIES,
+        unit=unit,
+        thresholds=thresholds,
+        queries=[
+            Query(
+                expression=expr,
+                language=QueryLanguage.PROMQL,
+                datasource=DatasourceRef(name=_DATASOURCE_VAR),
+            )
+        ],
+    )
 
 
-def _severity_sections(spec: ObservabilitySpec) -> List[Section]:
+def build_domain_dashboard_neutral(
+    spec: ObservabilitySpec, project_id: str = "domain"
+) -> Dashboard:
     critical = [
         s
         for s in spec.signals
@@ -83,17 +76,31 @@ def _severity_sections(spec: ObservabilitySpec) -> List[Section]:
     ]
     other = [s for s in spec.signals if s.threshold is None]
 
+    panels = {}
     sections: List[Section] = []
     pid = 0
     for title, sigs in (("Critical", critical), ("Warning", warning), ("Other", other)):
         if not sigs:
             continue
-        panels: List[V2Panel] = []
-        for sig in sigs:
+        placements: List[Placement] = []
+        for panel_index, sig in enumerate(sigs):
             pid += 1
-            panels.append(_timeseries_panel(pid, sig))
-        sections.append(Section(title=title, panels=list(panels)))
-    return sections
+            key = f"sec{len(sections)}-p{panel_index}"
+            panels[key] = _timeseries_panel(pid, sig)
+            # Preserve the legacy sectioned builder's exact GridItem defaults (including y=0).
+            placements.append(Placement(panel=key, height=6))
+        sections.append(Section(title=title, placements=placements))
+    return Dashboard(
+        name=f"obs-domain-{project_id}-v2",
+        title=f"{project_id} — domain observability (dynamic)",
+        panels=panels,
+        sections=sections,
+        tags=["observability", "domain", "dynamic"],
+        description=(
+            "v2 dynamic domain observability dashboard — the same observability.yaml signals as the "
+            "classic board, projected through the sectioned v2 builder (severity sections)."
+        ),
+    )
 
 
 def render_domain_dashboard_v2(
@@ -102,15 +109,4 @@ def render_domain_dashboard_v2(
     """Render the ``ObservabilitySpec`` as a **v2 dynamic** domain dashboard (a `RowsLayout`, one row per
     severity). Returns the v2 envelope dict (feed to ``v2_json`` / ``provision_v2``). An empty spec yields
     a valid empty board. Additive — the classic renderer is unaffected."""
-    return build_sectioned_v2(
-        name=f"obs-domain-{project_id}-v2",
-        title=f"{project_id} — domain observability (dynamic)",
-        layout_kind="rows",
-        sections=_severity_sections(spec),
-        dashboard_variables=[],
-        tags=["observability", "domain", "dynamic"],
-        description=(
-            "v2 dynamic domain observability dashboard — the same observability.yaml signals as the "
-            "classic board, projected through the sectioned v2 builder (severity sections)."
-        ),
-    )
+    return lower_dashboard_to_grafana_v2(build_domain_dashboard_neutral(spec, project_id))

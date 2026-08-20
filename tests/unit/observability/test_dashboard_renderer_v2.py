@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from startd8.dashboard_creator.v2 import v2_json, validate_v2_dashboard
+from startd8.dashboard_creator.v2 import Section as LegacySection
+from startd8.dashboard_creator.v2 import V2Panel, build_sectioned_v2
 from startd8.observability.dashboard_renderer import render_domain_dashboard
 from startd8.observability.dashboard_renderer_v2 import render_domain_dashboard_v2
 from startd8.observability.spec import ObservabilitySpec, Signal, Threshold
@@ -94,6 +96,89 @@ def test_classic_renderer_untouched():
     assert res.status == "generated" and "panels:" in res.content
     # and it does NOT contain any v2 marker
     assert "dashboard.grafana.app/v2" not in res.content
+
+
+def test_neutral_lowering_is_byte_identical_to_the_legacy_sectioned_path():
+    """The first migrated producer lowers to the exact pre-extraction Grafana representation."""
+
+    sections = []
+    pid = 0
+    for title, signals in (
+        ("Critical", [_spec().signals[0]]),
+        ("Warning", [_spec().signals[1]]),
+        ("Other", [_spec().signals[2]]),
+    ):
+        legacy_panels = []
+        for signal in signals:
+            pid += 1
+            expression = signal.name if signal.threshold is not None else signal.expr
+            defaults = {}
+            if signal.threshold is not None:
+                defaults["thresholds"] = {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "green", "value": None},
+                        {
+                            "color": "red"
+                            if signal.threshold.severity == "critical"
+                            else "orange",
+                            "value": float(signal.threshold.value),
+                        },
+                    ],
+                }
+                if signal.threshold.unit:
+                    defaults["unit"] = signal.threshold.unit
+            legacy_panels.append(
+                V2Panel(
+                    id=pid,
+                    title=signal.name.replace("_", " ").title(),
+                    viz_config={
+                        "kind": "timeseries",
+                        "spec": {
+                            "options": {},
+                            "fieldConfig": {"defaults": defaults, "overrides": []},
+                        },
+                    },
+                    data={
+                        "kind": "QueryGroup",
+                        "spec": {
+                            "queries": [
+                                {
+                                    "kind": "PanelQuery",
+                                    "spec": {
+                                        "refId": "A",
+                                        "hidden": False,
+                                        "query": {
+                                            "kind": "DataQuery",
+                                            "group": "prometheus",
+                                            "version": "v0",
+                                            "datasource": {"name": "$datasource"},
+                                            "spec": {"expr": expression, "refId": "A"},
+                                        },
+                                    },
+                                }
+                            ],
+                            "transformations": [],
+                            "queryOptions": {},
+                        },
+                    },
+                )
+            )
+        sections.append(LegacySection(title=title, panels=legacy_panels))
+
+    legacy = build_sectioned_v2(
+        name="obs-domain-household-v2",
+        title="household — domain observability (dynamic)",
+        layout_kind="rows",
+        sections=sections,
+        dashboard_variables=[],
+        tags=["observability", "domain", "dynamic"],
+        description=(
+            "v2 dynamic domain observability dashboard — the same observability.yaml signals as the "
+            "classic board, projected through the sectioned v2 builder (severity sections)."
+        ),
+    )
+    assert v2_json(render_domain_dashboard_v2(_spec(), "household")) == v2_json(legacy)
 
 
 def _grafana_reachable() -> bool:

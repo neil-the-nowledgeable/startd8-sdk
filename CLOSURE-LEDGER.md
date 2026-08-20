@@ -19,7 +19,7 @@
 
 **Maturity of this repo:** **L2** — *set by the lowest open loop (CL-2 dead CLI flag / CL-3 un-wired adapter). The core generation pipeline is L4-live; the L2 items are isolated, minor surfaces — but honesty = lowest open loop, no rounding up.*
 **Loops in flight:** 0 — *WIP=1: pick one, close or park it, before opening another.*
-**Last grounded:** 2026-07-15
+**Last grounded:** 2026-08-20
 
 ---
 
@@ -51,6 +51,7 @@
 | CL-5 | OQ-8 — SkillAgent user-skill execution | `PRESENTATION_POLISH_CAPABILITY_REQUIREMENTS.md`: unproven whether SkillAgent can run an arbitrary Claude Code user skill (Phase 2, **flagged highest-risk**) | **L1** | Spike to prove/disprove feasibility before building on it | Unblocks the presentation-polish capability, or kills it early |
 | CL-6 | OQ-IMP-D — `GENERATED_IMPORT_PATH` consumer | First consumer unnamed; provisional default `strtd8`. **Blocks e2e acceptance** (Phase-5 gate) | **L1** | Name the first real consumer before Phase 5 | e2e acceptance unblocked |
 | CL-7 | Skipped test suites | Jinja2 scaffold (~11 tests, dep-gated) + node-pilot e2e (2, vendor-gated) — a ~60-test conditional blind spot | **L3** | Install Jinja2 / vendor node in CI, **or** accept as a documented conditional skip | Template-render + node-pilot paths validated in CI |
+| CL-8 | `dashboard_creator/perses/` — bounded Perses adoption | Neutral model, deterministic dual lowerings, pinned offline CUE oracle, and goldens are implemented and locally validated, but the Perses path has no live generation caller and has not been imported by Dash0 | **L2** | Wire the chosen production generation surface, then import its generated Perses Dashboard into the authorized Dash0 pilot and record the result → L4/L5 | Vendor-neutral dashboard generation is proven at its first real consumer |
 
 ---
 
@@ -65,6 +66,7 @@
 |-------|-------------------------|-----------|----------------|
 | Requirements-visualization / navigator + craft | `docs/design/requirements-visualization/SESSION_LEDGER_specs-and-open-tasks.md` — **topic-scoped despite its name; NOT project-wide.** `scripts/verify_ledger.py` audits its ✅ rows | REQ-30/31/32 + the det-req-kit grammar-field batch (cross-repo dev-os) | startd8-sdk + dev-os |
 | Business instrumentation (`business.*` dimension) | `docs/design/business-context-propagation/` (design home) → tracked as **BI-1..BI-3 in `ContextCore/CLOSURE-LEDGER.md`** | Weaver registry group · `business.flow` carrier · map-fidelity gate | **ContextCore** |
+| Dashboard vendor-neutrality / Perses | `docs/design/dashboard-vendor-neutrality/TODO_perses-adoption.md` | ContextCore CRD projection · live wiring and Dash0 pilot · upstream gap contributions | startd8-sdk + ContextCore + Perses upstream |
 
 ---
 

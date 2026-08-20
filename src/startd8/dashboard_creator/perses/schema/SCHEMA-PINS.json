@@ -1,0 +1,30 @@
+{
+  "cue_cli": "v0.16.1",
+  "vendored_cue_tree_sha256": "840abdaf0592e628f3c24186e78c88f611f4efdf276fbe954e0d45bf23898486",
+  "perses": {
+    "commit": "4c719fc19fa21d333797e84c4fe7e3d81c25f4f5",
+    "path": "cue/model/api/v1",
+    "version": "v0.54.0"
+  },
+  "perses_plugins": {
+    "commit": "a62049f1624ee7c62466189ec2ea72b4d64cb31a",
+    "versions": {
+      "logstable": "v0.3.0",
+      "loki": "v0.6.0",
+      "markdown": "v0.12.0",
+      "prometheus": "v0.58.0",
+      "staticlistvariable": "v0.9.0",
+      "timeserieschart": "v0.13.0"
+    }
+  },
+  "perses_shared": {
+    "commit": "88594e0979f5598924a9451ec61f191e86c5a06d",
+    "path": "cue/common",
+    "version": "v0.54.0"
+  },
+  "perses_spec": {
+    "commit": "ab48cf4fd4a3db157e0250f2814e19e897efa449",
+    "path": "cue",
+    "version": "v0.2.0-beta.9"
+  }
+}

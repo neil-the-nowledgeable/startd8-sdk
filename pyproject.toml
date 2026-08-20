@@ -218,8 +218,11 @@ startd8 = [
     "concierge_templates/inputs/*.yaml",
     "requirements_panel/templates/*.yaml",
     "observability/config/*.yaml",
+    "dashboard_creator/perses/schema/*.cue",
+    "dashboard_creator/perses/schema/*.json",
+    "dashboard_creator/perses/schema/*.md",
+    "dashboard_creator/perses/schema/cue.mod/*.cue",
+    "dashboard_creator/perses/schema/cue.mod/pkg/**/*.cue",
 ]
-
-
 
 

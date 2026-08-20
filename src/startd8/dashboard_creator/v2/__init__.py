@@ -16,6 +16,7 @@ elements, ``GridLayout``/``RowsLayout``, and ``CustomVariable`` (= the FR-8 ``au
 from __future__ import annotations
 
 from .emitter import emit_v2_dashboard, persist_v2_dashboard, v2_json
+from .lowering import lower_dashboard_to_grafana_v2
 from .provision import V2ProvisionResult, provision_v2
 from .sectioned import Section, build_sectioned_v2
 from .validate import validate_v2_dashboard
@@ -63,6 +64,7 @@ __all__ = [
     "show_when_variable",
     "text_panel",
     "emit_v2_dashboard",
+    "lower_dashboard_to_grafana_v2",
     "persist_v2_dashboard",
     "v2_json",
     # M5 — validation, version gating, provisioning
