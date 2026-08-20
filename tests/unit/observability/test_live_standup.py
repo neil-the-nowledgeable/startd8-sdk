@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import subprocess
 
-import pytest
-
 from startd8.observability import live_standup
 
 
@@ -107,6 +105,17 @@ def test_standup_no_docker_is_fail_loud():
         subject_image="s:1", run_id="nd", runner=FakeRunner(),
         docker_available_fn=lambda: False,
     )
+    assert handle.scrape_ready is False
+    assert "docker" in handle.reason.lower()
+
+
+def test_standup_default_docker_check_has_no_benchmark_dependency(monkeypatch):
+    monkeypatch.setattr(live_standup.shutil, "which", lambda _name: None)
+
+    handle = live_standup.stand_up_subject_and_prometheus(
+        subject_image="s:1", run_id="nd-default", runner=FakeRunner(),
+    )
+
     assert handle.scrape_ready is False
     assert "docker" in handle.reason.lower()
 

@@ -31,6 +31,7 @@ _INSTRUMENTED_MODULES = [
     ("startd8.contractors.adapters.contextcore", "src/startd8/contractors/adapters/contextcore.py"),
     ("startd8.contractors.artisan_contractor", "src/startd8/contractors/artisan_contractor.py"),
     ("startd8.contractors.artisan_phases.runner", "src/startd8/contractors/artisan_phases/runner.py"),
+    ("startd8.contractors.generation_ledger_metrics", "src/startd8/contractors/generation_ledger_metrics.py"),
     ("startd8.repair.orchestrator", "src/startd8/repair/orchestrator.py"),
     # cat-4 / B: previously-undeclared live emitters, now cataloged (CAT45 §A-1, §D).
     ("startd8.complexity.classifier", "src/startd8/complexity/classifier.py"),
