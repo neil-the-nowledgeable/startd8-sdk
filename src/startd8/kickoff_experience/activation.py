@@ -188,6 +188,35 @@ def evaluate_activation(
             detail="Capture the remaining fields to reach the readiness target.",
         ),
     ]
+    # EC-CS-7: opt-in navig8r grounding → cockpit attention rollup (empty-default when absent).
+    nav_statuses = status.get("navig8r_statuses")
+    if isinstance(nav_statuses, (list, tuple)) and nav_statuses:
+        from startd8.navigator.view_definition import (
+            BASE_NAVIG8R_DEFINITION,
+            activation_severity_from_cockpit_attention,
+            attention_counts_from_navig8r_statuses,
+            rollup_navig8r_statuses_to_attention,
+        )
+
+        node_state = BASE_NAVIG8R_DEFINITION.node_state
+        rolled = rollup_navig8r_statuses_to_attention(
+            [str(s) for s in nav_statuses], node_state
+        )
+        nav_counts = attention_counts_from_navig8r_statuses(
+            [str(s) for s in nav_statuses], node_state
+        )
+        sev = activation_severity_from_cockpit_attention(rolled)
+        conditions.append(
+            ActivationCondition(
+                key="navig8r_grounding",
+                severity=sev if sev != _SEV_OK else _SEV_ATTENTION,
+                met=rolled != "ok",
+                title=f"Navig8r grounding rollup is {rolled}",
+                detail=(
+                    f"Mapped via surface_links.rollup / node_state → attention_counts={nav_counts}."
+                ),
+            )
+        )
     return ActivationReport(
         project_root=str(status.get("project_root", "")),
         readiness_percent=readiness,

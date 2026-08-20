@@ -53,14 +53,14 @@ crossovers (EC-CS-1, EC-CS-2, EC-CS-3, EC-CS-4) — CEP earned its keep (>0).
 | **EC-CS-4** | **Structured drill `href: "#{key}"` field** on `surface_links.drill` + `resolve_surface_link_href` | **S** | wire-existing | ✅ | CROSS(A1+B3) — **→ landed this increment** |
 | **EC-CS-9** | **`--validate` fail-closed on malformed presentation leaves** — projection skip of a non-dict navig8r leaf stays (FR-7); `--validate` must not stay green | **S** | fix | ✅ | C4 — **→ landed this increment** (pairs with EC-CS-1) |
 | **EC-CS-8** | **Shared cockpit colors** — opt-in: `_ATTENTION_DISPLAY` / `_BADGE` read `presentation.cockpit.color` | **S** | wire-existing | ✅ | A6 — **→ landed this increment** (`cockpit_attention_colors` + kickoff badge CSS) |
-| **EC-CS-7** | **FR-5 consumer: node_state → existing `_rollup` / activation** | **M** | wire-existing | ⚠️ cockpit-visible | A5 — sibling of ledger **H1**, not a substitute |
+| **EC-CS-7** | **FR-5 consumer: node_state → existing `_rollup` / activation** | **M** | wire-existing | ⚠️ cockpit-visible | A5 — **→ landed this increment** (`rollup_navig8r_statuses_to_attention` + opt-in `navig8r_statuses` on `evaluate_activation`) |
 | **H1** | **Cockpit adopter spec** — tiles read `surface_links` and link `#<key>` | **M** | author-spec | n/a | ledger (already named) — author via `/reflective-requirements` |
 
 ### Wildcard (single-seeder, no descendants)
 
 | ID | Title | Val×Eff | Note |
 |----|-------|---------|------|
-| **EC-CS-10** | **`--validate` advisory: `surface_links` + `presentation.cockpit` declared-not-consumed** | S | C5 — exit 0 (dormancy is the spec). Stops `ok: N definitions valid` being read as "drill is live." |
+| **EC-CS-10** | **`--validate` advisory: `surface_links` + `presentation.cockpit` declared-not-consumed** | S | C5 — **→ landed this increment** (exit 0; colors noted as EC-CS-8 consumed) |
 
 ## EC-CS-2 prep (already built — do not rebuild)
 
@@ -78,8 +78,8 @@ Re-grounded 2026-08-19 against local `main` before any new dual-write work:
   harvest-*generation* tense. Now cites `6378f5ae`.
 - Header still named the deleted `/private/tmp/wt-hth-cross-surface` worktree — replaced with landed SHAs.
 
-No remaining EC-CS-2 code to write. **EC-CS-1 / EC-CS-3 / EC-CS-4 / EC-CS-8 / EC-CS-9 landed.** Next
-open S/M: **EC-CS-7** (rollup → activation) or author **H1** / wildcard **EC-CS-10**.
+No remaining EC-CS-2 code to write. **EC-CS-1 / EC-CS-3 / EC-CS-4 / EC-CS-7 / EC-CS-8 / EC-CS-9 /
+EC-CS-10 landed.** Remaining: author **H1** (cockpit tile adopter).
 
 ## Absorbed seeds (not standalone rows)
 

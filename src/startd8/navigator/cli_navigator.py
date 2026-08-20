@@ -55,6 +55,7 @@ from .verify_oracle import (
 from .view_definition import (
     BASE_NAVIG8R_DEFINITION,
     DEFINITION_REGISTRY,
+    cross_surface_consumption_advisories,
     definition_diff,
     load_definition,
     resolve,
@@ -1249,8 +1250,8 @@ def view_definition(
         "--validate",
         help="Govern the registry: every definition resolves, chrome.bindings reference known "
         "fields, resolved surface_links.via names a region or serves, drill links carry a "
-        "{key} href, and presentation leaves are well-formed. "
-        "Exit 0=clean, 1=issues (EC-6 / EC-CS-1/3/4/9).",
+        "{key} href, and presentation leaves are well-formed. Prints declared-not-consumed "
+        "advisories (exit 0). Exit 0=clean, 1=issues (EC-6 / EC-CS-1/3/4/9/10).",
     ),
     from_file: Optional[Path] = typer.Option(
         None,
@@ -1276,6 +1277,9 @@ def view_definition(
         console.print(
             f"[green]ok:[/green] {len(DEFINITION_REGISTRY)} definitions valid"
         )
+        # EC-CS-10: registry "valid" ≠ drill/rollup live — advisory, exit 0.
+        for note in cross_surface_consumption_advisories():
+            console.print(f"[yellow]advisory:[/yellow] {note}")
         raise typer.Exit(_EXIT_OK)
     if from_file is not None:
         # REQ-13: consume an externally-authored definition — load, resolve against the shipped base,

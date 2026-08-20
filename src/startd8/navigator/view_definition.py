@@ -27,7 +27,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 from startd8.wireframe.profile import (
     DEFAULT_FIELD_DISPLAY,
@@ -283,6 +283,85 @@ def cockpit_attention_colors(node_state: Mapping[str, Any]) -> Dict[str, str]:
         if isinstance(att, str) and isinstance(color, str) and color and att not in out:
             out[att] = color
     return out
+
+
+# EC-CS-7: worst-case order for cockpit attentions (higher index = worse). Mirrors activation's
+# severity ladder (blocked > attention) with backlog between ok and review.
+_COCKPIT_ATTENTION_SEVERITY = ("ok", "backlog", "review", "blocked")
+
+
+def attention_counts_from_navig8r_statuses(
+    status_ids: Sequence[str],
+    node_state: Mapping[str, Any],
+) -> Dict[str, int]:
+    """EC-CS-7: count cockpit attentions for a list of navig8r status ids via the shared map.
+
+    Unmapped / unknown status ids count as ``blocked`` (fail-closed). Empty input → all zeros.
+    """
+    counts = {a: 0 for a in _COCKPIT_ATTENTION_SEVERITY}
+    leaves = cockpit_statuses_from_node_state(node_state)
+    for sid in status_ids:
+        leaf = leaves.get(sid) or {}
+        att = leaf.get("attention")
+        if isinstance(att, str) and att in counts:
+            counts[att] += 1
+        else:
+            counts["blocked"] += 1
+    return counts
+
+
+def rollup_cockpit_attentions(attentions: Sequence[str]) -> str:
+    """EC-CS-7: worst-case rollup over cockpit attentions (same grain as ``project._rollup``)."""
+    worst, worst_rank = "ok", -1
+    for att in attentions:
+        try:
+            rank = _COCKPIT_ATTENTION_SEVERITY.index(att)
+            candidate = att
+        except ValueError:
+            rank = len(_COCKPIT_ATTENTION_SEVERITY)
+            candidate = "blocked"
+        if rank > worst_rank:
+            worst, worst_rank = candidate, rank
+    return worst
+
+
+def rollup_navig8r_statuses_to_attention(
+    status_ids: Sequence[str],
+    node_state: Mapping[str, Any],
+) -> str:
+    """EC-CS-7 / FR-5: map each navig8r status → cockpit attention, then worst-case rollup.
+
+    The ``surface_links.rollup`` binding (``via: serves``) declares this direction; this function is
+    the reusable consumer. Empty ``status_ids`` → ``ok`` (no evidence of a gap).
+    """
+    if not status_ids:
+        return "ok"
+    counts = attention_counts_from_navig8r_statuses(status_ids, node_state)
+    flattened: List[str] = []
+    for att in _COCKPIT_ATTENTION_SEVERITY:
+        flattened.extend([att] * counts[att])
+    return rollup_cockpit_attentions(flattened)
+
+
+def activation_severity_from_cockpit_attention(attention: str) -> str:
+    """Map a rolled-up cockpit attention to activation's ``ok`` / ``attention`` / ``blocked``."""
+    if attention == "blocked":
+        return "blocked"
+    if attention in ("review", "backlog"):
+        return "attention"
+    return "ok"
+
+
+def cross_surface_consumption_advisories() -> List[str]:
+    """EC-CS-10: declared-not-consumed notes for operators (exit 0 — dormancy can be the spec).
+
+    Honest about what is wired today: colors (EC-CS-8) yes; tile drill/rollup (H1) no.
+    """
+    return [
+        "surface_links.drill/rollup are declared; kickoff tiles do not yet consume them (H1 adopter)",
+        "presentation.cockpit colors are consumed via attention_colors (EC-CS-8); "
+        "tile drill/rollup still declared-not-wired",
+    ]
 
 
 def resolve_surface_link_href(link: Mapping[str, Any], key: str) -> str:

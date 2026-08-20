@@ -67,6 +67,22 @@ def test_to_dict_schema_and_json_serializable():
     json.dumps(d)  # must not raise
 
 
+def test_ec_cs_7_navig8r_statuses_opt_in_rollup_empty_default():
+    """Absent navig8r_statuses → identical to pre-EC-CS-7; present → grounding condition."""
+    clear = evaluate_activation(_status())
+    assert not any(c.key == "navig8r_grounding" for c in clear.conditions)
+
+    grounded = evaluate_activation(_status(navig8r_statuses=["grounded", "grounded"]))
+    assert grounded.overall == "ok"
+    assert not any(c.key == "navig8r_grounding" and c.met for c in grounded.conditions)
+
+    mixed = evaluate_activation(_status(navig8r_statuses=["grounded", "unknown", "spec"]))
+    assert mixed.overall == "blocked"
+    nav = next(c for c in mixed.open if c.key == "navig8r_grounding")
+    assert "blocked" in nav.title
+    assert "attention_counts=" in nav.detail
+
+
 def test_ledger_appends_on_change_and_dedups(tmp_path):
     led = ActivationLedger(tmp_path)
     e1 = led.record(_status(readiness_percent=50), now="2026-01-01T00:00:00Z")
