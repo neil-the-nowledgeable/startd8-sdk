@@ -1,0 +1,185 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "portable-reference",
+    "project": "startd8",
+    "tags": [
+      "portable",
+      "golden"
+    ]
+  },
+  "spec": {
+    "display": {
+      "description": "One neutral model lowered to Grafana v2 and Perses.",
+      "name": "Portable reference"
+    },
+    "duration": "6h",
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "collapse": {
+              "open": true
+            },
+            "title": "Introduction"
+          },
+          "items": [
+            {
+              "content": {
+                "$ref": "#/spec/panels/intro"
+              },
+              "height": 4,
+              "width": 24,
+              "x": 0,
+              "y": 0
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "collapse": {
+              "open": true
+            },
+            "title": "Signals"
+          },
+          "items": [
+            {
+              "content": {
+                "$ref": "#/spec/panels/rate"
+              },
+              "height": 8,
+              "width": 12,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/logs"
+              },
+              "height": 8,
+              "width": 12,
+              "x": 12,
+              "y": 0
+            }
+          ]
+        }
+      }
+    ],
+    "panels": {
+      "intro": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Overview"
+          },
+          "plugin": {
+            "kind": "Markdown",
+            "spec": {
+              "text": "**Portable** dashboard"
+            }
+          }
+        }
+      },
+      "logs": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Errors"
+          },
+          "plugin": {
+            "kind": "LogsTable",
+            "spec": {
+              "allowWrap": true,
+              "enableDetails": true,
+              "showTime": true
+            }
+          },
+          "queries": [
+            {
+              "kind": "LogQuery",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "LokiLogQuery",
+                  "spec": {
+                    "datasource": {
+                      "kind": "LokiDatasource",
+                      "name": "loki"
+                    },
+                    "query": "{app=\"api\"} |= \"error\""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "rate": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Request rate"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "thresholds": {
+                "defaultColor": "green",
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": 10.0
+                  }
+                ]
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "decimal"
+                }
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "datasource": "$datasource",
+                    "query": "sum(rate(http_requests_total{env=\"$environment\"}[5m]))"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "variables": [
+      {
+        "kind": "ListVariable",
+        "spec": {
+          "allowAllValue": false,
+          "allowMultiple": false,
+          "name": "environment",
+          "plugin": {
+            "kind": "StaticListVariable",
+            "spec": {
+              "values": [
+                "prod",
+                "staging"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}
