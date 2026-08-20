@@ -29,6 +29,7 @@ Usage:
     python3 scripts/navigator_spec_delivery_loop.py --status            # readiness of every REQ-*.md
     python3 scripts/navigator_spec_delivery_loop.py REQ-05              # gate one spec (by key or path)
     python3 scripts/navigator_spec_delivery_loop.py --checklist         # print the 7-stage runbook
+    python3 scripts/navigator_spec_delivery_loop.py --self-dogfood      # REQ-27 corpus verify-gate adoption
 """
 from __future__ import annotations
 
@@ -51,7 +52,13 @@ from startd8.navigator.govern import (  # noqa: E402,F401
     _FR_MARKER,
     _HANDLE,
     _SEMNAME,
+    SelfDogfoodReport,
+    SelfDogfoodRow,
+    check_self_dogfood_verify_gates,
+    classify_corpus_verifies,
     gate_spec,
+    lessons_from_self_dogfood,
+    render_self_dogfood_text,
 )
 
 SPEC_DIR = REPO / "docs/design/requirements-visualization"
@@ -130,6 +137,26 @@ def run_reachability(paths: List[Path], strict: bool) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# REQ-27 — the self-dogfood verify-gate report (advisory; never changes the exit code)
+# --------------------------------------------------------------------------- #
+
+def run_self_dogfood(spec_dir: Path) -> int:
+    """Run the corpus self-liveness gate: print the adoption split, the mechanical-but-gateless triage
+    list, and the ``proposed`` Lessons those gaps route to. Always exits 0 — the self-gate is advisory
+    (REQ-27 NR-2): it reports and routes to a human decision, it never fails the loop on the backlog."""
+    report: SelfDogfoodReport = classify_corpus_verifies(spec_dir)
+    print(render_self_dogfood_text(report))
+    findings = check_self_dogfood_verify_gates(spec_dir)
+    lessons = lessons_from_self_dogfood(findings)
+    gaps: List[SelfDogfoodRow] = report.mechanical_gateless
+    print(f"\n{len(findings)} advisory finding(s); {len(lessons)} proposed triage lesson(s) "
+          f"for {len(gaps)} mechanical-but-gateless FR(s).")
+    for lesson in lessons:
+        print(f"  · {lesson.key}: {lesson.attributes.get('proposes', '')}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # resolution + rendering
 # --------------------------------------------------------------------------- #
 
@@ -186,11 +213,16 @@ def main(argv: List[str]) -> int:
                     help="GATE-2 reachability probe: flag public symbols in these files with no call site")
     ap.add_argument("--strict", action="store_true",
                     help="with --reachability: exit 1 if any symbol is dormant (default: advisory)")
+    ap.add_argument("--self-dogfood", action="store_true",
+                    help="REQ-27 self-liveness gate: verify.gate adoption over the corpus (advisory)")
     args = ap.parse_args(argv[1:])
 
     if args.checklist:
         print(CHECKLIST)
         return 0
+
+    if args.self_dogfood:
+        return run_self_dogfood(SPEC_DIR)
 
     if args.reachability:
         return run_reachability(args.reachability, strict=args.strict)
@@ -213,6 +245,14 @@ def main(argv: List[str]) -> int:
             print(f"{s.name:52}{'✓' if v['ok'] else '✗':8}"
                   f"{'' if v['ok'] else ', '.join(v['blocked'])}"[:150])
         print(f"\n{len(specs)} specs — {len(specs) - n_blocked} build-ready, {n_blocked} blocked.")
+        # REQ-27 FR-4: the standing self-liveness line — one advisory sentence so the corpus's own
+        # verify-gate adoption is visible on every status sweep and can't silently regress. It never
+        # touches the exit code (NR-2); `--self-dogfood` prints the full triage list.
+        sd = classify_corpus_verifies(SPEC_DIR)
+        print(f"self-dogfood (advisory): verify.gate adoption {len(sd.mechanical_with_gate)}/"
+              f"{len(sd.mechanical)} mechanical ({sd.adoption_rate}), "
+              f"{len(sd.mechanical_gateless)} gateless, {len(sd.honest_manual)} honest-manual "
+              f"— see --self-dogfood.")
         return 0
 
     if not args.spec:

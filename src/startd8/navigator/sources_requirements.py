@@ -323,6 +323,13 @@ def nodes_from_requirements(path: Path, *, repo: Path | None = None) -> List[Nod
         tcount = len([t for t in (fr.get("touches") or []) if str(t).strip()])
         if tcount:
             attrs["touches_count"] = str(tcount)
+        # REQ-27 FR-3: the explicit MANUAL marker rides the typed-attributes channel (the REQ-08 Stage
+        # pattern) — NOT a new Node field, so NODE_FIELD_MANIFEST stays at 20 and the schema-parity gate
+        # is untouched. Absent marker → no key at all, so an unmarked FR projects byte-identically.
+        manual_why = str(fr.get("manual") or "").strip()
+        if manual_why:
+            attrs["verify_kind"] = "manual"
+            attrs["verify_manual_why"] = manual_why
         if prompts:
             attrs["approve_prompts"] = " · ".join(prompts)
         if was:

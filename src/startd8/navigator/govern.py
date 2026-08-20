@@ -1169,6 +1169,287 @@ def lessons_from_liveness_layer(findings, *, confidence=None) -> List["Any"]:
     ]
 
 
+# --------------------------------------------------------------------------- #
+# REQ-27 — the self-dogfood gate: the built liveness layer turned on our OWN corpus
+# --------------------------------------------------------------------------- #
+
+# The self-gate's finding refs (its own namespace — these never join the fixed REQ-06 battery, NR-6).
+_SELF_DOGFOOD_GAP = "self-dogfood:mechanical-gateless"
+_SELF_DOGFOOD_DEAD = "self-dogfood:dead-gate"
+_SELF_DOGFOOD_OVERRIDE = "self-dogfood:manual-override"
+_SELF_DOGFOOD_ADOPTION = "self-dogfood:adoption"
+
+
+@dataclass(frozen=True)
+class SelfDogfoodRow:
+    """REQ-27 FR-1 — one corpus FR's honesty split: what its verify CLAIMS vs what it CARRIES.
+
+    ``kind`` is ``verify_oracle``'s classification of the prose verify (``command`` = it names a runnable
+    span, so it claims mechanical attestation; ``assertion``/``manual`` = human acceptance). ``gate_state``
+    is ``_gate_liveness``'s structural resolution of the authored ``Gate:`` handle (REQ-22). ``mechanical``
+    is the split itself: the verify claims a runnable check AND the author did not override it ``Manual:``.
+    """
+
+    doc: str
+    fr: str
+    kind: str  # verify_oracle: command | assertion | manual
+    mechanical: bool  # kind == command AND no explicit `Manual:` override
+    gate: str = ""
+    gate_state: str = "no-gate"  # live | dead-structural | unrunnable-provenance | no-gate
+    manual_marker: str = ""  # the `Manual:` rationale ("" = unmarked)
+
+    @property
+    def marked_manual(self) -> bool:
+        """True iff the author EXPLICITLY marked the verify manual (REQ-27 FR-3)."""
+        return bool(self.manual_marker.strip())
+
+    @property
+    def honest_manual(self) -> bool:
+        """Legitimately human-checked: explicitly marked, or prose-by-kind (``assertion``/``manual``) —
+        honest-by-kind needs no marker; the marker is the OVERRIDE for a command-shaped verify (FR-3)."""
+        return not self.mechanical
+
+    @property
+    def gateless(self) -> bool:
+        return not self.gate.strip()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "doc": self.doc,
+            "fr": self.fr,
+            "kind": self.kind,
+            "mechanical": self.mechanical,
+            "gate": self.gate,
+            "gate_state": self.gate_state,
+            "manual_marker": self.manual_marker,
+        }
+
+
+@dataclass
+class SelfDogfoodReport:
+    """REQ-27 FR-1/FR-4 — the corpus's own verify-honesty report: the single misleading "N% dead" figure
+    resolved into a REAL gap (mechanically-attestable but gateless) plus an HONEST-manual count."""
+
+    corpus: str
+    docs: List[str] = field(default_factory=list)
+    rows: List[SelfDogfoodRow] = field(default_factory=list)
+
+    @property
+    def mechanical(self) -> List[SelfDogfoodRow]:
+        return [r for r in self.rows if r.mechanical]
+
+    @property
+    def mechanical_with_gate(self) -> List[SelfDogfoodRow]:
+        return [r for r in self.mechanical if not r.gateless]
+
+    @property
+    def mechanical_gateless(self) -> List[SelfDogfoodRow]:
+        """The REAL gap — a verify that claims a runnable check but carries no gate to run."""
+        return [r for r in self.mechanical if r.gateless]
+
+    @property
+    def honest_manual(self) -> List[SelfDogfoodRow]:
+        return [r for r in self.rows if r.honest_manual]
+
+    @property
+    def marked_manual(self) -> List[SelfDogfoodRow]:
+        return [r for r in self.rows if r.marked_manual]
+
+    @property
+    def gated(self) -> List[SelfDogfoodRow]:
+        return [r for r in self.rows if not r.gateless]
+
+    @property
+    def dead_gates(self) -> List[SelfDogfoodRow]:
+        """An ADOPTED gate that does not resolve to a runnable command — adoption that attests nothing."""
+        return [r for r in self.rows if r.gate_state == "dead-structural"]
+
+    @property
+    def adoption_rate(self) -> float:
+        """FR-2's moving number: gated / mechanically-attestable. 1.0 when nothing is mechanical (there is
+        no gap to close), so an empty corpus reads clean rather than divided-by-zero."""
+        mech = self.mechanical
+        return round(len(self.mechanical_with_gate) / len(mech), 4) if mech else 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "corpus": self.corpus,
+            "docs": self.docs,
+            "frs": len(self.rows),
+            "mechanical": len(self.mechanical),
+            "mechanical_with_gate": len(self.mechanical_with_gate),
+            "mechanical_gateless": [r.fr for r in self.mechanical_gateless],
+            "honest_manual": len(self.honest_manual),
+            "marked_manual": len(self.marked_manual),
+            "dead_gates": [r.fr for r in self.dead_gates],
+            "adoption_rate": self.adoption_rate,
+            "rows": [r.to_dict() for r in self.rows],
+        }
+
+
+@dataclass(frozen=True)
+class _GateProbe:
+    """The minimal duck-typed carrier ``_gate_liveness`` reads (``verify_gate``) — so the self-gate reuses
+    REQ-22's resolver verbatim without paying for a full ``nodes_from_requirements`` projection (whose git
+    evidence resolution costs ~1s/doc; the self-gate must stay cheap enough to run in the delivery loop)."""
+
+    verify_gate: str
+
+
+def classify_corpus_verifies(spec_dir) -> SelfDogfoodReport:
+    """REQ-27 FR-1/FR-3 — split every corpus FR's verify into mechanically-attestable vs legitimately-manual.
+
+    Reuse, not a new checker (NR-3): the kind comes from ``verify_oracle.classify`` (the ONE classifier —
+    the same one ``_gate_liveness`` resolves gates with) and the gate's liveness from REQ-22's
+    ``_gate_liveness``. Read-only; a doc that can't be read or parsed is skipped, never fatal.
+    """
+    from .verify_oracle import KIND_COMMAND, classify
+
+    spec_dir = Path(spec_dir)
+    docs = sorted(
+        p for p in spec_dir.glob("REQ-*.md") if not _is_generated_projection(p)
+    )
+    report = SelfDogfoodReport(corpus=str(spec_dir), docs=[p.name for p in docs])
+    for p in docs:
+        try:
+            descriptors = classify(p)
+            frs = parse_fr_lines(p.read_text(encoding="utf-8"))
+        except Exception:  # pragma: no cover - one bad doc never aborts the sweep (govern's convention)
+            continue
+        by_id = {str(fr.get("id", "")): fr for fr in frs}
+        for d in descriptors:
+            fr = by_id.get(d.fr_id, {})
+            gate = str(fr.get("gate") or "").strip()
+            manual = str(fr.get("manual") or "").strip()
+            report.rows.append(
+                SelfDogfoodRow(
+                    doc=p.name,
+                    fr=d.fr_id,
+                    kind=d.kind,
+                    mechanical=(d.kind == KIND_COMMAND and not manual),
+                    gate=gate,
+                    gate_state=_gate_liveness(_GateProbe(gate))[0],
+                    manual_marker=manual,
+                )
+            )
+    return report
+
+
+def check_self_dogfood_verify_gates(spec_dir) -> List[Finding]:
+    """REQ-27 FR-4/FR-5 — the standing self-liveness gate over our OWN requirements corpus.
+
+    Emits, for a corpus: one adoption headline, one finding per mechanically-attestable-but-GATELESS FR
+    (the real gap — routed to a human triage by :func:`lessons_from_self_dogfood`), one per ADOPTED gate
+    that doesn't resolve, and one per ``command``-shaped verify an author overrode ``Manual:`` (visible,
+    not silent). Deliberately NOT a sixth check in ``govern_corpus``'s fixed battery (REQ-06 NR-6): it is
+    called from the Spec Delivery Loop (``--self-dogfood``) or directly.
+
+    EVERY finding is ``_SEVERITY_ADVISORY`` (NR-2) — the self-gate reports and routes; it never fails the
+    pipeline on the existing backlog. That includes a dead adopted gate, which the REQ-22 corpus check
+    ships as a GAP: here the corpus is the *subject*, and a subject that can't block is the whole point.
+    """
+    report = classify_corpus_verifies(spec_dir)
+    corpus_name = Path(report.corpus).name or report.corpus
+    findings: List[Finding] = [
+        Finding(
+            "FR-4",
+            _SEVERITY_ADVISORY,
+            corpus_name,
+            f"{corpus_name}: verify-gate adoption {len(report.mechanical_with_gate)}/"
+            f"{len(report.mechanical)} mechanically-attestable FRs ({report.adoption_rate}) — "
+            f"{len(report.mechanical_gateless)} mechanical-but-gateless (the real gap), "
+            f"{len(report.honest_manual)} honest-manual of {len(report.rows)} FRs "
+            f"({len(report.marked_manual)} explicitly marked). Advisory: this gate never blocks.",
+            ref=_SELF_DOGFOOD_ADOPTION,
+        )
+    ]
+    for r in report.mechanical_gateless:
+        findings.append(
+            Finding(
+                "FR-2",
+                _SEVERITY_ADVISORY,
+                r.doc,
+                f"{r.doc}: {r.fr} claims a MECHANICAL verify (a runnable `startd8 …` span) but carries no "
+                f"`Gate:` — it reads verified while nothing attests it. Triage: adopt a `Gate:` naming the "
+                f"check the verify already names, or mark it `Manual:` if a human is the real checker.",
+                fr=r.fr,
+                ref=_SELF_DOGFOOD_GAP,
+            )
+        )
+    for r in report.dead_gates:
+        findings.append(
+            Finding(
+                "FR-2",
+                _SEVERITY_ADVISORY,
+                r.doc,
+                f"{r.doc}: {r.fr} adopted a `Gate:` {r.gate!r} that does NOT resolve to a runnable command "
+                f"— adoption that attests nothing (the failure in reverse). Repair the handle or mark the "
+                f"verify `Manual:`.",
+                fr=r.fr,
+                ref=_SELF_DOGFOOD_DEAD,
+            )
+        )
+    for r in report.rows:
+        if r.kind == "command" and r.marked_manual:
+            findings.append(
+                Finding(
+                    "FR-3",
+                    _SEVERITY_ADVISORY,
+                    r.doc,
+                    f"{r.doc}: {r.fr} names a runnable span yet is explicitly `Manual:` "
+                    f"({r.manual_marker!r}) — the override is honoured and counted honest-manual, but it is "
+                    f"reported so a manual marker can never quietly absorb a mechanical claim.",
+                    fr=r.fr,
+                    ref=_SELF_DOGFOOD_OVERRIDE,
+                )
+            )
+    return findings
+
+
+def lessons_from_self_dogfood(findings, *, confidence=None) -> List["Any"]:
+    """REQ-27 FR-5 — route each mechanical-but-gateless FR to a human triage decision as a ``proposed``
+    retrospective ``Lesson`` (REQ-20, propose-don't-dispose): adopt-a-gate or mark-it-manual. Filters on the
+    finding's ``ref`` (not its severity) because the self-gate is advisory by construction (NR-2) — the
+    adoption headline, the dead-gate and the manual-override notes are reports, not proposals."""
+    from .sources_retrospective import build_lesson_from_mechanical_gateless
+
+    return [
+        build_lesson_from_mechanical_gateless(f, confidence=confidence)
+        for f in findings
+        if str(f.ref) == _SELF_DOGFOOD_GAP
+    ]
+
+
+def render_self_dogfood_text(report: SelfDogfoodReport) -> str:
+    """REQ-27 FR-4 — the human-readable self-dogfood report: the adoption rate, the real gap (named FRs),
+    and the honest-manual count, so "N% dead" is never printed as one misleading number again."""
+    L: List[str] = [
+        f"=== self-dogfood verify-gate adoption — {len(report.rows)} FRs across "
+        f"{len(report.docs)} docs ===",
+        f"corpus: {report.corpus}",
+        "",
+        f"  mechanically-attestable : {len(report.mechanical):4}  "
+        f"(gated {len(report.mechanical_with_gate)}, gateless {len(report.mechanical_gateless)})",
+        f"  honest-manual           : {len(report.honest_manual):4}  "
+        f"(explicitly marked {len(report.marked_manual)})",
+        f"  verify.gate adoption    : {report.adoption_rate}",
+        "",
+    ]
+    if report.mechanical_gateless:
+        L.append(f"MECHANICAL-BUT-GATELESS ({len(report.mechanical_gateless)}) — adopt a gate or mark manual:")
+        for r in report.mechanical_gateless:
+            L.append(f"  - {r.doc}  {r.fr}")
+    else:
+        L.append("no mechanical-but-gateless FR — every runnable claim carries a gate.")
+    if report.dead_gates:
+        L.append(f"DEAD ADOPTED GATES ({len(report.dead_gates)}) — present but attesting nothing:")
+        for r in report.dead_gates:
+            L.append(f"  - {r.doc}  {r.fr}  {r.gate}")
+    L.append("")
+    L.append("-> advisory only: the self-gate reports + routes to a human triage; it never blocks.")
+    return "\n".join(L)
+
+
 def check_lesson_grounding(nodes, doc: str = "") -> List[Finding]:
     """REQ-20 FR-2 — a Lesson (``category=="lesson"``) that is not grounded (no ``derived-from`` edge or
     no ``lives`` evidence citing its outcome) is an **ungrounded belief** (cruft, invariant 4) — a named

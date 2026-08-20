@@ -90,6 +90,36 @@ def build_lesson_from_liveness_gap(finding, *, confidence=None) -> Node:
     )
 
 
+def build_lesson_from_mechanical_gateless(finding, *, confidence=None) -> Node:
+    """REQ-27 FR-5 — route a mechanically-attestable-but-GATELESS FR (its verify names a runnable check
+    but carries no ``Gate:``) to a human TRIAGE decision: adopt a gate, or mark the verify ``Manual:``.
+    Same propose-don't-dispose structure as :func:`build_lesson_from_liveness_gap`, one polarity earlier —
+    that one fires on a gate that went dead, this one on a claim that never had a gate at all. Advisory by
+    construction: the Lesson is ``proposed``, so it neither blocks the build nor passes as a silent green."""
+    req_key = (getattr(finding, "fr", "") or getattr(finding, "check", "")).strip() or "unknown"
+    outcome_key = f"self-dogfood:{req_key}"
+    return Node(
+        key=f"lesson:{req_key}",
+        does=(f"Mechanical-but-gateless verify on {req_key!r}: it claims a runnable check yet carries no "
+              f"gate — propose a triage: adopt a `Gate:` for that check, or mark the verify `Manual:`."),
+        category=LESSON_CATEGORY,
+        confidence=confidence,
+        lives=(NodeEvidence(type="link", ref=outcome_key, note="self-dogfood mechanical-gateless outcome"),),
+        derivation=(
+            DerivationEdge(from_key=outcome_key, relation=EdgeRelation.DERIVED_FROM),
+            DerivationEdge(from_key=req_key, relation=EdgeRelation.REVISES),
+        ),
+        attributes={
+            "kind": "lesson",
+            "status": LessonStatus.PROPOSED,
+            "outcome": getattr(finding, "message", ""),
+            "proposes": (f"triage {req_key}: adopt a `Gate:` binding the check its verify names, OR mark it "
+                         f"`Manual:` with the reason a human is the real checker (human sign-off required)"),
+            "section_order": "90",
+        },
+    )
+
+
 def build_lesson_from_description_clarification(
     req_key: str, *, path: str, before: str, after: str, confidence=None, outcome: str = "",
 ) -> Node:

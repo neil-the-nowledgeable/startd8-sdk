@@ -149,9 +149,11 @@ def parse_was_aliases(rest: str) -> Tuple[str, Tuple[str, ...]]:
 
 # REQ-22 FR-1: the OPTIONAL runnable gate handle beside the prose Verify — a command / test id / named
 # fitness function. A plain field (no dispatch framework, NR-4); absent → verify is prose-only.
-_GATE = re.compile(
-    r"(?:\*\*)?\bGate:(?:\*\*)?\s*(?P<g>.+?)(?:\.(?=\s|$)|$)", re.IGNORECASE
-)
+# Case-SENSITIVE (REQ-27): the det-req labels are capitalised, and a case-insensitive match invents a
+# gate out of ordinary prose — the corpus's own `REQ-04` FR-6 ("the top acceptance gate: if it fails,
+# …") parsed as a present-but-dead gate, i.e. a false-mechanical read, which is precisely the integrity
+# failure the self-dogfood gate exists to prevent. An authored `Gate:` is unaffected.
+_GATE = re.compile(r"(?:\*\*)?\bGate:(?:\*\*)?\s*(?P<g>.+?)(?:\.(?=\s|$)|$)")
 
 
 def parse_gate(rest: str) -> Tuple[str, str]:
@@ -162,6 +164,31 @@ def parse_gate(rest: str) -> Tuple[str, str]:
     gate = m.group("g").strip().rstrip(".")
     cleaned = (rest[: m.start()] + rest[m.end() :]).strip()
     return cleaned, gate
+
+
+# REQ-27 FR-3: the OPTIONAL explicit MANUAL marker beside the prose Verify — the honest counterpart of
+# `Gate:`. A verify that is legitimately human-checked says so, so it is counted as honest-manual rather
+# than as a mechanical gap; absent → the verify's kind is whatever `verify_oracle` classifies it as.
+# Same family as `Gate:` / `Was:` / `Name:` (a plain field, extracted before the Lives/Verify split so an
+# un-extracted label can't be swallowed into a Lives ref or into the Verify prose).
+# Case-SENSITIVE for the same reason as `_GATE` above — "manual:" is common prose ("Optional manual:
+# compare a re-run …"), and a marker invented from prose is a false honest-manual, the mirror failure.
+_MANUAL = re.compile(r"(?:\*\*)?\bManual:(?:\*\*)?\s*(?P<m>.+?)(?:\.(?=\s|$)|$)")
+
+
+def parse_manual(rest: str) -> Tuple[str, str]:
+    """Pull an optional ``Manual: <why a human checks this>`` out of an FR rest (REQ-27 FR-3).
+
+    Returns ``(cleaned_rest, rationale)``; ``rationale`` is ``""`` when unmarked. Presence — not the
+    wording — is the marker, but the rationale is retained as the human-readable residue (a marker that
+    can't say *why* is an assertion of manual-ness with no evidence, the failure this REQ exists to fix).
+    """
+    m = _MANUAL.search(rest)
+    if not m:
+        return rest, ""
+    rationale = m.group("m").strip().rstrip(".")
+    cleaned = (rest[: m.start()] + rest[m.end() :]).strip()
+    return cleaned, rationale
 
 
 def split_fr_fields(
@@ -256,6 +283,10 @@ def parse_fr_lines(text: str) -> List[Dict[str, Any]]:
         if not m:
             continue
         fid, title, rest = m.group(1), m.group(2).strip(), m.group(3).strip()
+        # REQ-27 FR-3: extract `Manual:` HERE rather than inside `split_fr_fields` — that helper's
+        # positional return tuple is a published shape (callers unpack it), so the marker rides the FR
+        # dict instead of widening it. Must run before the split, like the other plain-field labels.
+        rest, manual = parse_manual(rest)
         (
             behavior,
             touches,
@@ -276,6 +307,7 @@ def parse_fr_lines(text: str) -> List[Dict[str, Any]]:
             "touches": touches,
             "verify": verify,
             "gate": gate,
+            "manual": manual,
             "serves": serves,
             "lives": lives,
             "_verify_ann": verify_ann,
@@ -309,6 +341,7 @@ def _frs_from_kit_doc(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
             "touches": list(raw.get("touches") or []),
             "verify": str(raw.get("verify") or ""),
             "gate": str(raw.get("gate") or ""),
+            "manual": str(raw.get("manual") or ""),
             "serves": list(raw.get("serves") or []),
             "lives": list(raw.get("lives") or []),
             "_verify_ann": raw.get("_verify_ann"),
