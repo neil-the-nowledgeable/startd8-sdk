@@ -1128,6 +1128,7 @@ def check_liveness_layer(
     repo_root=None,
     changed_provenance_keys=(),
     judgment_rungs=(),
+    runtime_emission=None,
 ) -> List[Finding]:
     """REQ-23 FR-5 + REQ-25 FR-7 — the single ``liveness`` govern layer: run every present-but-dead cell
     (REQ-22 verify-liveness + REQ-23 target-unmeasured/served-by-a-dead-FR + REQ-25 mitigation-inert/
@@ -1136,7 +1137,12 @@ def check_liveness_layer(
     judgment-rungs are Tier-2 (``judgment_rungs``) — parked by default, executing nothing until a labeled
     fixture set un-parks them (FR-4), and even then emitting candidates, never GAPs (FR-5). A clean corpus
     with the default (no security_mitigation / no-import wont / no changed provenance / no rungs) → the new
-    cells add nothing (byte-identical, FR-8)."""
+    cells add nothing (byte-identical, FR-8).
+
+    REQ-28 adds the DEEPEST cell above the static ones: ``runtime_emission`` (a
+    ``runtime_grounding.RuntimeEmission`` observation of the territory) surfaces a declared feature that
+    emits no live signal. It is strictly opt-in — absent, the layer is byte-identical, so the fixed REQ-06
+    battery never gains a runtime dependency (charter NR-6)."""
     layer: List[Finding] = [
         Finding(
             f.check, f.severity, f.doc, f.message, f.fr, ref="liveness:verify-liveness"
@@ -1152,6 +1158,14 @@ def check_liveness_layer(
     # REQ-25 Tier-2 judgment-rungs (parked-by-default; candidates, never GAPs)
     for rung in judgment_rungs or ():
         layer += run_judgment_rung(rung, doc=doc)
+    # REQ-28 — the RUNTIME cell (opt-in): the territory's answer to "does the declared feature emit?".
+    # Imported lazily so the layer's default path carries no runtime-o11y dependency at all.
+    if runtime_emission is not None:
+        from .runtime_grounding import check_runtime_verify_liveness
+
+        layer += check_runtime_verify_liveness(
+            list(fr_nodes or ()) + list(outcome_nodes or ()), runtime_emission, doc
+        )
     return layer
 
 

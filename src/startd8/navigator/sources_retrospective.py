@@ -90,6 +90,36 @@ def build_lesson_from_liveness_gap(finding, *, confidence=None) -> Node:
     )
 
 
+def build_lesson_from_runtime_emission_gap(finding, *, confidence=None) -> Node:
+    """REQ-28 FR-5 — route a RUNTIME emission gap (a declared feature whose live signal the territory does
+    not carry) to a grounded, human-gated Lesson. Same propose-don't-dispose structure as
+    :func:`build_lesson_from_liveness_gap`, one altitude deeper: that one fires when an authoring-time gate
+    went dead, this one when the *deployed* feature emits nothing. Its proposal names the two human routes
+    REQ-28 offers — generate the instrumentation that makes it emit, or revise the claim."""
+    req_key = (getattr(finding, "fr", "") or getattr(finding, "check", "")).strip() or "unknown"
+    outcome_key = f"runtime-emission:{req_key}"
+    return Node(
+        key=f"lesson:{req_key}",
+        does=(f"Runtime emission gap on {req_key!r}: it binds a live signal the territory does not emit "
+              f"(runtime present-but-dead) — propose instrumenting the feature or revising the claim."),
+        category=LESSON_CATEGORY,
+        confidence=confidence,
+        lives=(NodeEvidence(type="link", ref=outcome_key, note="runtime emission gap outcome"),),
+        derivation=(
+            DerivationEdge(from_key=outcome_key, relation=EdgeRelation.DERIVED_FROM),
+            DerivationEdge(from_key=req_key, relation=EdgeRelation.REVISES),
+        ),
+        attributes={
+            "kind": "lesson",
+            "status": LessonStatus.PROPOSED,
+            "outcome": getattr(finding, "message", ""),
+            "proposes": (f"ground {req_key} in the territory: generate the instrumentation that makes its "
+                         f"signal emit, or revise the claim (human sign-off required — nothing is applied)"),
+            "section_order": "90",
+        },
+    )
+
+
 def build_lesson_from_mechanical_gateless(finding, *, confidence=None) -> Node:
     """REQ-27 FR-5 — route a mechanically-attestable-but-GATELESS FR (its verify names a runnable check
     but carries no ``Gate:``) to a human TRIAGE decision: adopt a gate, or mark the verify ``Manual:``.

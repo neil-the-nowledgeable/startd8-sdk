@@ -830,12 +830,20 @@ def govern(
         help="REQ-19 FR-6: an emitted realization-provenance JSON artifact; when given, also reports "
         "planned-vs-realized determinism regressions (planned deterministic but measured llm).",
     ),
+    cost_telemetry: Optional[Path] = typer.Option(
+        None,
+        "--cost-telemetry",
+        help="REQ-28 FR-2/FR-3: ground the measured regime in AI-o11y cost observations instead of a "
+        "static provenance file ([{file, cost, model?, confidence?}]). An observed LLM cost measures "
+        "`llm`; an ABSENT cost grounds nothing (never a false `deterministic`).",
+    ),
 ) -> None:
     """Govern a directory of requirement docs against the corpus contract (REQ-06, read-only).
 
     Runs the fixed check battery (name-block presence · single-line-FR · dangling cross-ref ·
     coverage · index-freshness) and emits a pass/fail governance report. With ``--realization-provenance``
-    it also surfaces determinism regressions (REQ-19 FR-6). Read-only: never writes into the corpus.
+    (a static artifact) or ``--cost-telemetry`` (live AI o11y, REQ-28) it also surfaces determinism
+    regressions (REQ-19 FR-6). Read-only: never writes into the corpus.
     Exit 0 = clean · 1 = drift (any fail-severity finding) · 2 = operational error.
     """
     directory = Path(directory)
@@ -848,6 +856,12 @@ def govern(
             f"[red]error:[/red] unknown --format {fmt!r} (expected text|json)"
         )
         raise typer.Exit(_EXIT_OPERATIONAL)
+    if realization_provenance is not None and cost_telemetry is not None:
+        console.print(
+            "[red]error:[/red] pass --realization-provenance OR --cost-telemetry, not both "
+            "(two measured sources would silently race for the same regime)"
+        )
+        raise typer.Exit(_EXIT_OPERATIONAL)
     try:
         _prov = None
         if realization_provenance is not None:
@@ -855,6 +869,14 @@ def govern(
             from .realization_provenance import load_provenance
 
             _prov = MeasuredProvenanceSource(load_provenance(realization_provenance))
+        elif cost_telemetry is not None:
+            from .runtime_grounding import cost_telemetry_to_provenance, load_cost_telemetry
+
+            try:
+                _prov = cost_telemetry_to_provenance(load_cost_telemetry(cost_telemetry))
+            except ValueError as exc:  # malformed telemetry fails loud as an operational error
+                console.print(f"[red]error:[/red] {cost_telemetry}: {exc}")
+                raise typer.Exit(_EXIT_OPERATIONAL)
         report = govern_corpus(directory, realization_provenance=_prov)
         rendered = (
             render_govern_json(report) if fmt == "json" else render_govern_text(report)
@@ -884,6 +906,174 @@ def govern(
             )
 
     raise typer.Exit(_EXIT_DRIFT if not report.clean else _EXIT_OK)
+
+
+@navigator_app.command("runtime-o11y")
+def runtime_o11y(
+    directory: Path = typer.Option(
+        ..., "--dir", help="Directory of requirement docs (REQ-*.md) to ground in the territory"
+    ),
+    parity: bool = typer.Option(
+        False,
+        "--parity",
+        help="REQ-28 FR-1: run the live `observability.parity` declared-vs-emitted check (dead-SLI "
+        "detector) and read its result as the runtime observation",
+    ),
+    compare_live_json: Optional[Path] = typer.Option(
+        None,
+        "--compare-live-json",
+        help="REQ-28 FR-1: a persisted `compare_live` report JSON (its `fail` verdicts are dead SLIs; "
+        "status `unknown` means the observation itself failed → unobserved, never a fail)",
+    ),
+    cost_telemetry: Optional[Path] = typer.Option(
+        None,
+        "--cost-telemetry",
+        help="REQ-28 FR-2/FR-3: AI-o11y cost observations JSON ([{file, cost, model?, confidence?}]) — "
+        "grounds the MEASURED realization regime and any planned-$0-but-cost-observed regression",
+    ),
+    propose: bool = typer.Option(
+        False,
+        "--propose",
+        help="REQ-28 FR-5: also emit the PROPOSED fix per runtime gap (a REQ-stub payload, plus an "
+        "instrumentation patch when a grounded gap is supplied). Nothing is ever applied",
+    ),
+    sarif_out: Optional[Path] = typer.Option(
+        None, "--sarif-out", help="write the findings as SARIF 2.1.0 (the shared findings sink)"
+    ),
+    lessons_out: Optional[Path] = typer.Option(
+        None, "--lessons-out", help="write the human-gated `proposed` Lessons the facts route to"
+    ),
+    fmt: str = typer.Option("text", "--format", help="Report format: text | json"),
+) -> None:
+    """Ground a corpus in the TERRITORY (REQ-28) — advisory, opt-in, never blocking.
+
+    Feature o11y (`--parity` / `--compare-live-json`) surfaces a declared feature that emits no live
+    signal as the deepest liveness cell; AI o11y (`--cost-telemetry`) grounds the measured realization
+    regime and the planned-vs-realized determinism regression. An *absent* observation is reported as
+    unobserved, never as a real failing zero. Exit 0 always (advisory; 2 = operational error) — a runtime
+    gap routes to a human decision, it does not fail the build.
+    """
+    from .runtime_grounding import (
+        CostObservation,
+        RuntimeEmission,
+        RuntimeFixProposal,
+        ground_corpus_in_runtime,
+        lessons_from_runtime_grounding,
+        load_cost_telemetry,
+        merge_runtime_emissions,
+        propose_instrumentation_for_gap,
+        runtime_emission_from_live_comparison,
+        runtime_emission_from_parity,
+        runtime_findings_to_sarif,
+    )
+    from .sources_requirements import outcome_nodes_from_requirements
+
+    directory = Path(directory)
+    if not directory.is_dir():
+        console.print(f"[red]error:[/red] --dir {directory} is not a directory")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+    fmt = fmt.strip().lower()
+    if fmt not in ("text", "json"):
+        console.print(f"[red]error:[/red] unknown --format {fmt!r} (expected text|json)")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+
+    try:
+        observations: List[CostObservation] = (
+            load_cost_telemetry(cost_telemetry) if cost_telemetry is not None else []
+        )
+        from_parity = None
+        if parity:
+            from ..observability.parity import run_parity
+
+            from_parity = runtime_emission_from_parity(run_parity())
+        from_live = None
+        if compare_live_json is not None:
+            from_live = runtime_emission_from_live_comparison(
+                json.loads(Path(compare_live_json).read_text(encoding="utf-8"))
+            )
+        emission: Optional[RuntimeEmission] = merge_runtime_emissions(from_parity, from_live)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+
+    findings = []
+    for p in sorted(directory.glob("REQ-*.md")):
+        try:
+            nodes = list(nodes_from_requirements(p)) + list(outcome_nodes_from_requirements(p))
+        except (OSError, ValueError):
+            continue  # an unparseable doc never aborts the sweep (the corpus-sweep convention)
+        findings += ground_corpus_in_runtime(
+            nodes, emission=emission, observations=observations, doc=p.name
+        )
+
+    lessons = lessons_from_runtime_grounding(findings)
+    proposals: List[RuntimeFixProposal] = (
+        [propose_instrumentation_for_gap(f) for f in findings if f.severity == "fail"]
+        if propose
+        else []
+    )
+
+    try:
+        if sarif_out is not None:
+            sarif_out.parent.mkdir(parents=True, exist_ok=True)
+            sarif_out.write_text(
+                json.dumps(
+                    runtime_findings_to_sarif(findings, corpus=directory.name), indent=2, sort_keys=True
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        if lessons_out is not None:
+            lessons_out.parent.mkdir(parents=True, exist_ok=True)
+            lessons_out.write_text(
+                json.dumps(
+                    {"source": "runtime-grounding", "lessons": nodes_to_json(lessons)},
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+    except OSError as exc:
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_OPERATIONAL)
+
+    if fmt == "json":
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "corpus": directory.name,
+                    "observed": None if emission is None else emission.observed,
+                    "source": "" if emission is None else emission.source,
+                    "findings": [f.to_dict() for f in findings],
+                    "lessons": nodes_to_json(lessons),
+                    "proposals": [p.to_dict() for p in proposals],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        raise typer.Exit(_EXIT_OK)
+
+    if emission is None and not observations:
+        console.print(
+            "no runtime observation supplied (--parity / --compare-live-json / --cost-telemetry) — "
+            "nothing to ground; the corpus report is unchanged."
+        )
+        raise typer.Exit(_EXIT_OK)
+    gaps = [f for f in findings if f.severity == "fail"]
+    unobserved = [f for f in findings if f.severity == "advisory"]
+    console.print(
+        f"runtime grounding — {len(gaps)} gap(s) · {len(unobserved)} unobserved (absent, NOT a real 0) · "
+        f"{len(lessons)} proposed lesson(s)"
+    )
+    for f in findings:
+        tag = "GAP" if f.severity == "fail" else "unobserved"
+        console.print(f"  [{tag}] {f.ref} — {f.message}")
+    for prop in proposals:
+        console.print(f"  [propose] {prop.subject}: {prop.note} (applied={prop.applied})")
+    raise typer.Exit(_EXIT_OK)
 
 
 @navigator_app.command("retrospective")
