@@ -131,7 +131,7 @@ convention (no integer+content-type alone).
 - **push the det-doc-kit arc to `origin`** — it's on local `main` only (through `72fdd740`). `[XS, human call]`
 
 **cross-surface (2026-08-19):**
-- **REQ-cross-surface H1 — cockpit adopter** — **AUTHORED** (`REQ-cockpit-surface-links-adopter.md` + `PLAN-cockpit-surface-links-adopter.md`). Wires cockpit readiness tiles to consume `surface_links.drill` and render `resolve_surface_link_href`-based links to the navig8r `#<key>` route. Web + Grafana v2 in scope; terminal deferred (no per-field rows). `[XS–S implement]`
+- **REQ-cross-surface H1 — cockpit adopter** — **SHIPPED** (`681a14c0`). Web + Grafana v2 field rows drill via `portal_spec.drill_href` → `resolve_surface_link_href`; FR-3 terminal deferred. `[done]`
 
 **numbered REQ-01..25 arc (still-open per the rows' own notes):**
 - **Whole-liveness-layer `govern` wiring** (REQ-22/23/25 shared) — `check_liveness_layer`'s cells aren't in `govern_corpus`'s default sweep. **`Gate:` unblocked by REQ-27** (9/9 mechanical gated); still blocked on corpus **`Signal:`** adoption (target-unmeasured / served-by-dead cells). `[M, blocked-on: corpus Signal: adoption]`
