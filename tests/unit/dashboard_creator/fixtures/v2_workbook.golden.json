@@ -345,7 +345,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "| Field | State | Value |\n|---|---|---|\n| `/kpi` | \u2705 confirmed | 95% |",
+                "content": "| Field | State | Value |\n|---|---|---|\n| `/kpi` [\u2192 navig8r](#/kpi) | \u2705 confirmed | 95% |",
                 "mode": "markdown"
               }
             }
@@ -375,7 +375,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "| Field | State | Value |\n|---|---|---|\n| `/goal` | \ud83d\udee1\ufe0f safe default set for you | _\u2014_ |",
+                "content": "| Field | State | Value |\n|---|---|---|\n| `/goal` [\u2192 navig8r](#/goal) | \ud83d\udee1\ufe0f safe default set for you | _\u2014_ |",
                 "mode": "markdown"
               }
             }
@@ -405,7 +405,7 @@
                 "overrides": []
               },
               "options": {
-                "content": "| Field | State | Value |\n|---|---|---|\n| `/lang` | \u2705 confirmed | python |",
+                "content": "| Field | State | Value |\n|---|---|---|\n| `/lang` [\u2192 navig8r](#/lang) | \u2705 confirmed | python |",
                 "mode": "markdown"
               }
             }

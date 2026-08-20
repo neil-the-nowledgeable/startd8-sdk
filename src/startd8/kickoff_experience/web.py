@@ -289,7 +289,11 @@ def _concierge_cta(concierge_view) -> str:
 
 
 def _render_overview(state: KickoffState, readiness, action, config, stylesheet: str,
-                     concierge_view=None) -> str:
+                     concierge_view=None, surface_links=None) -> str:
+    # H1 (FR-1): the drill binding declared on the View Definition, read-only. ``surface_links`` is a
+    # test/caller seam for an unbound definition; ``None`` reads the base definition's bindings.
+    from .portal_spec import drill_href
+
     counts = state.attention_counts
     pct = int(round((readiness.score or 0.0) * 100)) if readiness else 0
     parts = [
@@ -316,8 +320,13 @@ def _render_overview(state: KickoffState, readiness, action, config, stylesheet:
     for f in state.fields:
         glyph, cls = _BADGE.get(f.attention, ("?", ""))
         detail = f.value if f.value is not None else (f.reason or "")
+        href = drill_href(f.value_path, surface_links)
+        code = f"<code>{_esc(f.value_path)}</code>"
+        # Empty-default (FR-5): an unbound definition leaves the cell exactly as it was.
+        if href:
+            code = f"<a href='{_esc(href)}' class='drill-link'>{code}</a>"
         parts.append(
-            f"<tr><td class='{cls}'>{glyph}</td><td><code>{_esc(f.value_path)}</code></td>"
+            f"<tr><td class='{cls}'>{glyph}</td><td>{code}</td>"
             f"<td>{_esc(f.attention)}</td><td>{_esc(detail)}</td></tr>"
         )
     parts.append("</tbody></table>")

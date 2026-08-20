@@ -11,7 +11,7 @@ domain↔manifest maps, and the markdown value snippet. No jsonnet, no board bui
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 # --- UID / slug (FR-5) -----------------------------------------------------------------------------
 WORKBOOK_TAG = "workbook"  # FR-11 contract: every Workbook carries this tag (the index dashlist filters on it)
@@ -52,6 +52,29 @@ def attention_colors() -> Dict[str, str]:
     )
 
     return cockpit_attention_colors(BASE_NAVIG8R_DEFINITION.node_state)
+
+
+def drill_href(key: str, surface_links: Optional[Mapping[str, Any]] = None) -> str:
+    """H1: the cockpit→navig8r drill href for one field ``key``, or ``""`` when unbound.
+
+    The one home every cockpit surface reads the drill link through, so no renderer builds a URL of
+    its own (FR-1c). The template lives in the View Definition's ``surface_links.drill`` and is
+    substituted by the shipped ``resolve_surface_link_href`` — today ``"#{key}"``, used verbatim
+    (the navig8r's own ``#<key>`` route; a cross-page base path is a later increment).
+
+    Lazy import keeps this module free of an import-time navigator cycle (same pattern as
+    :func:`attention_colors`). ``surface_links`` defaults to the base definition's; pass a mapping to
+    render against an unbound definition — an empty map or an hrefless ``drill`` yields ``""``, which
+    every caller treats as "no link" (the empty-default, FR-5).
+    """
+    from startd8.navigator.view_definition import (
+        BASE_NAVIG8R_DEFINITION,
+        resolve_surface_link_href,
+    )
+
+    links = BASE_NAVIG8R_DEFINITION.surface_links if surface_links is None else surface_links
+    return resolve_surface_link_href((links or {}).get("drill") or {}, key)
+
 
 # domain ↔ manifest maps (the cockpit orders domains canonically via _manifest_sort_key).
 _DOMAIN_MANIFEST: Dict[str, str] = {

@@ -25,7 +25,7 @@ Two knobs, realized as conditional rendering on rows:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ..concierge.audience import DEFAULT_AUDIENCE, KickoffAudience, coerce_audience
 from ..concierge.confirmation import _is_audience_default
@@ -53,6 +53,7 @@ from .portal_spec import (
     _manifest_sort_key,
     _MANIFEST_DOMAIN,
     _value_snippet,
+    drill_href,
     slugify_project,
 )
 
@@ -110,8 +111,17 @@ def _domain_title(manifest: str) -> str:
     return manifest.replace(".yaml", "")
 
 
-def _field_table(fields: List[Any], provenance: Dict[str, Any]) -> str:
-    """A markdown field table with the per-row attention glyph, or the 🛡️ override for a shielded field."""
+def _field_table(
+    fields: List[Any],
+    provenance: Dict[str, Any],
+    surface_links: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """A markdown field table with the per-row attention glyph, or the 🛡️ override for a shielded field.
+
+    H1 (FR-2): each row's field cell carries a ``[→ navig8r](#<key>)`` markdown link when the View
+    Definition's drill binding resolves an href. ``surface_links`` is the unbound-definition seam —
+    an empty map yields no link and the byte-identical pre-H1 row (FR-5).
+    """
 
     def _rank(f: Any) -> int:
         if _is_audience_default(provenance.get(f.value_path)):
@@ -125,7 +135,9 @@ def _field_table(fields: List[Any], provenance: Dict[str, Any]) -> str:
         else:
             emoji, label = _ATTENTION_DISPLAY.get(f.attention, ("", f.attention))
         value = _value_snippet(f.value) if f.value is not None else "_—_"
-        lines.append(f"| `{f.value_path}` | {emoji} {label} | {value} |")
+        href = drill_href(f.value_path, surface_links)
+        cell = f"`{f.value_path}`" + (f" [→ navig8r]({href})" if href else "")
+        lines.append(f"| {cell} | {emoji} {label} | {value} |")
     return "\n".join(lines)
 
 

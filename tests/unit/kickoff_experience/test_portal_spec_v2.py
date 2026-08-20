@@ -221,14 +221,19 @@ def test_status_tab_preserves_pre_refactor_field_content():
     # R1-S4 (content-preservation form): the M3 refactor proved wrap-not-rewrite via byte-identity;
     # Tier-1 legitimately ADDS an "At a glance" panel, so panel keys shift. What must still hold is
     # that every original intro/field-table panel's CONTENT survives verbatim (nothing was rewritten).
+    # H1 (REQ-cockpit-surface-links-adopter FR-2) legitimately APPENDS a ` [→ navig8r](#<key>)` drill
+    # link to each field cell, so the suffix is normalized away before the preservation comparison —
+    # the guard still catches a rewrite of the row itself.
     import json
+    import re
 
     pre = json.loads(_PRE_REFACTOR_GOLDEN.read_text(encoding="utf-8"))
     board = build_workbook_v2(
         _state(), "demo", audience=KickoffAudience.INTERMEDIATE, provenance=_PROV
     )
+    drill = re.compile(r" \[→ navig8r\]\(#[^)]*\)")
     new_contents = {
-        e["spec"]["vizConfig"]["spec"]["options"]["content"]
+        drill.sub("", e["spec"]["vizConfig"]["spec"]["options"]["content"])
         for e in board["spec"]["elements"].values()
         if e["spec"]["vizConfig"]["kind"] == "text"
     }
