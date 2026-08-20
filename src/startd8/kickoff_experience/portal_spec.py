@@ -28,6 +28,7 @@ def slugify_project(project: str) -> str:
 
 # canonical attention -> (emoji, short label). Attention is derived once in state.py; we never
 # re-derive it here (parity guarantee). Shared by the cockpit's field tables.
+# Glyphs stay local (FR-7); colors come from the View Definition via :func:`attention_colors` (EC-CS-8).
 _ATTENTION_DISPLAY: Dict[str, Tuple[str, str]] = {
     "ok": ("✅", "confirmed"),
     "review": ("🟡", "review — SDK-defaulted"),
@@ -36,6 +37,21 @@ _ATTENTION_DISPLAY: Dict[str, Tuple[str, str]] = {
 }
 # gaps first when listing a manifest's fields
 _ATTENTION_SORT: Dict[str, int] = {"blocked": 0, "review": 1, "backlog": 2, "ok": 3}
+
+
+def attention_colors() -> Dict[str, str]:
+    """EC-CS-8: attention → hex color from shared ``node_state.presentation.cockpit``.
+
+    Lazy import keeps this module free of an import-time navigator cycle. Glyphs in
+    ``_ATTENTION_DISPLAY`` stay unchanged; consumers that want paint call this (or the web badge CSS
+    which already does). Empty/missing color leaves fall back at the consumer (FR-7).
+    """
+    from startd8.navigator.view_definition import (
+        BASE_NAVIG8R_DEFINITION,
+        cockpit_attention_colors,
+    )
+
+    return cockpit_attention_colors(BASE_NAVIG8R_DEFINITION.node_state)
 
 # domain ↔ manifest maps (the cockpit orders domains canonically via _manifest_sort_key).
 _DOMAIN_MANIFEST: Dict[str, str] = {

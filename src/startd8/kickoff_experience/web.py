@@ -175,6 +175,33 @@ _BADGE = {
     "backlog": ("…", "badge-backlog"),
 }
 
+# Local CSS fallbacks when a cockpit leaf omits ``color`` (FR-7 empty-default).
+_BADGE_COLOR_FALLBACK = {
+    "ok": "var(--color-success)",
+    "review": "#b45309",
+    "blocked": "var(--color-danger)",
+    "backlog": "var(--color-muted)",
+}
+
+
+def _badge_extra_css() -> str:
+    """EC-CS-8: badge colors prefer shared ``presentation.cockpit.color``; else local fallbacks.
+
+    Glyphs in ``_BADGE`` stay unchanged — only the paint syncs with navig8r.
+    """
+    from .portal_spec import attention_colors
+
+    colors = attention_colors()
+    parts = []
+    for attention, (_glyph, cls) in _BADGE.items():
+        color = colors.get(attention) or _BADGE_COLOR_FALLBACK[attention]
+        parts.append(f".{cls}{{color:{color}}}")
+    parts.append(
+        ".meter{height:.6rem;background:var(--color-border);border-radius:4px;overflow:hidden}"
+        ".meter>span{display:block;height:100%;background:var(--color-primary)}"
+    )
+    return "".join(parts)
+
 
 def _esc(s: object) -> str:
     return (
@@ -234,12 +261,7 @@ def _render_templates(entries, posture: str, stylesheet: str) -> str:
 
 
 def _page(title: str, body: str, stylesheet: str) -> str:
-    extra = (
-        ".badge-ok{color:var(--color-success)}.badge-review{color:#b45309}"
-        ".badge-blocked{color:var(--color-danger)}.badge-backlog{color:var(--color-muted)}"
-        ".meter{height:.6rem;background:var(--color-border);border-radius:4px;overflow:hidden}"
-        ".meter>span{display:block;height:100%;background:var(--color-primary)}"
-    )
+    extra = _badge_extra_css()
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"

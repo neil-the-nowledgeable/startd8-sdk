@@ -269,6 +269,22 @@ def cockpit_statuses_from_node_state(node_state: Mapping[str, Any]) -> Dict[str,
     return out
 
 
+def cockpit_attention_colors(node_state: Mapping[str, Any]) -> Dict[str, str]:
+    """EC-CS-8: attention class → color from shared cockpit leaves.
+
+    Multiple canonical states may share one attention (``spec``/``awaiting`` → ``review``); the first
+    seen color wins. Leaves without a ``color`` are omitted so a consumer can fall back to its local
+    glyph CSS (FR-7 empty-default).
+    """
+    out: Dict[str, str] = {}
+    for leaf in cockpit_statuses_from_node_state(node_state).values():
+        att = leaf.get("attention")
+        color = leaf.get("color")
+        if isinstance(att, str) and isinstance(color, str) and color and att not in out:
+            out[att] = color
+    return out
+
+
 def resolve_surface_link_href(link: Mapping[str, Any], key: str) -> str:
     """EC-CS-4: substitute ``{key}`` in a surface-link ``href`` template.
 
