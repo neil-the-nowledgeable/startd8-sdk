@@ -491,6 +491,7 @@ def test_validate_flags_dangling_surface_links_via():
             "to_surface": "navig8r",
             "relation": "drill",
             "via": "fulview",
+            "href": "#{key}",
         }},
     )
     issues = validate_definitions({**DEFINITION_REGISTRY, "typo-via": typo})
@@ -524,6 +525,7 @@ def test_validate_flags_dropped_fullview_with_inherited_drill():
             "to_surface": "navig8r",
             "relation": "drill",
             "via": "fullview",
+            "href": "#{key}",
         }},
     )
     issues = validate_definitions({"thin-base": thin})
@@ -545,6 +547,37 @@ def test_validate_flags_malformed_link_shape_and_illegal_attention():
     issues = validate_definitions({"shapeless": shapeless})
     assert any("surface_links.drill missing" in i for i in issues)
     assert any("attention 'wat'" in i for i in issues)
+
+
+def test_validate_flags_drill_without_href_template():
+    """EC-CS-4: relation=drill requires a {key} href (rollup may omit)."""
+    no_href = ViewDefinition(
+        name="no-href",
+        regions={"bindings": {
+            "fullview": {"layer": "node", "scaffold": "#<key>", "order": 1},
+        }},
+        surface_links={"drill": {
+            "from_surface": "cockpit",
+            "to_surface": "navig8r",
+            "relation": "drill",
+            "via": "fullview",
+        }},
+    )
+    issues = validate_definitions({"no-href": no_href})
+    assert any("requires a non-empty href" in i for i in issues)
+
+
+def test_validate_flags_malformed_navig8r_leaf_ec_cs_9():
+    """EC-CS-9: projection skips a string leaf; --validate must fail closed."""
+    bad = ViewDefinition(
+        name="bad-leaf",
+        extends="base",
+        node_state={"states": {
+            "grounded": {"presentation": {"navig8r": "Grounded"}},
+        }},
+    )
+    issues = validate_definitions({**DEFINITION_REGISTRY, "bad-leaf": bad})
+    assert any("presentation.navig8r must be a mapping" in i for i in issues)
 
 
 def test_validate_skips_cross_surface_when_extends_is_broken():

@@ -11,6 +11,7 @@ from startd8.navigator.view_definition import (
     DEFINITION_REGISTRY,
     REQUIREMENTS_DEFINITION,
     resolve,
+    resolve_surface_link_href,
 )
 
 pytestmark = pytest.mark.unit
@@ -31,6 +32,15 @@ def test_fr4a_drill_binding_points_at_navig8r_via_fullview():
     assert drill["from_surface"] == "cockpit"
     assert drill["relation"] == "drill"
     assert drill["via"] == "fullview"
+    assert drill["href"] == "#{key}"
+
+
+def test_ec_cs_4_resolve_surface_link_href_substitutes_key():
+    drill = resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY).surface_links["drill"]
+    assert resolve_surface_link_href(drill, "REQ-01") == "#REQ-01"
+    rollup = resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY).surface_links["rollup"]
+    assert resolve_surface_link_href(rollup, "REQ-01") == ""
+    assert resolve_surface_link_href({}, "REQ-01") == ""
 
 
 def test_fr4b_drill_via_names_the_registered_fullview_region():

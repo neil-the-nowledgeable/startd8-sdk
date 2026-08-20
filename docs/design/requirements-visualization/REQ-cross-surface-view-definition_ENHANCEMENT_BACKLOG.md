@@ -48,10 +48,10 @@ crossovers (EC-CS-1, EC-CS-2, EC-CS-3, EC-CS-4) — CEP earned its keep (>0).
 | **EC-CS-2** | **Pin dual-write oracle** — when keys equal, each `REQUIREMENTS_DEFINITION.vocabulary.statuses[k]` must equal `node_state.states[k].presentation.navig8r` (the side `_status_specs` actually reads) | **XS** | fix | ✅ | CROSS(B1+C2) — **→ landed `6378f5ae`** (already built; see prep note below) |
 | **EC-CS-5** | **HOWTO: equal-keys opt-in + inherited `node_state`/`surface_links`** | **XS** | docs | ✅ | VARY(B6)+C6 — **→ landed `619c79be`** |
 | **EC-CS-6** | **CLI dump / `--from` pins inherited `node_state` + `surface_links`** | **XS** | wire-existing | ✅ | C3 — **→ landed `6378f5ae`** (same commit as EC-CS-2) |
-| **EC-CS-1** | **`validate_definitions` walks resolved `surface_links.via`** — `via` ∈ `regions.bindings` **or** the known primitive `serves`; typed shape `{from_surface, to_surface, relation, via}` with `relation ∈ {drill, rollup}`; cockpit `attention` ∈ `{ok, review, blocked, backlog}` without importing `kickoff_experience` | **S** | wire-existing | ✅ | CROSS(A3+B2+C1) — **→ landed this increment** |
-| **EC-CS-3** | **Public cockpit projector** (symmetric to `_navig8r_statuses_from_node_state`) — skip `kind: project`; **do not ship without a caller** (would mint a dormant) | **S** | wire-existing | ✅ | CROSS(A2+B4) — first brick of ledger H1, not the tile rebuild |
-| **EC-CS-4** | **Structured drill `href: "#{key}"` field** on `surface_links.drill` | **S** | wire-existing | ✅ | CROSS(A1+B3) — H1 first brick; `portal_spec.py` stays NR-7 |
-| **EC-CS-9** | **`--validate` fail-closed on malformed presentation leaves** — projection skip of a non-dict navig8r leaf stays (FR-7); `--validate` must not stay green. **Partial overlap:** EC-CS-1 already flags illegal cockpit `attention` values; this row is the remaining fail-closed on **non-dict navig8r leaves** (projection still skips). | **S** | fix | ✅ | C4 — pairs with EC-CS-1 |
+| **EC-CS-1** | **`validate_definitions` walks resolved `surface_links.via`** — `via` ∈ `regions.bindings` **or** the known primitive `serves`; typed shape `{from_surface, to_surface, relation, via}` with `relation ∈ {drill, rollup}`; cockpit `attention` ∈ `{ok, review, blocked, backlog}` without importing `kickoff_experience` | **S** | wire-existing | ✅ | CROSS(A3+B2+C1) — **→ landed `1c29387f`** |
+| **EC-CS-3** | **Public cockpit projector** (symmetric to `_navig8r_statuses_from_node_state`) — skip `kind: project`; non-test caller = `validate_definitions` attention walk | **S** | wire-existing | ✅ | CROSS(A2+B4) — **→ landed this increment** (`cockpit_statuses_from_node_state`) |
+| **EC-CS-4** | **Structured drill `href: "#{key}"` field** on `surface_links.drill` + `resolve_surface_link_href` | **S** | wire-existing | ✅ | CROSS(A1+B3) — **→ landed this increment** |
+| **EC-CS-9** | **`--validate` fail-closed on malformed presentation leaves** — projection skip of a non-dict navig8r leaf stays (FR-7); `--validate` must not stay green | **S** | fix | ✅ | C4 — **→ landed this increment** (pairs with EC-CS-1) |
 | **EC-CS-8** | **Shared cockpit colors** — opt-in: `_ATTENTION_DISPLAY` / `_BADGE` read `presentation.cockpit.color` | **S** | wire-existing | ✅ | A6 — touches `kickoff_experience/` (H1-adjacent; NR-7 until adopter) |
 | **EC-CS-7** | **FR-5 consumer: node_state → existing `_rollup` / activation** | **M** | wire-existing | ⚠️ cockpit-visible | A5 — sibling of ledger **H1**, not a substitute |
 | **H1** | **Cockpit adopter spec** — tiles read `surface_links` and link `#<key>` | **M** | author-spec | n/a | ledger (already named) — author via `/reflective-requirements` |
@@ -78,8 +78,8 @@ Re-grounded 2026-08-19 against local `main` before any new dual-write work:
   harvest-*generation* tense. Now cites `6378f5ae`.
 - Header still named the deleted `/private/tmp/wt-hth-cross-surface` worktree — replaced with landed SHAs.
 
-No remaining EC-CS-2 code to write. Next open S-tier row after EC-CS-1 is **EC-CS-3** (needs a
-non-test caller) or **EC-CS-4** / **EC-CS-9** (malformed navig8r leaf still fail-opens at `--validate`).
+No remaining EC-CS-2 code to write. **EC-CS-1 / EC-CS-3 / EC-CS-4 / EC-CS-9 landed.** Next open
+S-tier rows: **EC-CS-8** (cockpit colors — touches `kickoff_experience/`) or author **H1**.
 
 ## Absorbed seeds (not standalone rows)
 

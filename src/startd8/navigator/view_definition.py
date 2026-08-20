@@ -247,6 +247,40 @@ def _navig8r_statuses_from_node_state(node_state: Mapping[str, Any]) -> Dict[str
     return out
 
 
+def cockpit_statuses_from_node_state(node_state: Mapping[str, Any]) -> Dict[str, Any]:
+    """EC-CS-3: ``presentation.cockpit`` leaves keyed by canonical state id.
+
+    Symmetric to the private navig8r projector. Skips ``kind: "project"`` roll-ups (``activated``)
+    and empty/malformed leaves — the per-node readiness map H1 / Grafana / ``validate_definitions``
+    share. Does not import ``kickoff_experience`` (NR-7).
+    """
+    states = (node_state or {}).get("states") or {}
+    if not isinstance(states, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for sid, spec in states.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("kind") == "project":
+            continue
+        cockpit = ((spec.get("presentation") or {}).get("cockpit") or {})
+        if isinstance(cockpit, dict) and cockpit:
+            out[sid] = cockpit
+    return out
+
+
+def resolve_surface_link_href(link: Mapping[str, Any], key: str) -> str:
+    """EC-CS-4: substitute ``{key}`` in a surface-link ``href`` template.
+
+    Returns ``""`` when ``href`` is absent/empty so a rollup (no href) stays a no-op. Reuses the
+    chrome ``{field}`` substitution grammar (:func:`resolve_bindings`) — no new template engine.
+    """
+    template = (link or {}).get("href")
+    if not isinstance(template, str) or not template:
+        return ""
+    return resolve_bindings(template, {"key": key})
+
+
 def _status_specs(resolved: ResolvedDefinition) -> Dict[str, Any]:
     """FR-2: project ``StatusStyle`` input from shared ``node_state``, with empty-default fallback.
 
@@ -509,6 +543,9 @@ BASE_NAVIG8R_DEFINITION = ViewDefinition(
             "to_surface": "navig8r",
             "relation": "drill",
             "via": "fullview",
+            # EC-CS-4: structured #<key> template — same contract as the fullview scaffold prose.
+            # Operators / H1 format a cockpit→navig8r link via :func:`resolve_surface_link_href`.
+            "href": "#{key}",
         },
         "rollup": {
             "from_surface": "navig8r",
@@ -696,7 +733,7 @@ _COCKPIT_ATTENTION = frozenset({"ok", "review", "blocked", "backlog"})
 
 
 def _validate_resolved_cross_surface(name: str, resolved: ResolvedDefinition) -> List[str]:
-    """EC-CS-1: dangling ``surface_links.via`` and illegal cockpit ``attention`` on a resolved snapshot."""
+    """EC-CS-1/4/9: dangling ``via``, drill ``href``, malformed presentation leaves, illegal attention."""
     issues: List[str] = []
     links = resolved.surface_links or {}
     if links and not isinstance(links, dict):
@@ -720,26 +757,48 @@ def _validate_resolved_cross_surface(name: str, resolved: ResolvedDefinition) ->
                 f"{', '.join(sorted(_SURFACE_LINK_RELATIONS))}"
             )
         via = spec.get("via")
-        if via is None:
-            continue
-        if not isinstance(via, str) or not via:
-            issues.append(f"{prefix} via must be a non-empty string")
-            continue
-        if via not in known_via:
-            issues.append(
-                f"{prefix} via {via!r} is not a regions.bindings key "
-                f"or a known primitive ({', '.join(sorted(_SURFACE_LINK_VIA_PRIMITIVES))})"
-            )
+        if via is not None:
+            if not isinstance(via, str) or not via:
+                issues.append(f"{prefix} via must be a non-empty string")
+            elif via not in known_via:
+                issues.append(
+                    f"{prefix} via {via!r} is not a regions.bindings key "
+                    f"or a known primitive ({', '.join(sorted(_SURFACE_LINK_VIA_PRIMITIVES))})"
+                )
+        # EC-CS-4: a drill link must carry a ``{key}`` href template (rollup may omit href).
+        if relation == "drill":
+            href = spec.get("href")
+            if not isinstance(href, str) or not href:
+                issues.append(f"{prefix} drill link requires a non-empty href template")
+            elif "{key}" not in href:
+                issues.append(f"{prefix} href {href!r} must contain the '{{key}}' placeholder")
 
     states = (resolved.node_state or {}).get("states") or {}
     if not isinstance(states, dict):
         return issues
+    # EC-CS-9: projection fail-opens on a non-dict leaf; --validate must not stay green.
     for sid, spec in states.items():
         if not isinstance(spec, dict):
             continue
-        cockpit = ((spec.get("presentation") or {}).get("cockpit") or {})
-        if not isinstance(cockpit, dict) or not cockpit:
+        presentation = spec.get("presentation") or {}
+        if not isinstance(presentation, dict):
+            issues.append(
+                f"{name}: node_state.states.{sid}.presentation must be a mapping"
+            )
             continue
+        for surface in ("navig8r", "cockpit"):
+            if surface not in presentation:
+                continue
+            leaf = presentation[surface]
+            if leaf is None or leaf == {}:
+                continue
+            if not isinstance(leaf, dict):
+                issues.append(
+                    f"{name}: node_state.states.{sid}.presentation.{surface} "
+                    f"must be a mapping, got {type(leaf).__name__}"
+                )
+    # EC-CS-3: attention closed-set via the public cockpit projector (non-test caller).
+    for sid, cockpit in cockpit_statuses_from_node_state(resolved.node_state).items():
         attention = cockpit.get("attention")
         if attention is None:
             continue
@@ -752,13 +811,14 @@ def _validate_resolved_cross_surface(name: str, resolved: ResolvedDefinition) ->
 
 
 def validate_definitions(registry: Mapping[str, ViewDefinition]) -> List[str]:
-    """EC-6 + EC-CS-1: governance check for a definition registry — empty list = clean.
+    """EC-6 + EC-CS-1/3/4/9: governance check for a definition registry — empty list = clean.
 
     Read-only. Catches: (1) a broken ``extends`` chain (unknown parent or a cycle — surfaced by
     :func:`resolve`); (2) a ``chrome.bindings`` template referencing an unknown content-context
     field (not one of :data:`BINDING_CONTEXT_FIELDS`); (3) a resolved ``surface_links.via`` that
     names neither a ``regions.bindings`` key nor the ``serves`` primitive, a malformed link shape,
-    or a cockpit ``attention`` outside ``ok/review/blocked/backlog``.
+    a drill without a ``{key}`` ``href``, a non-dict presentation leaf (EC-CS-9), or a cockpit
+    ``attention`` outside ``ok/review/blocked/backlog`` (via :func:`cockpit_statuses_from_node_state`).
     """
     issues: List[str] = []
     for name, definition in registry.items():

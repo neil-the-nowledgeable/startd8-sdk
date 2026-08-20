@@ -1248,8 +1248,9 @@ def view_definition(
         False,
         "--validate",
         help="Govern the registry: every definition resolves, chrome.bindings reference known "
-        "fields, and resolved surface_links.via names a region or the serves primitive. "
-        "Exit 0=clean, 1=issues (EC-6 / EC-CS-1).",
+        "fields, resolved surface_links.via names a region or serves, drill links carry a "
+        "{key} href, and presentation leaves are well-formed. "
+        "Exit 0=clean, 1=issues (EC-6 / EC-CS-1/3/4/9).",
     ),
     from_file: Optional[Path] = typer.Option(
         None,

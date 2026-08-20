@@ -10,6 +10,7 @@ from startd8.kickoff_experience.portal_spec import _ATTENTION_DISPLAY
 from startd8.navigator.view_definition import (
     DEFINITION_REGISTRY,
     REQUIREMENTS_DEFINITION,
+    cockpit_statuses_from_node_state,
     resolve,
 )
 
@@ -50,3 +51,20 @@ def test_fr3c_portal_spec_derivation_is_untouched():
     src = Path(portal_spec.__file__).read_text(encoding="utf-8")
     assert "_ATTENTION_DISPLAY" in src
     assert set(_ATTENTION_DISPLAY) == {"ok", "review", "blocked", "backlog"}
+
+
+def test_ec_cs_3_cockpit_projector_skips_project_kind_and_is_the_validate_read_model():
+    """Public projector: per-node cockpit leaves only; activated (kind=project) omitted."""
+    states = resolve(REQUIREMENTS_DEFINITION, DEFINITION_REGISTRY).node_state
+    cockpit = cockpit_statuses_from_node_state(states)
+    assert set(cockpit) == set(_PER_NODE)
+    assert "activated" not in cockpit
+    assert cockpit["grounded"]["attention"] == "ok"
+    assert cockpit["unknown"]["attention"] == "blocked"
+    # Malformed / empty → omitted (same skip class as the navig8r projector).
+    assert cockpit_statuses_from_node_state({
+        "states": {
+            "grounded": {"presentation": {"cockpit": "ok"}},
+            "spec": {"kind": "project", "presentation": {"cockpit": {"attention": "ok"}}},
+        },
+    }) == {}
