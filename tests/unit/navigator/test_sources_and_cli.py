@@ -421,6 +421,44 @@ def test_eb1_presence_gated_byte_identical_when_empty():
 
     d = nodes_to_json([Node(key="cap.x", does="bare")])[0]
     assert "verify" not in d and "approve" not in d and "was" not in d and "derivation" not in d
+    assert "status_facets" not in d
+
+
+def test_status_facets_survive_json_roundtrip():
+    """REQ-10 FR-2: portal status_facets must round-trip through nodes-json (inv. 5)."""
+    from startd8.navigator.models import Node, StatusFacet
+    from startd8.navigator.project import nodes_from_json, nodes_to_json
+
+    n = Node(
+        key="cell×BACKEND",
+        does="review",
+        status_facets=(
+            StatusFacet(name="quality", value="needs review", glyph="!", color="#d29922"),
+            StatusFacet(name="process", value="submitted", glyph="●", color="#3fb950"),
+            StatusFacet(name="disposition", value="concerns", glyph="!", color="#d29922"),
+        ),
+        children=(
+            Node(
+                key="cell×BACKEND/file.py",
+                does="generated file",
+                status_facets=(
+                    StatusFacet(name="agreement", value="agrees with harness", glyph="✓"),
+                ),
+            ),
+        ),
+    )
+    payload = nodes_to_json([n])
+    assert "status_facets" in payload[0]
+    assert {f["name"] for f in payload[0]["status_facets"]} == {
+        "quality",
+        "process",
+        "disposition",
+    }
+    got = nodes_from_json(payload)[0]
+    assert {f.name for f in got.status_facets} == {"quality", "process", "disposition"}
+    assert got.status_facets[0].value == "needs review"
+    assert got.status_facets[0].color == "#d29922"
+    assert got.children[0].status_facets[0].name == "agreement"
 
 
 # ── REQ-19 follow-on — the measured path reachable from the CLI ────────────────────────────────────
