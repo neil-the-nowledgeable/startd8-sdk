@@ -28,6 +28,70 @@ from . import generation_ledger as gl
 logger = get_logger(__name__)
 
 
+# Observability manifest descriptors — consumed by generate_manifest(), zero runtime cost.
+# The generation ledger describes project-delivery outcomes and is consumed by machines.
+_OTEL_DESCRIPTORS = {
+    "category": "project_observability",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "gen_ledger_portfolio_cost_usd",
+            "instrument": "observable_gauge",
+            "unit": "USD",
+            "description": "Total LLM cost across all Prime projects",
+            "meter": "startd8.generation_ledger",
+        },
+        {
+            "name": "gen_ledger_portfolio_projects",
+            "instrument": "observable_gauge",
+            "unit": "projects",
+            "description": "Number of projects Prime has worked on",
+            "meter": "startd8.generation_ledger",
+        },
+        {
+            "name": "gen_ledger_project_cost_usd",
+            "instrument": "observable_gauge",
+            "unit": "USD",
+            "description": "Cumulative LLM cost per project",
+            "meter": "startd8.generation_ledger",
+            "labels": ["project"],
+        },
+        {
+            "name": "gen_ledger_project_runs",
+            "instrument": "observable_gauge",
+            "unit": "runs",
+            "description": "Recorded runs per project",
+            "meter": "startd8.generation_ledger",
+            "labels": ["project"],
+        },
+        {
+            "name": "gen_ledger_project_features_passed",
+            "instrument": "observable_gauge",
+            "unit": "features",
+            "description": "Features passed per project",
+            "meter": "startd8.generation_ledger",
+            "labels": ["project"],
+        },
+        {
+            "name": "gen_ledger_run_local_ratio",
+            "instrument": "observable_gauge",
+            "unit": "1",
+            "description": "Share of features generated locally with no API cost",
+            "meter": "startd8.generation_ledger",
+            "labels": ["project", "run"],
+        },
+        {
+            "name": "gen_ledger_run_cost_usd",
+            "instrument": "observable_gauge",
+            "unit": "USD",
+            "description": "Per-run LLM cost in USD",
+            "meter": "startd8.generation_ledger",
+            "labels": ["project", "run"],
+        },
+    ],
+}
+
+
 def _metric(name: str, labels: Dict[str, str], value: float) -> str:
     if labels:
         lbl = ",".join(f'{k}="{v}"' for k, v in labels.items())

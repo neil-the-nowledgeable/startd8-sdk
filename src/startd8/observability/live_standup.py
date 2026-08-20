@@ -34,6 +34,7 @@ Design notes:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 import time
@@ -245,9 +246,7 @@ def stand_up_subject_and_prometheus(
     )
 
     # Degrade-honest: no docker CLI → return a fail-loud handle, never a false green.
-    _docker_available = docker_available_fn
-    if _docker_available is None:
-        from ..benchmark_matrix.fleet.containerize import docker_available as _docker_available  # noqa: E501
+    _docker_available = docker_available_fn or (lambda: shutil.which("docker") is not None)
     if not _docker_available():
         handle.reason = "docker CLI not available on PATH"
         return handle
