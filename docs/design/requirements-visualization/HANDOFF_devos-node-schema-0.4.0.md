@@ -1,9 +1,9 @@
 # Ready-to-apply patch — dev-os `NODE-SCHEMA.md` §1 → 0.4.0
 
 **Date:** 2026-08-16 · **Target:** `~/Documents/dev/dev-os/NODE-SCHEMA.md` · **Owner-authorized** (schema
-owner said go) · **Status: HELD** — that file has in-flight uncommitted **0.3.9** work (SV-1 grounding
-refresh) in the dev-os primary tree; both `main` and the chore branch are still 0.3.8. **Do not race it.**
-Apply the two edits below **once 0.3.9 is committed**, layering on top of it.
+owner said go) · **Status: APPLIED 2026-08-19** on `chore/det-req-kit-learn-sdk-fields` (0.3.9 WIP
+kept as Prior prose, then §1 bumped to 0.4.0). Also listed `verify_gate` (REQ-22) so §1 matches
+current `node_field_names()` (**20** stored fields, not the 19 named when this handoff was drafted).
 
 ## Why
 
@@ -13,8 +13,9 @@ YAML block is **already stale** — it omits `child_keys`, `status_facets`, `att
 carried for a while (the 3 axes `category/orientation/route_state` are fine — they live in §1a). REQ-16's
 parity gate flags this drift by design until the doc catches up.
 
-**Parity target:** after this patch, §1 (+ §1a for the 3 axes) documents all **19** startd8 `Node` fields
+**Parity target:** after this patch, §1 (+ §1a for the 3 axes) documents all **startd8 `Node` fields**
 (`node_field_names()`), plus `maturity` as the documented derivation *input* (not a stored field).
+As of apply day that is **20** stored fields (includes `verify_gate`).
 
 ## Edit 1 — version line (context-anchored on the stable prefix)
 
@@ -31,6 +32,8 @@ with:
 ```
 
 (This prepends the 0.4.0 note and demotes the existing 0.3.9 prose to "Prior 0.3.9 —", preserving it verbatim. If the 0.3.9 WIP reworded line 3, keep the same shape: bump the number, prepend the 0.4.0 clause, demote the rest to `Prior 0.3.9 —`.)
+
+**Applied note:** the live version line also names `verify_gate` and dates the bump 2026-08-19.
 
 ## Edit 2 — §1 YAML block: append the missing + new fields after `children:`
 
@@ -64,12 +67,14 @@ with:
 ```
 ```
 
-(The trailing ```` ``` ```` in each block is the YAML fence — keep it. The `children:` line is the stable
+(The trailing fence is the YAML fence — keep it. The `children:` line is the stable
 anchor; the additions go between it and the fence.)
+
+**Applied note:** `verify_gate` was also listed (REQ-22 / CL-55) so §1 matches `node_field_names()`.
 
 ## After applying
 
-1. Confirm §1 (+ §1a) now names all 19 startd8 `Node` fields — cross-check against
+1. Confirm §1 (+ §1a) now names all startd8 `Node` fields — cross-check against
    `startd8-sdk` `python3 -c "from startd8.navigator.models import node_field_names as f; print(f())"`.
 2. The startd8 parity gate's cross-repo drift flag for §1 is now satisfiable (it's advisory /
    existence-guarded, so no startd8 code change is required — REQ-16 FR-2 parity is SDK-internal).
@@ -80,4 +85,4 @@ anchor; the additions go between it and the fence.)
 
 Composed against the dev-os working-tree **0.3.9** text (read-only) on 2026-08-16, as the final step of
 the coordinated 0.4.0 cross-repo bump: startd8 REQ-16/17 (shipped) + EB-1 (shipped) + ContextCore
-PR #491 (open) + **this** (the dev-os doc, held on the 0.3.9 WIP).
+PR #491 (open) + **this** (the dev-os doc). **Applied 2026-08-19** after seat-req Definer closeout.
