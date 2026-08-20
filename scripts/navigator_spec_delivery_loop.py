@@ -5,7 +5,7 @@ The disciplined, semi-autonomous path from an authored det-req SPEC to a landed 
 It is the *forward* sibling of the improvement loops: where the Pilot/Content loops improve a node
 that already exists, this loop turns a build-ready spec into merged code under engineering discipline.
 
-The loop has seven stages (full detail in the runbook `SPEC_DELIVERY_LOOP.md`):
+The loop has eight stages (full detail in the runbook `SPEC_DELIVERY_LOOP.md`):
 
   0. GATE      (this script — deterministic)  the spec is build-ready: name block · single-line FRs
                that parse · every FR has Name/Verify/Serves. FAIL → refuse to proceed.
@@ -28,7 +28,7 @@ in embryo, scoped to the one precondition that guards a build.
 Usage:
     python3 scripts/navigator_spec_delivery_loop.py --status            # readiness of every REQ-*.md
     python3 scripts/navigator_spec_delivery_loop.py REQ-05              # gate one spec (by key or path)
-    python3 scripts/navigator_spec_delivery_loop.py --checklist         # print the 7-stage runbook
+    python3 scripts/navigator_spec_delivery_loop.py --checklist         # print the 8-stage runbook
     python3 scripts/navigator_spec_delivery_loop.py --self-dogfood      # REQ-27 corpus verify-gate adoption
 """
 from __future__ import annotations
@@ -183,7 +183,7 @@ def _print_verdict(v: Dict[str, Any]) -> None:
 
 
 CHECKLIST = """\
-Spec Delivery Loop — the 7 stages (runbook: docs/design/requirements-visualization/SPEC_DELIVERY_LOOP.md)
+Spec Delivery Loop — 8 stages (runbook: docs/design/requirements-visualization/SPEC_DELIVERY_LOOP.md)
 
   0. GATE      python3 scripts/navigator_spec_delivery_loop.py REQ-NN   (must PASS to proceed)
   1. PREP      out-of-cast agent: name check + port-map/readiness; surface decisions to the human
@@ -208,7 +208,7 @@ def main(argv: List[str]) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("spec", nargs="?", help="REQ key (REQ-05 / 05) or path to a spec .md")
     ap.add_argument("--status", action="store_true", help="gate every REQ-*.md in the spec dir")
-    ap.add_argument("--checklist", action="store_true", help="print the 6-stage delivery runbook")
+    ap.add_argument("--checklist", action="store_true", help="print the 8-stage delivery runbook")
     ap.add_argument("--reachability", nargs="+", metavar="FILE.py", type=Path,
                     help="GATE-2 reachability probe: flag public symbols in these files with no call site")
     ap.add_argument("--strict", action="store_true",
