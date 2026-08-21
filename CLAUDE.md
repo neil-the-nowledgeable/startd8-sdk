@@ -595,6 +595,7 @@ Key docs in `docs/`:
 - `ARTISAN_WORKFLOW_ISSUES_CATALOG.md` - Known artisan pipeline issues and fixes
 - `docs/design/` - Design documents for major features
 - `docs/design/round3-full-app/` - **Round-3 SYSTEM benchmark** (the `benchmark_matrix/fleet/` subsystem). Start with `BENCHMARK_METHODOLOGY.md` (how the shipped system works); `PLAN.md`/`REQUIREMENTS.md` = build record; `JOURNEY_DESIGN.md`/`FRONTEND_OPENAPI_CONTRACT.md` = slice rationale
+- `docs/LOVABLE_DEPLOY_INTRO.md` + `docs/LOVABLE_DEPLOY_HOWTO.md` - **Lovable public UI path** (export → Lovable consumer; not FastAPI-into-Lovable). Pilot: ContextCore Summer 2026 Benchmark — `Summer2026/portal/LOVABLE_HANDOFF.md` (docs also under ContextCore/docs/LOVABLE_DEPLOY_*)
 - `docs/design/micro-prime/` - Micro Prime engine requirements and plans
 - `docs/design/prime/` - Prime Contractor requirements, Kaizen convergent review
 - `docs/design/kaizen/` - Kaizen quality system requirements, validation reports, phase plans

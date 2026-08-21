@@ -1,0 +1,40 @@
+---
+description: Name REQ/PLAN docs via Deterministic Intent–Delivery Language (no integer-led filenames)
+alwaysApply: true
+---
+
+# Intent–Delivery naming for requirements & plans
+
+**SSOT (cite, don't fork):**
+[`ContextCore/docs/design/DETERMINISTIC_INTENT_DELIVERY_LANGUAGE_OVERVIEW.md`](../../../../ContextCore/docs/design/DETERMINISTIC_INTENT_DELIVERY_LANGUAGE_OVERVIEW.md)
+and companion
+[`DETERMINISTIC_INTENT_DELIVERY_LANGUAGE.md`](../../../../ContextCore/docs/design/DETERMINISTIC_INTENT_DELIVERY_LANGUAGE.md)
+(prefer `~/Documents/dev/ContextCore/…`, not worktree forks).
+
+## Going forward (mandatory)
+
+1. **Do not lead new REQ/PLAN filenames with sequential integers** (`REQ-01-…`, `PLAN-03-…`, `REQ-08-…` as the *document* identity). Integer ordinals are not the product name of the work.
+2. **Name design docs from the intent–delivery four-form contract** — one string cannot serve machines, humans, docs, and telemetry:
+   | Form | Role | Example shape |
+   |------|------|----------------|
+   | Local key | Short *inside* one initiative (may keep `FR-*` / `FEAT-*` for parsers) | `FEAT-1`, `FR-10` |
+   | Canonical ref | Stable machine identity | `cc:intent:<initiative>:feature:feat-1` |
+   | Semantic name | Human meaning (structured: action + object; actor/outcome as fields) | `Orient initiative work from the four-artifact dossier` |
+   | Readable handle | Recognition + compact correlation | `feature/orient-initiative-work-from-…-<12hex>` |
+3. **Prefer filenames/titles derived from semantic name or readable-handle slug**, scoped by kind, e.g.:
+   - `REQ-sdk-node-home.md` / `PLAN-sdk-node-home.md`, or
+   - `requirement/sdk-node-as-node-home-<suffix>.md`
+   — not `REQ-01-sdk-node-home.md` solely because it was “the first phase.”
+4. **Keep det-req in-body `FR-*` local keys** when writing det-req/0.1 — the language explicitly does **not** rename those (parser continuity). The ban is on **integer-led design-doc / phase branding**, not on FR bullets inside a requirement file.
+5. **Distinguish product capability (`CAP-*` intent) from code capability** (capability-index / A2A). Same English word, different objects.
+6. When linking phases of a ladder (e.g. viz Phase 3 authoring seat), identify the *initiative / feature / semantic outcome*, not “Phase N” or “REQ-0N” as the durable name.
+
+## When creating or renaming docs
+
+- Draft semantic name first (action + observable object); avoid bare attractors: support / manage / improve / enhance / handle / enable (advisory).
+- Put initiative id + kind in the header or front-matter when a canonical ref exists or is planned.
+- Update cross-links; do not leave integer-led aliases as the only title in new work.
+
+## Legacy
+
+Existing `REQ-01-*` / `PLAN-01-*` / `REQ-06-*` files may remain until deliberately renamed. **New** authoring follows this rule. Do not mint another integer-led pair for Phase 3 — use intent-language naming from the start.
