@@ -35,6 +35,7 @@ Legend — Status: ☐ todo · ◐ in progress · ☑ done · ⊘ blocked
 | T5 | **Golden-test both lowerings** — one shared neutral fixture → {Grafana v2, Perses}, both valid. | `test_perses_emitter.py` + `portable_shared.{grafana,perses}.golden.json`; real CUE accept/reject tests | T2.1, T4 | Codex | ☑ |
 | T5.1 | **Wire the first live Perses generation surface.** Keep Grafana as the default; `dashboard create --target perses` consumes `observability.yaml` through the neutral domain producer, validates with CUE, and writes canonical JSON. | `REQ-perses-live-generation.md`; `cli_dashboard.py`; `perses/live_generation.py` | T5 | Codex | ☑ |
 | T5.2 | **Commit a live-generated pilot artifact and regeneration gate.** The real CLI output must be byte-stable and CUE-valid in the dedicated CI job. | `pilot/dash0-pilot.observability.yaml`; `pilot/obs-domain-dash0-pilot-v2.perses.json`; `test_perses_live_generation.py` | T5.1 | Codex | ☑ |
+| T5.3 | **Pin the supplied live Dash0 export profile without tenant data.** Aggregate 14 exports into a sanitized contract and test the generated pilot's shared core plus named deltas. | `dash0_live_export_profile.golden.json`; `test_perses_dash0_export_compatibility.py`; `DASH0_PERSES_COMPATIBILITY.md` | T5.2 | Codex | ☑ |
 
 ## Phase 3 — ContextCore CRD emission (cross-repo)
 
@@ -47,7 +48,7 @@ Legend — Status: ☐ todo · ◐ in progress · ☑ done · ⊘ blocked
 
 | # | Task | Scope / grounding | Depends on | Owner | Status |
 |---|------|-------------------|------------|-------|--------|
-| T7 | **Validate a generated Perses dashboard against Dash0** (the requesting pilot's consumer) end-to-end. | SDK handoff is ready in `READY_FOR_DASH0_TEAM.md`; pilot access still requires a Dash0 target, authorized import path, and human operator. No credential values belong here. | T5.2 | Pilot owner | ☐ |
+| T7 | **Validate a generated Perses dashboard against Dash0** (the requesting pilot's consumer) end-to-end. | Offline comparison against 14 supplied live exports is pinned; direct import of the exact bare artifact still requires a current Dash0 target and authorized human operator. No credential values belong here. | T5.3 | Pilot owner | ☐ |
 | T8 | **Log this effort as an open loop in the SDK CLOSURE-LEDGER** with honest maturity. | `CLOSURE-LEDGER.md` CL-8 is L3: live generation + offline oracle proven, first external consumer still pending | — | Codex | ☑ |
 
 ## Phase 5 — Perses upstream contribution lane (parallel; does not block the bounded pilot)

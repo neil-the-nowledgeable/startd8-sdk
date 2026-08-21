@@ -58,8 +58,9 @@ If your pilot needs one of these, that's a **finding to report** (§7), not a bl
       v0.16.1 accept/reject job to cover live generation; the same seven oracle tests passed locally
       without skips, including malformed-plugin rejection. The one-line install is in
       `perses/schema/README.md`.
-- [ ] **G3 — Authorized Dash0 import path.** A Dash0 project/endpoint + an authorized, credential-safe
-      import mechanism is agreed (no secrets in this repo or these docs).
+- [ ] **G3 — Authorized Dash0 import path.** Fourteen supplied live exports empirically bound Dash0's
+      saved form to `perses.dev/v1alpha1` `PersesDashboard`; a current target and authorized,
+      credential-safe import operator are still required (no secrets in this repo or these docs).
 - [x] **G4 — Sample dashboard pre-validated.** `pilot/dash0-pilot.observability.yaml` generated
       `pilot/obs-domain-dash0-pilot-v2.perses.json` through the live CLI; the pinned CUE oracle accepts
       it and CI asserts byte-identical regeneration.
@@ -89,11 +90,12 @@ This is the concrete sequence used to close the startd8-owned gates and hand off
   the live CLI, and the pinned CUE oracle accepts it.
 
 **Step 4 — Close G3 (authorized Dash0 import path). READY FOR DASH0 TEAM.**
-- This is the one gate startd8-sdk **cannot** self-serve: it needs a Dash0 project/endpoint,
-  credentials (never in-repo), and confirmation of **which Perses version Dash0 accepts** vs our
-  pinned **v0.54.0**.
+- This is the one gate startd8-sdk **cannot** finish alone: it needs a current Dash0 target and an
+  authorized operator (credentials never belong in-repo). The saved resource shape is now bounded by
+  14 supplied live exports; acceptance of this exact bare v0.54.0-validated artifact is still T7.
 - **Completed (startd8-sdk):** `DASH0_PERSES_COMPATIBILITY.md` records the emitted shape/version and
-  Dash0's documented import contracts, including the remaining runtime-version uncertainty.
+  Dash0's documented import contracts plus a sanitized aggregate of the 14 live exports. CI pins the
+  shared core and every known envelope/metadata/datasource/unit delta.
 - **Action (pilot team / human):** provision the Dash0 target + authorized, credential-safe import
   path. **This is the ask on you.**
 - **Then G3 → ✅.**
@@ -111,7 +113,7 @@ gap contributions (TODO **T9**) proceed independently — neither blocks this pi
 | G2 CUE-in-CI | **green in CI + locally, including reject test** | startd8-sdk | ✅ done |
 | **G1 live caller** | **`--target perses` live and tested** | **startd8-sdk** | **✅ done** |
 | G4 sample validated | canonical pilot artifact generated + pinned | startd8-sdk | ✅ done |
-| G3 Dash0 import path | Dash0 endpoint + creds + Perses-version match | **pilot team / human** | yes — **the ask on you** |
+| G3 Dash0 import path | current target + authorized operator; saved shape already bounded | **pilot team / human** | yes — **the ask on you** |
 
 ## 5. When ready — step-by-step for the pilot
 
@@ -152,3 +154,5 @@ Send findings to startd8-sdk in these buckets so they route correctly:
 - Live-generation contract: `REQ-perses-live-generation.md`
 - Dash0 compatibility: `DASH0_PERSES_COMPATIBILITY.md`
 - Pilot-team action sheet: `READY_FOR_DASH0_TEAM.md`
+- Sanitized live-export profile:
+  `tests/unit/dashboard_creator/fixtures/dash0_live_export_profile.golden.json`

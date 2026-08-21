@@ -4,7 +4,7 @@
 
 **SDK-owned gates:** G1 ✅ · G2 ✅ · G4 ✅
 
-**Dash0-owned gate:** G3 ☐ · live import T7 ☐
+**Dash0-owned gate:** G3 authorization/current target ☐ · live import T7 ☐
 
 startd8 has completed its side of the pilot. The CLI now generates the reference dashboard through
 the real neutral-model path, validates it against pinned Perses CUE, and reproduces the committed
@@ -15,6 +15,8 @@ artifact byte-for-byte. No Dash0 endpoint was contacted and no credential was re
 - Input: `pilot/dash0-pilot.observability.yaml`
 - Import artifact: `pilot/obs-domain-dash0-pilot-v2.perses.json`
 - Compatibility note: `DASH0_PERSES_COMPATIBILITY.md`
+- Sanitized live-export profile:
+  `tests/unit/dashboard_creator/fixtures/dash0_live_export_profile.golden.json`
 - Boundary inventory: `T0_perses-coverage-matrix.md`
 
 Do not edit the import artifact before the first attempt. A rejection is useful compatibility
@@ -32,8 +34,9 @@ The Dash0 pilot owner supplies, outside this repository:
 - a secure credential channel if the Dash0 CLI is used. Never paste a token into an issue, log,
   screenshot, shell history excerpt, or repository file.
 
-Record the Dash0 product/build version visible to the team. Dash0's public docs confirm external
-Perses JSON import but do not publish the exact Perses core/spec/plugin version behind the importer.
+Record the Dash0 product/build version visible to the team. Fourteen supplied live exports bound the
+saved shape to `perses.dev/v1alpha1` `PersesDashboard`, dataset `default`, and Dash0-managed labels;
+they do not replace authorization or prove that the current importer accepts this exact artifact.
 
 ## 2. Reconfirm the artifact locally (no Dash0 action)
 
@@ -63,10 +66,16 @@ documentation:
 3. Upload `pilot/obs-domain-dash0-pilot-v2.perses.json` unchanged.
 4. Capture the accept/reject result before clicking through any conversion prompt.
 5. If accepted, click **Apply**, then save once.
+6. Export the saved dashboard immediately, before making any UI edits.
 
 Do not feed this exact file to an automated Dash0 CLI/operator/Terraform lane on the first attempt.
 Those documented paths use a Dash0 `Dashboard` envelope or `PersesDashboard` CRD and stable IDs. If
-the UI pilot passes, export the saved definition before designing an idempotent managed form.
+the UI pilot passes, use the exported saved definition before designing an idempotent managed form.
+
+Expected normalization is not an automatic failure: the supplied live evidence shows that Dash0
+saves dashboards as `perses.dev/v1alpha1` `PersesDashboard`, adds dataset/managed-ID labels, includes
+`variables: []`, and omits query datasource objects. The compatibility note distinguishes those
+expected deltas from semantic loss.
 
 ## 4. Verify in Dash0
 
@@ -75,14 +84,18 @@ Record pass/fail for each item:
 - [ ] Dashboard title is `dash0-pilot — domain observability (dynamic)`.
 - [ ] Critical and Warning groups are visible and do not overlap.
 - [ ] Three time-series panels render with their expected names.
-- [ ] The `default` Prometheus datasource resolves for every query.
+- [ ] The explicit `default` Prometheus datasource is accepted; record whether Dash0 omits it when
+      exporting the saved form.
 - [ ] Query expressions remain the three `startd8_*` metric names from the source file.
 - [ ] Critical thresholds are red; the warning threshold is orange.
 - [ ] Count, seconds, and percent units render sensibly.
 - [ ] Viewing/exporting the saved source does not silently remove panels, queries, or layouts.
 
-No-data is not automatically a format failure: first confirm whether the chosen dataset actually
-contains the three reference metrics. A parse/plugin/datasource error is a compatibility failure.
+The supplied demo exports query `traces_span_metrics_*` and HTTP metrics, not the three synthetic
+`startd8_*` names. No-data is therefore expected unless those reference metrics were separately
+loaded; this first attempt proves format and transformation fidelity. A parse/plugin/datasource
+error is a compatibility failure. After the format attempt, generate a separate data-bearing
+candidate against the demo's observed metrics rather than editing this golden.
 
 ## 5. Return this evidence
 
@@ -99,7 +112,9 @@ dataset information. Report only sanitized artifacts here.
 
 ## 6. Stop conditions
 
-Stop rather than editing around the result if Dash0 rejects the resource, requires a different
-plugin kind/envelope, overlaps the panels, loses thresholds/units, or disagrees with the CUE oracle.
+Stop rather than editing around the result if Dash0 rejects the input, requires a hand edit before
+acceptance, changes a plugin/query/layout, overlaps panels, loses thresholds/units, or disagrees
+with the CUE oracle. The expected saved-form CRD/labels/empty-variables/datasource normalization is
+documented separately and should be captured, not treated as semantic loss.
 Return the evidence under the categories in `PILOT_NEXT_STEPS_dash0.md` §7. startd8 will update the
 pin or lowering explicitly before another attempt.
