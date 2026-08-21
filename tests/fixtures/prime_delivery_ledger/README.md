@@ -22,5 +22,6 @@ Tests create a local git commit from `generated/` and pass that tip as `--merge-
 
 ## Book-A stance
 
-Unit dogfood uses an ephemeral stub REQ (FR ids only, no Lives) → expect
-`fr-missing-lives`. Real `agree` is a later fuel step, not required to clear G0.
+- Stub REQ (FR ids, no Lives) → `fr-missing-lives` (Book B loadable).
+- Fueled template `REQ-dogfood-fueled.md.template` (CEP-B3) — fill `__MERGE_SHA__` via
+  `materialize_fueled_req(sha, dest)` after emit → expect `agree` on FR-11 / FR-6 / FR-8.

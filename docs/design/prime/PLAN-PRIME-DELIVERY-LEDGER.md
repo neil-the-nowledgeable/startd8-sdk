@@ -218,20 +218,20 @@ Applied only HTH-1 API boundary. Further logging/style pass **skipped (mechanica
 **Standard:** Post-merge Prime artifacts project into dossier `delivery:` vocabulary; Check stays the existing twin-sync reconciler; merge identity is operator/gate context — never invented; draft PASS never becomes evidence.
 
 **Phase 2.5 dormants:**
-- D1 — no checked-in Lives-fueled REQ beside the fixture (agree only in unit test) → CEP-B3
-- D2 — thin path-forwarding wrapper not shipped → CEP-B4
+- ~~D1 — no checked-in Lives-fueled REQ beside the fixture~~ → **CEP-B3 done** (`REQ-dogfood-fueled.md.template` + `materialize_fueled_req`)
+- ~~D2 — thin path-forwarding wrapper not shipped~~ → **CEP-B4 done** (`prime_delivery_check`)
 - D3 — emitted rows do not yet carry Option-3 `elements:` → CEP-B5
 - D4 — `_write_outputs` hook still default-off without merge_sha (by design, not dormant)
 
 ### Step-4 CEP backlog (triaged; no auto-PR)
 
-| ID | Size | Item |
-|----|------|------|
-| CEP-B1 | S | Optional emit-report sidecar (skips + counts) next to ledger |
-| CEP-B2 | S | Multi-task same-file evidence bind plate when a run shares paths |
-| CEP-B3 | S | Check in a Lives-fueled dogfood REQ for offline `agree` demos |
-| CEP-B4 | XS | Thin `--req/--dossier/--repo` forwarder (no new reconcile logic) |
-| CEP-B5 | M | Optional `elements:` on emitted evidence (cite Option 3 / startd8 helper) |
+| ID | Size | Item | Status |
+|----|------|------|--------|
+| CEP-B1 | S | Optional emit-report sidecar (skips + counts) next to ledger | open |
+| CEP-B2 | S | Multi-task same-file evidence bind plate when a run shares paths | open |
+| CEP-B3 | S | Check in a Lives-fueled dogfood REQ for offline `agree` demos | **done 2026-08-14** |
+| CEP-B4 | XS | Thin `--req/--dossier/--repo` forwarder (no new reconcile logic) | **done 2026-08-14** |
+| CEP-B5 | M | Optional `elements:` on emitted evidence (cite Option 3 / startd8 helper) | open |
 
 ### Step-5 Bus notify
 
