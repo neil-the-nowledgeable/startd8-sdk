@@ -101,4 +101,6 @@ jobs:
     - name: Validate Perses lowering and vendored oracle
       run: |
         cue version
-        pytest tests/unit/dashboard_creator/test_perses_emitter.py
+        pytest \
+          tests/unit/dashboard_creator/test_perses_emitter.py \
+          tests/unit/dashboard_creator/test_perses_live_generation.py

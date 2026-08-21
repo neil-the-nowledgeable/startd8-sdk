@@ -13,3 +13,19 @@ This directory is the offline validation oracle used by `dashboard_creator.perse
 The Perses v0.54.0 repository's CUE module pins `perses/spec` v0.2.0-beta.9, while its Go runtime pins
 v0.2.0-rc.0. The oracle follows the published CUE dependency because this is the CUE validation lane.
 Before updating any pin, re-run the dual-lowering goldens and the Dash0 pilot.
+
+## Local CUE installation
+
+Install the exact CI-pinned validator, then either put the Go bin directory on `PATH` or point
+startd8 at the binary explicitly:
+
+```bash
+go install cuelang.org/go/cmd/cue@v0.16.1
+export STARTD8_CUE_BINARY="$(go env GOPATH)/bin/cue"
+```
+
+Prove both sides of the oracle locally (valid input accepted and malformed plugin data rejected):
+
+```bash
+pytest tests/unit/dashboard_creator/test_perses_emitter.py
+```

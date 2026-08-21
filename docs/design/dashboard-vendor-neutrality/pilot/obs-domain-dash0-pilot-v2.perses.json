@@ -1,0 +1,214 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "obs-domain-dash0-pilot-v2",
+    "project": "dash0-pilot",
+    "tags": [
+      "observability",
+      "domain",
+      "dynamic"
+    ]
+  },
+  "spec": {
+    "display": {
+      "description": "v2 dynamic domain observability dashboard \u2014 the same observability.yaml signals as the classic board, projected through the sectioned v2 builder (severity sections).",
+      "name": "dash0-pilot \u2014 domain observability (dynamic)"
+    },
+    "duration": "6h",
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "collapse": {
+              "open": true
+            },
+            "title": "Critical"
+          },
+          "items": [
+            {
+              "content": {
+                "$ref": "#/spec/panels/sec0-p0"
+              },
+              "height": 6,
+              "width": 24,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/sec0-p1"
+              },
+              "height": 6,
+              "width": 24,
+              "x": 0,
+              "y": 6
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "collapse": {
+              "open": true
+            },
+            "title": "Warning"
+          },
+          "items": [
+            {
+              "content": {
+                "$ref": "#/spec/panels/sec1-p0"
+              },
+              "height": 6,
+              "width": 24,
+              "x": 0,
+              "y": 0
+            }
+          ]
+        }
+      }
+    ],
+    "panels": {
+      "sec0-p0": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Startd8 Response Time Seconds"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "thresholds": {
+                "defaultColor": "green",
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": 1.0
+                  }
+                ]
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "seconds"
+                }
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "default"
+                    },
+                    "query": "startd8_response_time_seconds"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "sec0-p1": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Startd8 Error Ratio"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "thresholds": {
+                "defaultColor": "green",
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": 0.01
+                  }
+                ]
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "percent-decimal"
+                }
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "default"
+                    },
+                    "query": "startd8_error_ratio"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "sec1-p0": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Startd8 Requests Total"
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "thresholds": {
+                "defaultColor": "green",
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "orange",
+                    "value": 100.0
+                  }
+                ]
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "decimal"
+                }
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "datasource": {
+                      "kind": "PrometheusDatasource",
+                      "name": "default"
+                    },
+                    "query": "startd8_requests_total"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

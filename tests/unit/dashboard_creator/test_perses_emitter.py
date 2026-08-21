@@ -8,7 +8,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -143,12 +143,29 @@ def test_partial_mappings_fail_loudly():
         emit_perses_dashboard(dashboard, validate=False)
 
 
-def test_validation_is_mandatory_by_default_and_never_silently_skipped():
+def test_validation_is_mandatory_by_default_and_never_silently_skipped(monkeypatch):
+    monkeypatch.delenv("STARTD8_CUE_BINARY", raising=False)
     with patch(
         "startd8.dashboard_creator.perses.validate.shutil.which", return_value=None
     ):
         with pytest.raises(PersesValidationUnavailable, match="requires the CUE CLI"):
             emit_perses_dashboard(_portable_dashboard())
+
+
+def test_validation_honors_explicit_cue_environment_path(monkeypatch):
+    monkeypatch.setenv("STARTD8_CUE_BINARY", "/tools/cue-v0.16.1")
+    monkeypatch.setattr(
+        "startd8.dashboard_creator.perses.validate.shutil.which", lambda _name: None
+    )
+    completed = MagicMock(returncode=0, stdout="", stderr="")
+    with patch(
+        "startd8.dashboard_creator.perses.validate.subprocess.run",
+        return_value=completed,
+    ) as run:
+        validate_perses_dashboard(
+            emit_perses_dashboard(_portable_dashboard(), validate=False)
+        )
+    assert run.call_args.args[0][0] == "/tools/cue-v0.16.1"
 
 
 @pytest.mark.skipif(not _cue_binary(), reason="CUE CLI not installed")
