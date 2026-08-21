@@ -33,7 +33,9 @@ from .spec import ObservabilitySpec, Signal
 _DATASOURCE_VAR = "$datasource"
 
 
-def _timeseries_panel(pid: int, sig: Signal) -> Panel:
+def _timeseries_panel(
+    pid: int, sig: Signal, datasource_name: str = _DATASOURCE_VAR
+) -> Panel:
     """A portable time-series panel for one signal — metric threshold or raw expression."""
     expr = sig.name if sig.threshold is not None else (sig.expr or sig.name)
     thresholds: List[NeutralThreshold] = []
@@ -55,14 +57,18 @@ def _timeseries_panel(pid: int, sig: Signal) -> Panel:
             Query(
                 expression=expr,
                 language=QueryLanguage.PROMQL,
-                datasource=DatasourceRef(name=_DATASOURCE_VAR),
+                datasource=DatasourceRef(name=datasource_name),
             )
         ],
     )
 
 
 def build_domain_dashboard_neutral(
-    spec: ObservabilitySpec, project_id: str = "domain"
+    spec: ObservabilitySpec,
+    project_id: str = "domain",
+    *,
+    explicit_grid: bool = False,
+    datasource_name: str = _DATASOURCE_VAR,
 ) -> Dashboard:
     critical = [
         s
@@ -86,9 +92,12 @@ def build_domain_dashboard_neutral(
         for panel_index, sig in enumerate(sigs):
             pid += 1
             key = f"sec{len(sections)}-p{panel_index}"
-            panels[key] = _timeseries_panel(pid, sig)
-            # Preserve the legacy sectioned builder's exact GridItem defaults (including y=0).
-            placements.append(Placement(panel=key, height=6))
+            panels[key] = _timeseries_panel(pid, sig, datasource_name)
+            # Existing Grafana callers retain the pre-extraction y=0 bytes. New portable artifacts
+            # request an explicit non-overlapping grid because Perses treats x/y as literal placement.
+            placements.append(
+                Placement(panel=key, y=panel_index * 6 if explicit_grid else 0, height=6)
+            )
         sections.append(Section(title=title, placements=placements))
     return Dashboard(
         name=f"obs-domain-{project_id}-v2",

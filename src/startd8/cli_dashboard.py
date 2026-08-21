@@ -3,12 +3,16 @@
 
 """dashboard CLI command group (extracted from cli.py, Pass E)."""
 
-from .exceptions import ConfigurationError
-from typing import Optional, List
-from pathlib import Path
 import os
+from enum import Enum
+from pathlib import Path
+from typing import Optional
+
 import typer
+import yaml
+
 from .cli_shared import console
+from .exceptions import ConfigurationError
 
 
 dashboard_app = typer.Typer(
@@ -43,16 +47,44 @@ variables:
     label: "Data Source"
 """
 
+_PERSES_OBSERVABILITY_TEMPLATE = """\
+# Perses target input: domain observability.yaml
+domain: observability
+alerting:
+  metric_thresholds:
+    http_requests_total:
+      op: ">"
+      value: 10
+      severity: warning
+      unit: count
+    http_request_duration_seconds:
+      op: ">"
+      value: 1
+      severity: critical
+      unit: seconds
+"""
 
-def _print_dashboard_template() -> None:
+
+class DashboardTarget(str, Enum):
+    GRAFANA = "grafana"
+    PERSES = "perses"
+
+
+def _print_dashboard_template(target: DashboardTarget = DashboardTarget.GRAFANA) -> None:
     """Print a YAML dashboard spec skeleton to stdout."""
-    console.print(_DASHBOARD_TEMPLATE)
+    template = (
+        _PERSES_OBSERVABILITY_TEMPLATE
+        if target == DashboardTarget.PERSES
+        else _DASHBOARD_TEMPLATE
+    )
+    console.print(template)
 
 
 @dashboard_app.command("create")
 def dashboard_create(
     spec_file: Optional[Path] = typer.Argument(
-        None, help="Path to dashboard spec YAML/JSON file"
+        None,
+        help="Grafana DashboardSpec, or observability.yaml with --target perses",
     ),
     provision: bool = typer.Option(
         False, "--provision", help="Push dashboard to Grafana after generation"
@@ -64,10 +96,10 @@ def dashboard_create(
         False, "--allow-insecure", help="Allow plain HTTP connections to Grafana"
     ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Generate Jsonnet without writing files"
+        False, "--dry-run", help="Generate and validate without writing files"
     ),
     check: bool = typer.Option(
-        False, "--check", help="Validate and compile only, no write"
+        False, "--check", help="Validate the generated target without writing"
     ),
     persist_source: bool = typer.Option(
         False, "--persist-source", help="Write .libsonnet to mixin dir"
@@ -81,9 +113,23 @@ def dashboard_create(
     print_template: bool = typer.Option(
         False, "--print-template", help="Print a YAML spec template and exit"
     ),
+    target: DashboardTarget = typer.Option(
+        DashboardTarget.GRAFANA,
+        "--target",
+        case_sensitive=False,
+        help="Output target: grafana (default) or perses",
+    ),
+    project: str = typer.Option(
+        "default",
+        "--project",
+        help="Domain/Perses project identifier for --target perses",
+    ),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose output"),
 ):
-    """Generate a Grafana dashboard from a declarative YAML/JSON spec.
+    """Generate a dashboard for Grafana or Perses.
+
+    The default Grafana target consumes the established DashboardSpec format. The Perses target
+    consumes an observability.yaml file and uses the portable neutral dashboard producer.
 
     Examples:
 
@@ -91,10 +137,12 @@ def dashboard_create(
 
         startd8 dashboard create my-spec.yaml --provision --grafana-url https://grafana.local
 
+        startd8 dashboard create observability.yaml --target perses --project my-service
+
         startd8 dashboard create --print-template > my-spec.yaml
     """
     if print_template:
-        _print_dashboard_template()
+        _print_dashboard_template(target)
         return
 
     if spec_file is None:
@@ -108,6 +156,58 @@ def dashboard_create(
     if not spec_file.is_file():
         console.print(f"[red]Error: spec file not found: {spec_file}[/red]")
         raise typer.Exit(1)
+
+    if target == DashboardTarget.PERSES:
+        grafana_only = []
+        if provision:
+            grafana_only.append("--provision")
+        if grafana_url is not None:
+            grafana_only.append("--grafana-url")
+        if allow_insecure:
+            grafana_only.append("--allow-insecure")
+        if persist_source:
+            grafana_only.append("--persist-source")
+        if config is not None:
+            grafana_only.append("--config")
+        if grafana_only:
+            console.print(
+                "[red]Error: --target perses does not support Grafana-only option(s): "
+                + ", ".join(grafana_only)
+                + "[/red]"
+            )
+            raise typer.Exit(1)
+
+        from .dashboard_creator.perses.live_generation import (
+            generate_domain_perses_dashboard,
+        )
+
+        try:
+            generated = generate_domain_perses_dashboard(
+                spec_file,
+                project=project,
+                output_dir=output_dir,
+                check=check,
+                dry_run=dry_run,
+            )
+        except (OSError, RuntimeError, ValueError, yaml.YAMLError) as exc:
+            console.print(f"[red]Perses dashboard creation failed: {exc}[/red]")
+            raise typer.Exit(1) from exc
+
+        if dry_run:
+            console.print(
+                f"[green]Dry run complete — Perses Dashboard: {generated.name}[/green]"
+            )
+        elif check:
+            console.print(
+                f"[green]Check passed — Perses Dashboard: {generated.name}[/green]"
+            )
+        else:
+            console.print(
+                f"[green]Perses dashboard created — name: {generated.name}[/green]"
+            )
+            if generated.output_path is not None:
+                console.print(f"  Output: {generated.output_path}")
+        return
 
     # Lazy import to avoid circular / heavy imports at CLI startup
     from .dashboard_creator.workflow import DashboardCreatorWorkflow

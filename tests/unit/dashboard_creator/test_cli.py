@@ -1,5 +1,6 @@
 """Tests for dashboard CLI commands (DC-206, DC-208)."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -35,6 +36,14 @@ class TestDashboardCreate:
         assert "title:" in result.output
         assert "panels:" in result.output
 
+    def test_perses_print_template_is_observability_input(self):
+        result = runner.invoke(
+            app, ["dashboard", "create", "--target", "perses", "--print-template"]
+        )
+        assert result.exit_code == 0
+        assert "metric_thresholds:" in result.output
+        assert "panels:" not in result.output
+
     def test_missing_spec_file_exits_1(self):
         result = runner.invoke(app, ["dashboard", "create"])
         assert result.exit_code == 1
@@ -58,6 +67,109 @@ class TestDashboardCreate:
             assert result.exit_code == 0
             assert "cc-startd8-cli-test" in result.output
             instance.run.assert_called_once()
+
+    def test_explicit_grafana_target_preserves_legacy_workflow(self, spec_file):
+        mock_result = MagicMock(success=True, output={"uid": "legacy"})
+        with patch("startd8.dashboard_creator.workflow.DashboardCreatorWorkflow") as MockWF:
+            MockWF.return_value.run.return_value = mock_result
+            result = runner.invoke(
+                app,
+                ["dashboard", "create", str(spec_file), "--target", "grafana"],
+            )
+        assert result.exit_code == 0
+        MockWF.return_value.run.assert_called_once()
+
+    def test_perses_target_dispatches_to_live_neutral_producer(self, spec_file, tmp_path):
+        generated = SimpleNamespace(
+            name="obs-domain-pilot-v2",
+            output_path=tmp_path / "obs-domain-pilot-v2.perses.json",
+        )
+        with patch(
+            "startd8.dashboard_creator.perses.live_generation.generate_domain_perses_dashboard",
+            return_value=generated,
+        ) as generate:
+            result = runner.invoke(
+                app,
+                [
+                    "dashboard",
+                    "create",
+                    str(spec_file),
+                    "--target",
+                    "perses",
+                    "--project",
+                    "pilot",
+                    "--output-dir",
+                    str(tmp_path),
+                ],
+            )
+        assert result.exit_code == 0
+        assert "Perses dashboard created" in result.output
+        generate.assert_called_once_with(
+            spec_file,
+            project="pilot",
+            output_dir=tmp_path,
+            check=False,
+            dry_run=False,
+        )
+
+    def test_perses_check_is_forwarded_and_reports_no_output(self, spec_file):
+        generated = SimpleNamespace(name="obs-domain-pilot-v2", output_path=None)
+        with patch(
+            "startd8.dashboard_creator.perses.live_generation.generate_domain_perses_dashboard",
+            return_value=generated,
+        ) as generate:
+            result = runner.invoke(
+                app,
+                [
+                    "dashboard",
+                    "create",
+                    str(spec_file),
+                    "--target",
+                    "perses",
+                    "--project",
+                    "pilot",
+                    "--check",
+                ],
+            )
+        assert result.exit_code == 0
+        assert "Check passed" in result.output
+        generate.assert_called_once_with(
+            spec_file,
+            project="pilot",
+            output_dir=None,
+            check=True,
+            dry_run=False,
+        )
+
+    @pytest.mark.parametrize(
+        "option",
+        [
+            ["--provision"],
+            ["--grafana-url", "https://grafana.invalid"],
+            ["--allow-insecure"],
+            ["--persist-source"],
+            ["--config", "config.yaml"],
+        ],
+    )
+    def test_perses_rejects_grafana_only_options(self, spec_file, option):
+        result = runner.invoke(
+            app,
+            ["dashboard", "create", str(spec_file), "--target", "perses", *option],
+        )
+        assert result.exit_code == 1
+        assert "Grafana-only option" in result.output
+
+    def test_perses_failure_is_actionable(self, spec_file):
+        with patch(
+            "startd8.dashboard_creator.perses.live_generation.generate_domain_perses_dashboard",
+            side_effect=RuntimeError("requires the CUE CLI"),
+        ):
+            result = runner.invoke(
+                app,
+                ["dashboard", "create", str(spec_file), "--target", "perses"],
+            )
+        assert result.exit_code == 1
+        assert "requires the CUE CLI" in result.output
 
     def test_dry_run_flag_forwarded(self, spec_file):
         mock_result = MagicMock()

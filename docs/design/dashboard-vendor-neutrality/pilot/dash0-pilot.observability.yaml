@@ -1,0 +1,21 @@
+# Reference input for the Dash0 Perses pilot.
+# Regenerate with the command recorded in READY_FOR_DASH0_TEAM.md.
+domain: observability
+provenance_default: startd8-sdk
+alerting:
+  metric_thresholds:
+    startd8_requests_total:
+      op: ">"
+      value: 100
+      severity: warning
+      unit: count
+    startd8_response_time_seconds:
+      op: ">"
+      value: 1
+      severity: critical
+      unit: seconds
+    startd8_error_ratio:
+      op: ">"
+      value: 0.01
+      severity: critical
+      unit: percentunit

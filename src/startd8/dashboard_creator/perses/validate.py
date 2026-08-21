@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -33,7 +34,7 @@ def validate_perses_dashboard(
     executable path; otherwise ``cue`` is resolved from ``PATH`` and absence is a hard error.
     """
 
-    binary = cue_binary or shutil.which("cue")
+    binary = cue_binary or os.environ.get("STARTD8_CUE_BINARY") or shutil.which("cue")
     if not binary:
         raise PersesValidationUnavailable(
             "Perses validation requires the CUE CLI (pinned development version: v0.16.1); "
