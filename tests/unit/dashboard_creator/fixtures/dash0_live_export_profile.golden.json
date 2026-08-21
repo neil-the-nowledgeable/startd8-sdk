@@ -1,0 +1,54 @@
+{
+  "capturedOn": "2026-08-19",
+  "evidence": "Sanitized aggregate of live Dash0 UI dashboard exports supplied by the pilot",
+  "resourceCount": 14,
+  "resourceEnvelope": {
+    "apiVersions": [
+      "perses.dev/v1alpha1"
+    ],
+    "kinds": [
+      "PersesDashboard"
+    ],
+    "metadataKeys": [
+      "labels",
+      "name"
+    ],
+    "labelKeys": [
+      "dash0.com/dataset",
+      "dash0.com/id"
+    ],
+    "datasetValues": [
+      "default"
+    ],
+    "resourcesWithManagedId": 14
+  },
+  "spec": {
+    "keys": [
+      "display",
+      "duration",
+      "layouts",
+      "panels",
+      "variables"
+    ],
+    "panelPluginKinds": [
+      "GaugeChart",
+      "TimeSeriesChart"
+    ],
+    "queryKinds": [
+      "TimeSeriesQuery"
+    ],
+    "queryPluginKinds": [
+      "PrometheusTimeSeriesQuery"
+    ],
+    "units": [
+      "bytes",
+      "counts/sec",
+      "milliseconds",
+      "percent-decimal"
+    ],
+    "resourcesWithDatasourceObject": 0,
+    "variablesTypes": [
+      "array"
+    ]
+  }
+}
