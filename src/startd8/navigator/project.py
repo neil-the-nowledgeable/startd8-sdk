@@ -18,7 +18,7 @@ from startd8.wireframe import (
 )
 from startd8.wireframe.profile import RenderProfile
 
-from .models import DerivationEdge, Node, NodeEvidence, NodeStatus
+from .models import DerivationEdge, Node, NodeEvidence, NodeStatus, StatusFacet
 
 _STATUS_MAP = {
     NodeStatus.BUILT: "planned",
@@ -398,6 +398,18 @@ def _node_to_json(n: Node) -> Dict[str, Any]:
             {"from_key": e.from_key, "relation": e.relation, "regime": e.regime}
             for e in n.derivation
         ]
+    # REQ-10 / NODE-SCHEMA inv. 5: orthogonal facets must survive nodes-json (portal
+    # assignment trees carry quality⊥process⊥disposition here; tree renderer reads them).
+    if n.status_facets:
+        d["status_facets"] = [
+            {
+                "name": f.name,
+                "value": f.value,
+                "glyph": f.glyph,
+                "color": f.color,
+            }
+            for f in n.status_facets
+        ]
     return d
 
 
@@ -437,6 +449,16 @@ def nodes_from_json(data: Sequence[Dict[str, Any]]) -> List[Node]:
                 orientation=str(d.get("orientation", "")),
                 route_state=str(d.get("route_state", "")),
                 attributes=dict(d.get("attributes") or {}),
+                status_facets=tuple(
+                    StatusFacet(
+                        name=str(f.get("name", "")),
+                        value=str(f.get("value", "")),
+                        glyph=str(f.get("glyph", "")),
+                        color=str(f.get("color", "")),
+                    )
+                    for f in (d.get("status_facets") or [])
+                    if isinstance(f, dict) and f.get("name")
+                ),
                 # EB-1 (0.4.0): read back the reliability fields + derivation edge when present (absent
                 # → empty defaults, so pre-0.4.0 NODE-SCHEMA-JSON still loads unchanged).
                 verify=str(d.get("verify", "")),
