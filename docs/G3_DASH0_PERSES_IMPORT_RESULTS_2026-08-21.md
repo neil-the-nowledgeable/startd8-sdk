@@ -29,6 +29,10 @@ generated dashboards (13 per-service × 8 panels + business-criticality overview
   to call the emitter/golden directly. **Fix direction:** wire `--target {grafana|perses}` into
   `dashboard create` (or confirm #492 does and this env is pre-#492). Without it, the CLI can't emit the artifact G3 needs.
 
+  > **RESOLVED / STALE (verified 2026-08-22, startd8-sdk owner).** `--target perses` **is already on `origin/main`**
+  > — `cli_dashboard.py` defines `DashboardTarget.PERSES` and the `--target` option (PR **#492**, merged). The pilot
+  > env was **pre-#492**. No SDK work outstanding for G3-SDK-1; the fix is to update the pilot's checkout. Not an open gap.
+
 - **G3-SDK-2 — metric-name convention for Dash0 rendering (the load-bearing one).** To render **live** in Dash0 the
   queries must use Dash0's stored names, which differ from Prometheus-native:
   | Prometheus-native (won't render in Dash0) | Dash0 needs |
