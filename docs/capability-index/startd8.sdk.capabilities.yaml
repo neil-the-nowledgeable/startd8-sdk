@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.27.0"
+version: "1.28.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -2508,6 +2508,57 @@ capabilities:
         description: "reports version/install-kind; warns+exits-1 without a provider key"
     confidence: 0.9
 
+  # ============================================================================
+  # DASHBOARD VENDOR-NEUTRALITY (this session) — one neutral model → Grafana v2 + Perses
+  # ============================================================================
+
+  - capability_id: startd8.dashboard.perses_neutral_generation
+    category: generate
+    maturity: beta
+    summary: "Vendor-neutral dashboard generation: one typed neutral model lowers to BOTH Grafana v2 and Perses v0.54.0 ($0), validated against a pinned CUE oracle; `startd8 dashboard create --target perses`"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        Decouples dashboard generation from Grafana. A frozen typed neutral model
+        (`dashboard_creator/neutral.py` — portable subset: markdown/time_series-PromQL/logs-LogQL
+        panels, static-list variables, grid sections, thresholds, reviewed units) is the source of
+        truth; `to_v2()` becomes a Grafana lowering (byte-identical, golden-guarded) and
+        `emit_perses_dashboard()` is the primary Perses lowering, validated at emit time against a
+        vendored, version-pinned Perses CUE schema (the "verify that can't silently die" gate — no
+        Grafana equivalent). Capabilities outside the portable subset (nested tab composition,
+        conditionals, auto-grid, section-scoped variables, dashboard-list, arbitrary plugin payloads,
+        instant queries, unmapped units) FAIL LOUD with a typed PersesCapabilityError, never silently
+        drop. Live via `startd8 dashboard create <observability.yaml> --target perses` (default
+        target stays `grafana`; `--check` validates without writing). Adopts the CNCF Perses standard
+        as the IR — not a home-grown neutral schema. PRs #490 (bounded lowering) / #492 (live
+        generation + pilot golden) / #493 (Dash0 export-profile reconciliation).
+      agent: |
+        startd8 dashboard create obs.yaml --target perses --check   # neutral model -> CUE-validated Perses JSON
+        from startd8.dashboard_creator.perses.emitter import emit_perses_dashboard  # validate=True fails loud
+    wont: |
+      Neutral-core = the PORTABLE SUBSET only; unrepresentable capabilities FAIL LOUD (typed
+      PersesCapabilityError), never silently degrade. Grafana v2 output stays byte-identical
+      (golden-guarded); default `--target` remains grafana. Vendor-neutral GENERATION, not viewing.
+      Perses CUE (v0.54.0) is the validation oracle — an emit-time gate, not advisory.
+    triggers: ["perses", "vendor-neutral dashboard", "dashboard as code", "cue validation", "grafana alternative", "dashboard create --target perses", "neutral dashboard ir", "cncf perses", "dash0 dashboard"]
+    evidence:
+      - type: code
+        ref: src/startd8/dashboard_creator/neutral.py
+        description: "typed neutral dashboard vocabulary (portable subset, no Grafana names)"
+      - type: code
+        ref: src/startd8/dashboard_creator/perses/emitter.py
+        description: "emit_perses_dashboard — Perses v0.54.0 lowering, fail-loud partial mappings"
+      - type: code
+        ref: src/startd8/dashboard_creator/perses/validate.py
+        description: "validate_perses_dashboard — pinned CUE (v0.16.1) oracle; absence is a hard error"
+      - type: test
+        ref: tests/unit/dashboard_creator/test_perses_emitter.py
+        description: "emitter determinism + goldens + real CUE accept/reject (CI: perses-schema job)"
+      - type: adr
+        ref: docs/design/dashboard-vendor-neutrality/ADR_adopt-perses-neutral-dashboard-ir.md
+        description: "ADR + T0 coverage matrix (Perses v0.54.0 boundary); accepted bounded go"
+    confidence: 0.85
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
@@ -2515,14 +2566,14 @@ capabilities:
 summary:
   # v1.7.0 recount: prior summary undercounted (composite_views + view_prose were uncounted).
   # Actual existing = 26; + 11 construction/polyglot/quality/benchmark/deploy = 37.
-  total_capabilities: 66   # v1.25.0: +kickoff.cloud_grant, +kickoff.portfolio, +sdk.doctor
+  total_capabilities: 69   # v1.28.0: reconciled to ACTUAL parsed count (+perses; prior summary drifted -2)
   by_maturity:
     stable: 31     # v1.25.0: +3 (cloud_grant, portfolio, doctor all stable)
-    beta: 35       # reconciled to actual (prior summary undercounted)
+    beta: 38       # v1.28.0: reconciled to actual (+dashboard.perses_neutral_generation)
   by_category:                 # v1.25.0: +security/query/observe
     action: 19     # +agentic.session_snapshot, +kickoff.promotion
-    generate: 16   # +kickoff.workbook_cockpit
-    validate: 7
+    generate: 18   # v1.28.0: +dashboard.perses_neutral_generation
+    validate: 8    # v1.28.0: reconciled to actual (prior summary drifted)
     observe: 9     # v1.25.0: +sdk.doctor
     integration: 6
     query: 4       # v1.25.0: +kickoff.portfolio
@@ -2534,6 +2585,10 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.28.0"
+    date: "2026-08-22"
+    changes:
+      - "+1 capability from the dashboard-vendor-neutrality arc (all merged to origin/main: PRs #490/#492/#493). NEW startd8.dashboard.perses_neutral_generation (generate/beta, conf 0.85): decouple dashboard generation from Grafana — one frozen typed neutral model (dashboard_creator/neutral.py, the CNCF-Perses-aligned portable subset) lowers to BOTH Grafana v2 (to_v2, byte-identical golden-guarded) AND Perses v0.54.0 (emit_perses_dashboard), the latter validated at emit time against a vendored version-pinned CUE oracle (perses/validate.py; the 'verify that can't silently die' gate — no Grafana equivalent). Live via `startd8 dashboard create <observability.yaml> --target perses` (default target stays grafana; --check validates without writing). Capabilities outside the portable subset (nested tab composition, conditionals, auto-grid, section-scoped variables, dashboard-list, arbitrary plugin payloads, instant queries, unmapped units) FAIL LOUD with a typed PersesCapabilityError — never silently drop. Adopts the existing CNCF Perses standard as the IR rather than a home-grown neutral schema. Boundary grounded in docs/design/dashboard-vendor-neutrality/{ADR,T0_perses-coverage-matrix}; CI 'perses-schema' job runs real CUE accept/reject. Additive/non-breaking; no existing entry removed or reordered. NOTE (cross-repo, NOT in this manifest): the sibling Dash0 deployment-annotation sink (Dash0AnnotationBridge emitting `dash0.deployment` OTLP log events, ContextCore PR #493, merged) is a ContextCore capability — to be indexed in ContextCore/docs/capability-index/, not here (code lives at ContextCore/src/contextcore/deployment/dash0.py; evidence-grounding stays in-repo)."
   - version: "1.27.0"
     date: "2026-07-24"
     changes:
